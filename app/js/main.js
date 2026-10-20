@@ -3,14 +3,21 @@ import { APP_BUILD } from './version.js';
 import { mountApp } from './view.js';
 
 function bindViewport() {
-  const viewport = window.visualViewport;
-  if (!viewport) return;
   const apply = () => {
-    document.documentElement.style.setProperty('--vv-top', `${viewport.offsetTop}px`);
-    document.documentElement.style.setProperty('--vv-height', `${viewport.height}px`);
+    const viewport = window.visualViewport;
+    let keyboard = 0;
+    if (viewport) {
+      // offsetTop is the layout scroll iOS applies when a field is focused.
+      // It must shrink the bottom, not move the frame upward under the status bar.
+      const overlap = window.innerHeight - viewport.height - viewport.offsetTop;
+      if (overlap > 0) keyboard = overlap;
+    }
+    document.documentElement.style.setProperty('--keyboard-inset', `${Math.round(keyboard)}px`);
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
   };
-  viewport.addEventListener('resize', apply);
-  viewport.addEventListener('scroll', apply);
+  window.visualViewport?.addEventListener('resize', apply);
+  window.visualViewport?.addEventListener('scroll', apply);
+  window.addEventListener('scroll', apply, { passive: true });
   apply();
 }
 
