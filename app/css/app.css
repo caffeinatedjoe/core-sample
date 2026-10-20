@@ -159,6 +159,16 @@ a:focus-visible {
   flex-direction: column;
 }
 
+.build-version {
+  flex: none;
+  margin: 0;
+  padding: 2px 16px calc(env(safe-area-inset-bottom) + 4px);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--muted);
+}
+
 .source,
 .preview {
   flex: 1;

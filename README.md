@@ -32,4 +32,4 @@ Icons come from `app/icons/icon.svg`. After editing it, run `npm run icons` and 
 2. Share → Add to Home Screen.
 3. Open Core Sample from the home screen. It should launch without Safari's toolbar.
 
-Notes live in this install. Clearing Safari website data for the site deletes them. There is no account and no sync in this stage.
+Notes live in this install. The line at the bottom of the screen is the shell build. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. There is no account and no sync in this stage.

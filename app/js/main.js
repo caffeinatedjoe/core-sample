@@ -1,4 +1,5 @@
 import { openDatabase } from './db.js';
+import { APP_BUILD } from './version.js';
 import { mountApp } from './view.js';
 
 function bindViewport() {
@@ -15,9 +16,12 @@ function bindViewport() {
 
 function registerWorker(flush) {
   if (!('serviceWorker' in navigator)) return;
-  // The page that is already open does not have this listener until it loads
-  // the new script. An update therefore applies on the next launch. Once this
-  // script is running, a later worker taking control flushes and reloads.
+  // The first install has no controller yet, so it must not reload. Once this
+  // script is running, a later worker taking control flushes the open note
+  // and reloads. updateViaCache: 'none' makes the browser revalidate sw.js
+  // instead of trusting the HTTP cache. iOS standalone often skips that check
+  // until something calls update(), so we do it on launch and whenever the
+  // app becomes visible again.
   const hadController = Boolean(navigator.serviceWorker.controller);
   let reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -28,7 +32,15 @@ function registerWorker(flush) {
       .catch(() => {})
       .finally(() => window.location.reload());
   });
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+    .then((registration) => {
+      const check = () => registration.update().catch(() => {});
+      check();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') check();
+      });
+    })
+    .catch(() => {});
 }
 
 function requestPersistence() {
@@ -43,7 +55,18 @@ function showBootError() {
   el.textContent = 'Core Sample could not open storage on this device. Nothing was deleted by this screen.';
 }
 
+function clearShellQuery() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('shell')) return;
+  url.searchParams.delete('shell');
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState(null, '', next);
+}
+
 async function main() {
+  clearShellQuery();
+  const build = document.getElementById('build-version');
+  if (build) build.textContent = APP_BUILD;
   bindViewport();
   requestPersistence();
   const db = await openDatabase();
