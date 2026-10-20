@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build opaque Core Sample icons from the source photo.
+"""Build opaque Core Sample icons from the v2 source.
 
-The source is a 512 square: a dark rounded tile with a light border, sitting
-on a darker margin. iOS masks its own corners, so the output is the tile
-only, cropped inside that border, with the tile color extended into the
-square corners. Requires Pillow (`pip install pillow`).
+The source is a 512 square: a stacked cylinder on a dark rounded tile, with a
+light bezel. iOS masks its own corners, so the output is cropped inside that
+bezel and the tile's own edge color is extended into the square corners.
+Requires Pillow (`pip install pillow`).
 """
 
 import math
@@ -13,12 +13,14 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'app' / 'icons' / 'source' / 'core-sample-icon-source.jpg'
+SOURCE = ROOT / 'app' / 'icons' / 'source' / 'core-sample-icon-source-v2.jpg'
 OUT = ROOT / 'app' / 'icons'
 
-# Tile body, inside the baked-in light border. Inclusive source pixels.
-X0, Y0, X1, Y1 = 82, 81, 429, 437
-RADIUS = 64
+# Inside the light bezel. Inclusive source pixels. The corner radius is just
+# inside that bezel, so the light ring is replaced by the tile edge color.
+X0, Y0, X1, Y1 = 76, 79, 434, 437
+RADIUS = 62
+TAG = 'v11'
 
 
 def in_tile(x, y):
@@ -101,15 +103,15 @@ def main():
         raise SystemExit(f'source is {source.size}, expected 512x512')
     tile = tile_square(source)
     full = tile.resize((512, 512), Image.Resampling.LANCZOS)
-    save_png(tile.resize((180, 180), Image.Resampling.LANCZOS), 'icon-v9-180.png')
-    save_png(tile.resize((192, 192), Image.Resampling.LANCZOS), 'icon-v9-192.png')
-    save_png(full, 'icon-v9-512.png')
-    save_png(maskable(tile, 512), 'icon-v9-512-maskable.png')
+    save_png(tile.resize((180, 180), Image.Resampling.LANCZOS), f'icon-{TAG}-180.png')
+    save_png(tile.resize((192, 192), Image.Resampling.LANCZOS), f'icon-{TAG}-192.png')
+    save_png(full, f'icon-{TAG}-512.png')
+    save_png(maskable(tile, 512), f'icon-{TAG}-512-maskable.png')
     icon32 = tile.resize((32, 32), Image.Resampling.LANCZOS)
     icon16 = tile.resize((16, 16), Image.Resampling.LANCZOS)
-    save_png(icon32, 'icon-v9-32.png')
-    save_png(icon16, 'icon-v9-16.png')
-    full.save(OUT / 'favicon-v9.ico', format='ICO', sizes=[(16, 16), (32, 32)])
+    save_png(icon32, f'icon-{TAG}-32.png')
+    save_png(icon16, f'icon-{TAG}-16.png')
+    full.save(OUT / f'favicon-{TAG}.ico', format='ICO', sizes=[(16, 16), (32, 32)])
     print('wrote icons from', SOURCE.name)
 
 

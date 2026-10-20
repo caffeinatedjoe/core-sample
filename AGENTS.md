@@ -16,5 +16,5 @@ Rules for changing this repo.
 12. Escape note content that becomes HTML. Do not allow `javascript:` URLs. No analytics, telemetry, or extra third-party requests.
 13. No secrets in the repo, logs, URLs, or error text. Do not log note bodies. Do not touch `caffeinatedjoe/zt_vault` until the stage that introduces GitHub sync, and never commit vault contents.
 14. Do not force-push.
-15. Icons: replace `app/icons/source/core-sample-icon-source.jpg`, run `npm run icons`, and commit the PNGs. Keep the filenames versioned when the art changes.
+15. Icons: replace `app/icons/source/core-sample-icon-source-v2.jpg`, run `npm run icons`, and commit the PNGs. Keep the filenames versioned when the art changes.
 16. iPhone is the primary client. Keep safe-area padding, 16px or larger form text, and the `visualViewport` keyboard handling.

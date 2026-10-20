@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v10';
+const CACHE = 'core-sample-shell-v11';
 
 const SHELL = [
   './',
@@ -23,13 +23,13 @@ const SHELL = [
   './js/organize.js',
   './js/browser.js',
   './js/backup.js',
-  './icons/icon-v9-180.png',
-  './icons/icon-v9-192.png',
-  './icons/icon-v9-512.png',
-  './icons/icon-v9-512-maskable.png',
-  './icons/icon-v9-32.png',
-  './icons/icon-v9-16.png',
-  './icons/favicon-v9.ico',
+  './icons/icon-v11-180.png',
+  './icons/icon-v11-192.png',
+  './icons/icon-v11-512.png',
+  './icons/icon-v11-512-maskable.png',
+  './icons/icon-v11-32.png',
+  './icons/icon-v11-16.png',
+  './icons/favicon-v11.ico',
 ];
 
 self.addEventListener('install', (event) => {
