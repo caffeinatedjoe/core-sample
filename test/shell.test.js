@@ -31,7 +31,7 @@ test('the manifest and service worker are relative to the Pages subpath', () => 
   assert.equal(manifest.start_url, './');
   assert.equal(manifest.scope, './');
   assert.match(html, /href="\.\/manifest\.json"/);
-  assert.match(read('app/js/main.js'), /register\('\.\/sw\.js'\)/);
+  assert.match(read('app/js/main.js'), /register\('\.\/sw\.js', \{ updateViaCache: 'none' \}\)/);
   assert.equal(sw.includes('api.github.com'), false);
   for (const file of ['app/index.html', 'app/manifest.json', 'app/sw.js', 'app/css/app.css']) {
     const text = read(file);
@@ -56,6 +56,8 @@ test('the service worker caches every file the shell loads', () => {
     for (const match of text.matchAll(/from '\.\/([^']+)'/g)) queue.push(match[1]);
   }
   for (const name of seen) refs.push(`./js/${name}`);
+  const sw = read('app/sw.js');
+  for (const match of sw.matchAll(/importScripts\('(\.\/[^']+)'\)/g)) refs.push(match[1]);
   for (const ref of refs) {
     assert.equal(shell.has(ref), true, `${ref} is missing from the service worker shell`);
     assert.equal(existsSync(join(appDir, ref.slice(2))), true, `${ref} is not on disk`);

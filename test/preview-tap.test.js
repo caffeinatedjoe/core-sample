@@ -74,6 +74,5 @@ test('the preview handler returns before cancelling an external click', () => {
   assert.match(view, /planPreviewClick\(event\.target\)/);
   assert.match(css, /\.wikilink \{[^}]*cursor: pointer;/s);
   assert.equal(css.includes('-webkit-overflow-scrolling'), false);
-  assert.match(sw, /core-sample-shell-v2/);
-  assert.equal(sw.includes('core-sample-shell-v1'), false);
+  assert.equal(sw.includes('preventDefault'), false);
 });
