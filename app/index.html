@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Core Sample">
+  <meta name="theme-color" content="#f3eee6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1815" media="(prefers-color-scheme: dark)">
+  <title>Core Sample</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="./icons/apple-touch-icon-167.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="./icons/apple-touch-icon-152.png">
+  <link rel="apple-touch-icon" sizes="120x120" href="./icons/apple-touch-icon-120.png">
+  <link rel="icon" href="./icons/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="top">
+      <div class="top-row">
+        <button type="button" id="notes-button" class="text-button">Notes</button>
+        <p id="save-status" class="save-status" role="status">Saved on this device</p>
+      </div>
+      <div class="title-row">
+        <h1 id="note-title" class="note-title"></h1>
+        <div class="mode-switch" role="group" aria-label="Editor mode">
+          <button type="button" id="mode-source" aria-pressed="true">Source</button>
+          <button type="button" id="mode-preview" aria-pressed="false">Preview</button>
+        </div>
+      </div>
+    </header>
+    <main class="stage">
+      <textarea id="source" class="source" spellcheck="true" autocapitalize="sentences" autocomplete="off" autocorrect="on" aria-label="Note markdown" placeholder="Write in Markdown…"></textarea>
+      <article id="preview" class="preview" hidden aria-label="Rendered note"></article>
+    </main>
+    <div id="notes-sheet" class="sheet" hidden>
+      <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="notes-heading">
+        <header class="sheet-head">
+          <h2 id="notes-heading">Notes</h2>
+          <button type="button" id="notes-close" class="sheet-done">Done</button>
+        </header>
+        <form id="new-note-form" class="new-note">
+          <input id="new-note-name" type="text" name="name" placeholder="New note name" maxlength="120" enterkeyhint="done" autocomplete="off" autocapitalize="sentences" aria-label="New note name">
+          <button type="submit">Create</button>
+        </form>
+        <p id="new-note-error" class="form-error" role="alert"></p>
+        <ul id="notes-list" class="notes-list"></ul>
+      </div>
+    </div>
+    <p id="boot-error" class="boot-error" hidden></p>
+  </div>
+  <noscript>
+    <p class="boot-error">Core Sample needs JavaScript. Once it can run, notes stay on this device.</p>
+  </noscript>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

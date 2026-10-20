@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Core Sample</title>
+  <desc id="desc">Isometric geological core sample with strata that read as stacked notebook pages.</desc>
+  <rect width="512" height="512" fill="#e4d5c0"/>
+  <defs>
+    <linearGradient id="round" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.78" stop-color="#000000" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbf6ee"/>
+      <stop offset="1" stop-color="#e7dccb"/>
+    </linearGradient>
+    <clipPath id="body">
+      <rect x="136" y="168" width="240" height="228"/>
+    </clipPath>
+    <clipPath id="lip1"><rect x="120" y="196" width="272" height="36"/></clipPath>
+    <clipPath id="lip2"><rect x="120" y="236" width="272" height="36"/></clipPath>
+    <clipPath id="lip3"><rect x="120" y="286" width="272" height="36"/></clipPath>
+    <clipPath id="lip4"><rect x="120" y="324" width="272" height="36"/></clipPath>
+    <clipPath id="lip5"><rect x="120" y="364" width="272" height="36"/></clipPath>
+  </defs>
+
+  <ellipse cx="256" cy="424" rx="138" ry="16" fill="#3a3128" opacity="0.16"/>
+  <ellipse cx="256" cy="396" rx="120" ry="30" fill="#322c26"/>
+
+  <g clip-path="url(#body)">
+    <rect x="136" y="168" width="240" height="28" fill="#9a4e34"/>
+    <rect x="136" y="196" width="240" height="40" fill="#f6f0e4"/>
+    <rect x="136" y="236" width="240" height="50" fill="#c99555"/>
+    <rect x="136" y="286" width="240" height="38" fill="#f3ebdd"/>
+    <rect x="136" y="324" width="240" height="40" fill="#627562"/>
+    <rect x="136" y="364" width="240" height="32" fill="#e6d9c4"/>
+    <g stroke="#cbb89f" stroke-width="1.25" opacity="0.9">
+      <line x1="164" y1="210" x2="348" y2="210"/>
+      <line x1="164" y1="222" x2="348" y2="222"/>
+      <line x1="164" y1="300" x2="348" y2="300"/>
+      <line x1="164" y1="312" x2="348" y2="312"/>
+      <line x1="164" y1="376" x2="348" y2="376"/>
+      <line x1="164" y1="386" x2="348" y2="386"/>
+    </g>
+    <rect x="136" y="168" width="240" height="228" fill="url(#round)"/>
+  </g>
+
+  <g fill="none" stroke-linecap="butt">
+    <ellipse cx="256" cy="196" rx="120" ry="28" stroke="#fff8ef" stroke-width="2.5" clip-path="url(#lip1)" opacity="0.7"/>
+    <ellipse cx="256" cy="236" rx="120" ry="28" stroke="#f0d7ae" stroke-width="2" clip-path="url(#lip2)" opacity="0.8"/>
+    <ellipse cx="256" cy="286" rx="120" ry="28" stroke="#fff8ef" stroke-width="2.5" clip-path="url(#lip3)" opacity="0.75"/>
+    <ellipse cx="256" cy="324" rx="120" ry="28" stroke="#d5dece" stroke-width="2" clip-path="url(#lip4)" opacity="0.7"/>
+    <ellipse cx="256" cy="364" rx="120" ry="28" stroke="#f4ecdf" stroke-width="2" clip-path="url(#lip5)" opacity="0.55"/>
+  </g>
+
+  <path d="M136 168 V396" fill="none" stroke="#2c261f" stroke-opacity="0.35" stroke-width="2"/>
+  <path d="M376 168 V396" fill="none" stroke="#2c261f" stroke-opacity="0.35" stroke-width="2"/>
+
+  <ellipse cx="256" cy="168" rx="120" ry="34" fill="url(#cap)" stroke="#2c261f" stroke-opacity="0.38" stroke-width="2"/>
+  <g fill="none" stroke="#c9b8a2" stroke-width="1.4">
+    <ellipse cx="256" cy="166" rx="86" ry="20"/>
+    <ellipse cx="256" cy="170" rx="62" ry="13"/>
+    <ellipse cx="256" cy="174" rx="38" ry="7.5"/>
+  </g>
+  <ellipse cx="256" cy="158" rx="46" ry="8" fill="#ffffff" opacity="0.18"/>
+</svg>
