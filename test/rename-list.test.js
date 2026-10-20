@@ -103,7 +103,7 @@ test('renaming from the list replaces the visible name and the stored path', asy
   const name = `core-sample-${randomUUID()}`;
   const db = await openDatabase(name);
   await putFile(db, makeFile('Welcome.md', '# Welcome\n\nHello\n', 1));
-  await putFile(db, makeFile('logs/Field notes.md', '# Field notes\n\nSee [[Welcome]]\n', 2));
+  await putFile(db, makeFile('logs/Field notes.md', '# Old heading\n\nSee [[Welcome]]\n', 2));
   await setMeta(db, 'lastOpened', 'Welcome.md');
   await setMeta(db, 'folders', ['logs']);
   await setMeta(db, 'expanded', ['logs']);
@@ -118,6 +118,8 @@ test('renaming from the list replaces the visible name and the stored path', asy
   const list = nodes['notes-list'];
   const welcome = list.children.find((row) => texts(row, 'note-name').includes('Welcome'));
   assert.ok(welcome, 'the list shows Welcome before rename');
+  assert.equal(texts(list, 'note-name').includes('Field notes'), true);
+  assert.equal(texts(list, 'note-name').includes('Old heading'), false);
   await clickText(welcome, 'Edit');
   await clickText(nodes['action-panel'], 'Rename');
   const input = find(nodes['action-panel'], (node) => node.tag === 'input');
@@ -128,25 +130,22 @@ test('renaming from the list replaces the visible name and the stored path', asy
   assert.equal(nodes['new-note-error'].textContent, '');
   assert.equal(nodes['note-title'].textContent, 'Start');
   assert.equal(texts(list, 'note-name').includes('Welcome'), false);
+  assert.equal(texts(list, 'note-name').includes('Old heading'), false);
   assert.equal(texts(list, 'note-name').includes('Start'), true);
-  assert.equal(texts(list, 'note-path').includes('Welcome.md'), false);
-  assert.equal(texts(list, 'note-path').includes('Start.md'), true);
-  assert.equal(texts(list, 'note-path').includes('logs/Field notes.md'), true);
+  assert.equal(texts(list, 'note-name').includes('Field notes'), true);
 
   nodes['notes-search'].value = 'Start';
   for (const fn of nodes['notes-search'].listeners.input) fn();
   assert.equal(texts(list, 'note-name').includes('Start'), true);
-  assert.equal(texts(list, 'note-path').includes('Start.md'), true);
-  assert.equal(texts(list, 'note-path').includes('Welcome.md'), false);
   assert.equal(texts(list, 'note-name').includes('Welcome'), false);
   nodes['notes-search'].value = 'Welcome';
   for (const fn of nodes['notes-search'].listeners.input) fn();
   assert.equal(texts(list, 'note-name').includes('Welcome'), false);
-  assert.equal(texts(list, 'note-name').includes('Start'), false);
+  assert.equal(texts(list, 'note-name').includes('Start'), true);
 
   nodes['notes-search'].value = '';
   for (const fn of nodes['notes-search'].listeners.input) fn();
-  const field = list.children.find((row) => texts(row, 'note-path').includes('logs/Field notes.md'));
+  const field = list.children.find((row) => texts(row, 'note-name').includes('Field notes'));
   await clickText(field, 'Edit');
   await clickText(nodes['action-panel'], 'Move');
   await clickText(nodes['action-panel'], 'Notes');
@@ -154,9 +153,8 @@ test('renaming from the list replaces the visible name and the stored path', asy
   assert.equal(nodes['new-note-error'].textContent, '');
   assert.equal(nodes['note-title'].textContent, 'Start');
   assert.equal(texts(list, 'note-name').filter((item) => item === 'Field notes').length > 0, true);
-  assert.equal(texts(list, 'note-path').includes('logs/Field notes.md'), false);
-  assert.equal(texts(list, 'note-path').includes('Field notes.md'), true);
-  assert.equal(texts(list, 'note-path').includes('Start.md'), true);
+  assert.equal(texts(list, 'note-name').includes('Old heading'), false);
+  assert.equal(texts(list, 'note-name').includes('Start'), true);
   assert.equal(texts(list, 'note-name').includes('Welcome'), false);
 
   db.close();
@@ -165,11 +163,9 @@ test('renaming from the list replaces the visible name and the stored path', asy
   const paths = stored.map((file) => file.path).sort();
   assert.deepEqual(paths, ['Field notes.md', 'Start.md']);
   const start = stored.find((file) => file.path === 'Start.md');
-  assert.match(start.content, /^# Start\n/);
+  assert.equal(start.content, '# Welcome\n\nHello\n');
   const moved = stored.find((file) => file.path === 'Field notes.md');
-  assert.match(moved.content, /^# Field notes\n/);
-  assert.match(moved.content, /\[\[Start\]\]/);
-  assert.equal(moved.content.includes('[[Welcome]]'), false);
+  assert.equal(moved.content, '# Old heading\n\nSee [[Start]]\n');
   again.close();
   await deleteDatabase(name);
 });

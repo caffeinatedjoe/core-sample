@@ -1,4 +1,4 @@
-import { noteTitle } from './notes.js';
+import { noteSnippet, noteTitle } from './notes.js';
 import { ancestorFolders, liveNotes, parentPath } from './organize.js';
 
 const SEARCH_LIMIT = 40;
@@ -40,7 +40,7 @@ function appendTree(rows, files, folders, open, dir, depth, currentPath) {
       title: noteTitle(file),
       depth,
       current: file.path === currentPath,
-      detail: file.path,
+      detail: noteSnippet(file),
     });
   }
 }
@@ -104,7 +104,7 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
       title: hit.title,
       depth: 0,
       current: hit.path === currentPath,
-      detail: hit.kind === 'content' ? hit.snippet : hit.path,
+      detail: hit.kind === 'content' ? hit.snippet : noteSnippet(files.find((file) => file.path === hit.path)),
     }));
   }
 
@@ -121,7 +121,7 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
         title: noteTitle(file),
         depth: 0,
         current: path === currentPath,
-        detail: path,
+        detail: noteSnippet(file),
         recent: true,
       });
     }
