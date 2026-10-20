@@ -44,9 +44,11 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(css, /--safe-left:\s*env\(safe-area-inset-left/);
   const frame = rule(css, '.safe-frame');
   assert.match(frame, /position:\s*fixed/);
-  assert.match(frame, /inset:\s*0/);
-  assert.match(frame, /bottom:\s*var\(--keyboard-inset\)/);
-  assert.equal(frame.includes('height'), false);
+  assert.match(frame, /top:\s*0/);
+  assert.match(frame, /height:\s*calc\(var\(--app-h\) - var\(--keyboard-inset\)\)/);
+  assert.equal(frame.includes('bottom'), false);
+  assert.match(css, /--app-h:\s*calc\(100% \+ var\(--safe-top\)\)/);
+  assert.match(css, /html,\s*body \{[^}]*height:\s*calc\(var\(--app-h\) - var\(--keyboard-inset\)\)/);
 
   assert.match(html, /id="app"[^>]*class="[^"]*\bsafe-frame\b/);
   assert.match(html, /id="notes-sheet"[^>]*class="sheet"/);
@@ -71,8 +73,13 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(html, /id="layout-debug"[^>]*hidden/);
   assert.match(html, /id="safe-probe"/);
   assert.match(css, /padding:\s*env\(safe-area-inset-top/);
-  assert.match(main, /KEYBOARD_THRESHOLD = 80/);
-  assert.match(main, /overlap > KEYBOARD_THRESHOLD/);
+  const viewport = read('app/js/viewport.js');
+  assert.match(viewport, /KEYBOARD_THRESHOLD = 80/);
+  assert.match(viewport, /overlap > KEYBOARD_THRESHOLD/);
+  assert.match(main, /layoutFrame/);
+  assert.match(main, /--app-h/);
+  assert.match(main, /frameSource/);
+  assert.match(main, /orientationchange/);
   assert.match(main, /innerHeight/);
   assert.match(main, /visualViewport\.height/);
   assert.match(main, /visualViewport\.offsetTop/);

@@ -1,26 +1,38 @@
 import { openDatabase } from './db.js';
 import { APP_BUILD } from './version.js';
+import { layoutFrame } from './viewport.js';
 import { mountApp } from './view.js';
 
-const KEYBOARD_THRESHOLD = 80;
+let frameState = null;
+
+function standaloneDisplay() {
+  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
 
 function bindViewport() {
   const apply = () => {
     const viewport = window.visualViewport;
-    let keyboard = 0;
-    if (viewport) {
-      // A closed keyboard on iOS standalone still reports a slightly short
-      // visual viewport. Only a real keyboard (well past that noise) may lift
-      // the frame. The frame's height otherwise stays CSS inset: 0.
-      const overlap = window.innerHeight - viewport.height - viewport.offsetTop;
-      if (overlap > KEYBOARD_THRESHOLD) keyboard = overlap;
-    }
-    document.documentElement.style.setProperty('--keyboard-inset', `${Math.round(keyboard)}px`);
+    frameState = layoutFrame({
+      innerHeight: window.innerHeight,
+      outerHeight: window.outerHeight,
+      screenWidth: window.screen?.width,
+      screenHeight: window.screen?.height,
+      visualViewportHeight: viewport ? viewport.height : null,
+      visualViewportOffsetTop: viewport ? viewport.offsetTop : 0,
+      standalone: standaloneDisplay(),
+      landscape: window.matchMedia('(orientation: landscape)').matches,
+    });
+    const root = document.documentElement;
+    root.style.setProperty('--app-h', `${frameState.full}px`);
+    root.style.setProperty('--keyboard-inset', `${frameState.keyboard}px`);
+    root.dataset.frameSource = frameState.source;
     if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
     if (!document.getElementById('layout-debug')?.hidden) paintDebug();
   };
   window.visualViewport?.addEventListener('resize', apply);
   window.visualViewport?.addEventListener('scroll', apply);
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', apply);
   window.addEventListener('scroll', apply, { passive: true });
   apply();
 }
@@ -106,6 +118,8 @@ function paintDebug() {
     `safe-bottom ${pad ? pad.paddingBottom : 'none'}`,
     `safe-left ${pad ? pad.paddingLeft : 'none'}`,
     `--keyboard-inset ${keyboard || '0px'}`,
+    `--app-h ${getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim() || 'none'}`,
+    `frame-source ${document.documentElement.dataset.frameSource || frameState?.source || 'css:100%+safe-top'}`,
     `#app ${boxLine(document.getElementById('app'))}`,
     `#notes-sheet ${boxLine(document.getElementById('notes-sheet'))}`,
     `scroll ${scroll ? scroll.id : 'none'} ${boxLine(scroll)}`,
