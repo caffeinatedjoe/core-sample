@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
-  <div id="app" class="app">
+  <div id="app" class="app safe-frame">
     <header class="top">
       <div class="top-row">
         <button type="button" id="notes-button" class="text-button">Notes</button>
@@ -38,7 +38,7 @@
       <article id="preview" class="preview" hidden aria-label="Rendered note"></article>
     </main>
     <p id="build-version" class="build-version"></p>
-    <div id="notes-sheet" class="sheet" hidden>
+    <div id="notes-sheet" class="sheet safe-frame" hidden>
       <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="notes-heading">
         <header class="sheet-head">
           <h2 id="notes-heading">Notes</h2>
