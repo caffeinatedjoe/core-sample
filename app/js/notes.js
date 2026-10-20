@@ -8,7 +8,7 @@ Core Sample keeps notes on this phone. They are saved as you type.
 
 - [ ] Switch to Preview and tap this box
 - [ ] Open Source and see the Markdown change
-- [ ] Create a note, then link it as [[Another note]]
+- [ ] Tap [[Another note]] in Preview to open it
 
 This install is local only. GitHub sync is not connected yet.
 
@@ -68,6 +68,41 @@ function normalizePath(value) {
     .replace(/^\.\//, '')
     .replace(/\.md$/i, '')
     .toLowerCase();
+}
+
+export function notePathFromWikilink(target, existingPaths = []) {
+  const raw = String(target ?? '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/\.md$/i, '')
+    .trim();
+  const parts = raw.split('/').filter((part) => part.length);
+  if (!parts.length || parts.some((part) => part === '.' || part === '..' || /[\u0000-\u001f]/.test(part))) {
+    throw new Error('Use a note name.');
+  }
+  const path = `${parts.join('/')}.md`;
+  if (existingPaths.includes(path)) {
+    throw new Error('A note with that name already exists.');
+  }
+  return path;
+}
+
+export function planWikilink(notes, target) {
+  const list = notes || [];
+  const match = resolveWikilink(list, target);
+  if (match.status === 'ok') return { action: 'open', path: match.file.path };
+  if (match.status === 'ambiguous') return { action: 'ambiguous', target };
+  try {
+    const path = notePathFromWikilink(target, list.map((note) => note.path));
+    return {
+      action: 'create',
+      path,
+      title: path.split('/').pop().replace(/\.md$/i, ''),
+    };
+  } catch (error) {
+    return { action: 'invalid', message: error.message };
+  }
 }
 
 export function resolveWikilink(files, target) {

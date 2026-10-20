@@ -37,7 +37,8 @@ line two
   assert.match(html, /<ol><li>first<\/li><li>second<\/li><\/ol>/);
   assert.match(html, /<blockquote>quoted line<\/blockquote>/);
   assert.match(html, /<hr>/);
-  assert.match(html, /href="https:\/\/example\.com\/docs"/);
+  assert.match(html, /<a href="https:\/\/example\.com\/docs" rel="noopener">Docs<\/a>/);
+  assert.equal(html.includes('target='), false);
   assert.match(html, /<th>Rock<\/th>/);
   assert.match(html, /<td>clay<\/td>/);
   assert.match(html, /line one<br>line two/);
@@ -69,10 +70,9 @@ test('renders checklist buttons with the same indexes as listTasks', () => {
   assert.match(html, /class="task-text is-done">also/);
 });
 
-test('renders a wikilink as a local control', () => {
+test('renders a wikilink as a button, not a fragment anchor', () => {
   const html = renderMarkdown('See [[Field notes#Morning|dawn]].');
-  assert.match(html, /class="wikilink"/);
-  assert.match(html, /data-wikilink="Field notes"/);
-  assert.match(html, /data-heading="Morning"/);
-  assert.match(html, />dawn</);
+  assert.match(html, /<button type="button" class="wikilink" data-wikilink="Field notes" data-heading="Morning">dawn<\/button>/);
+  assert.equal(html.includes('href="#'), false);
+  assert.equal(html.includes('<a class="wikilink"'), false);
 });

@@ -7,8 +7,9 @@ import {
   makeFile,
   notePathFromName,
   noteTitle,
-  resolveWikilink,
+  planWikilink,
 } from './notes.js';
+import { planPreviewClick } from './preview-tap.js';
 
 const SAVE_DELAY = 400;
 
@@ -52,6 +53,7 @@ export function mountApp(doc, db) {
     else if (state === 'error') status.textContent = "Couldn't save. Your text is still here.";
     else if (state === 'missing') status.textContent = `No note named ${detail}`;
     else if (state === 'ambiguous') status.textContent = `More than one note named ${detail}`;
+    else if (state === 'invalid') status.textContent = detail;
   }
 
   function applyMode(next, { persist = true } = {}) {
@@ -201,12 +203,51 @@ export function mountApp(doc, db) {
     if (mode === 'source') source.focus();
   });
 
+  let linkNav = null;
+
+  async function followWikilink(target, heading) {
+    const plan = planWikilink(notes, target);
+    if (plan.action === 'ambiguous') {
+      setStatus('ambiguous', target);
+      return;
+    }
+    if (plan.action === 'invalid') {
+      setStatus('invalid', plan.message);
+      return;
+    }
+    if (plan.action === 'open') {
+      await openPath(plan.path, { heading });
+      return;
+    }
+    if (current) {
+      current.content = source.value;
+      try {
+        await saver.flush();
+      } catch {
+        setStatus('error');
+        return;
+      }
+    }
+    const note = makeFile(plan.path, `# ${plan.title}\n\n`);
+    try {
+      await putFile(db, note);
+      await setMeta(db, 'lastOpened', plan.path);
+    } catch {
+      setStatus('error');
+      return;
+    }
+    notes.push(note);
+    showNote(note, { heading });
+    closeSheet();
+  }
+
   preview.addEventListener('click', (event) => {
-    const task = event.target.closest('[data-task-index]');
-    if (task) {
-      event.preventDefault();
-      const index = Number(task.dataset.taskIndex);
-      const next = toggleChecklist(source.value, index);
+    const plan = planPreviewClick(event.target);
+    if (plan.type === 'external' || plan.type === 'none') return;
+    if (plan.preventDefault) event.preventDefault();
+
+    if (plan.type === 'task') {
+      const next = toggleChecklist(source.value, plan.index);
       const selStart = source.selectionStart;
       const selEnd = source.selectionEnd;
       const sourceScroll = source.scrollTop;
@@ -227,18 +268,27 @@ export function mountApp(doc, db) {
       return;
     }
 
-    const link = event.target.closest('a[data-wikilink]');
-    if (!link) return;
-    event.preventDefault();
-    const target = link.dataset.wikilink || '';
-    const heading = link.dataset.heading || '';
-    const match = resolveWikilink(notes, target);
-    if (match.status === 'ok') {
-      openPath(match.file.path, { heading });
+    if (plan.type === 'wikilink') {
+      if (linkNav) return;
+      linkNav = followWikilink(plan.target, plan.heading).finally(() => {
+        linkNav = null;
+      });
       return;
     }
-    if (match.status === 'ambiguous') setStatus('ambiguous', target);
-    else setStatus('missing', target);
+
+    if (plan.type === 'local-link') {
+      let href = plan.href;
+      try { href = decodeURIComponent(href); } catch { /* keep the raw href */ }
+      href = href.trim().replace(/^\.\//, '');
+      if (href.startsWith('#')) {
+        scrollToHeading(href.slice(1));
+        return;
+      }
+      if (linkNav) return;
+      linkNav = followWikilink(href, '').finally(() => {
+        linkNav = null;
+      });
+    }
   });
 
   function flushNow() {
@@ -253,6 +303,7 @@ export function mountApp(doc, db) {
   window.addEventListener('pagehide', flushNow);
 
   return {
+    flush: flushNow,
     async start() {
       const session = await loadSession(db);
       notes = session.notes;

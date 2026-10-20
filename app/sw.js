@@ -1,5 +1,5 @@
 // App shell only. Note text lives in IndexedDB and is never cached here.
-const CACHE = 'core-sample-shell-v1';
+const CACHE = 'core-sample-shell-v2';
 
 const SHELL = [
   './',
@@ -11,6 +11,7 @@ const SHELL = [
   './js/db.js',
   './js/save.js',
   './js/notes.js',
+  './js/preview-tap.js',
   './js/markdown.js',
   './js/checklist.js',
   './icons/apple-touch-icon.png',
@@ -30,10 +31,11 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(
-    keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)),
-  )));
-  self.clients.claim();
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)));
+    await self.clients.claim();
+  })());
 });
 
 function isShellPath(pathname) {

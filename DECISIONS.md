@@ -25,6 +25,7 @@ The product is one offline client. Later, the page will call `api.github.com` di
 | --- | --- | --- |
 | `checklist.js` | Task markers, fence rules, toggle | 1 |
 | `markdown.js` | Render, escape, wikilink parse | 1 |
+| `preview-tap.js` | What a preview tap may preventDefault | 1 |
 | `notes.js` | Titles, paths, wikilink resolution, welcome note, which note to reopen | 1 |
 | `db.js` | IndexedDB | 1 |
 | `save.js` | Debounced local save and immediate flush | 1 |
@@ -65,15 +66,15 @@ Remote sync will use its own 2–5 second debounce. That clock must never be wha
 
 Toggling replaces one mark character (` ` or `x` / `X`). The string length does not change, so textarea selection offsets stay put. The control is a `button type="button"`. The handler does not focus the textarea, so the keyboard stays down. Preview scroll position is restored after the re-render.
 
-Wikilinks: `[[target]]`, `[[target|alias]]`, `[[target#heading]]`, `[[target#heading|alias]]`. A tap resolves against local notes only: full path, otherwise a unique filename, case-insensitive. No match, or more than one match, sets the status line. No network.
+Wikilinks: `[[target]]`, `[[target|alias]]`, `[[target#heading]]`, `[[target#heading|alias]]`. A tap resolves against local notes: full path, otherwise a unique filename, case-insensitive. One match opens that note and scrolls to the heading when there is one. No match creates a note with that name and opens it, which is the Obsidian behavior. More than one match does not guess. The control is a `<button type="button" class="wikilink">`, not an `<a href="#...">`. In an installed iOS app a fragment link with no matching id does nothing, and iOS does not reliably treat that tap as an in-app action.
 
-Note text is escaped before it becomes HTML. Links may be `http:`, `https:`, `mailto:`, or relative. `javascript:` is not linked. Remote images are rendered as their alt text so the preview does not make third-party requests.
+External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noopener"` and no `target`. The preview click handler does not call `preventDefault` on them. iOS standalone ignores `target="_blank"` and `window.open` (the new browsing context is dropped, so the tap looks dead). A normal navigation is what that WebKit opens in its in-app Safari view. `javascript:` is not linked. Relative markdown links stay inside the app and are resolved like wikilinks, so removing `target="_blank"` cannot navigate the installed app away from itself. Remote images are rendered as their alt text so the preview does not make third-party requests.
 
 ## App shell and subpath
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name: `core-sample-shell-v1`. Bump it when a shell file changes. Install precaches the shell. Fetches use stale-while-revalidate. A navigation that misses the network falls back to the cached `index.html`. Cross-origin requests and anything that is not the shell are ignored.
+Cache name: `core-sample-shell-v2`. Bump it when a shell file changes. Install calls `skipWaiting`. Activate deletes older caches and then `clients.claim()`, so the new worker takes the page. The script that is already running stays in memory until the next load. After this script is the one running, a later worker taking control flushes the open note and reloads. The first install does not reload, because nothing unsaved exists yet. Cross-origin requests and anything that is not the shell are ignored. Fetches use stale-while-revalidate. A navigation that misses the network falls back to the cached `index.html`.
 
 ## iPhone layout
 
