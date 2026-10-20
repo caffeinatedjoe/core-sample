@@ -28,6 +28,9 @@ import {
   planRestore,
   planTrash,
 } from './organize.js';
+import { fileFromRemote, folderList, planDownload } from './github-api.js';
+import { eraseLocalNotes } from './github-store.js';
+import { mountGithub } from './github-ui.js';
 
 const SAVE_DELAY = 400;
 
@@ -55,10 +58,15 @@ export function mountApp(doc, db) {
   let panel = null;
   let current = null;
   let mode = 'source';
+  let erasing = false;
+  let holding = false;
 
   const saver = createDebouncedSaver({
     delay: SAVE_DELAY,
-    write: (note) => putFile(db, note),
+    write: (note) => {
+      if (erasing) return undefined;
+      return putFile(db, note);
+    },
     onStatus: (state) => setStatus(state),
   });
 
@@ -75,6 +83,8 @@ export function mountApp(doc, db) {
       createdAt: current.createdAt,
       updatedAt: current.updatedAt,
       trashedAt: current.trashedAt || null,
+      remoteSha: typeof current.remoteSha === 'string' ? current.remoteSha : null,
+      dirty: current.dirty === true,
     };
   }
 
@@ -621,9 +631,9 @@ export function mountApp(doc, db) {
     if (nav?.canShare?.({ files: [file] })) {
       try {
         await nav.share({ files: [file], title: 'Core Sample backup' });
-        return;
+        return true;
       } catch (error) {
-        if (error?.name === 'AbortError') return;
+        if (error?.name === 'AbortError') return false;
       }
     }
     const url = URL.createObjectURL(file);
@@ -635,6 +645,7 @@ export function mountApp(doc, db) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return true;
   }
 
   async function addBackup(backup) {
@@ -697,9 +708,12 @@ export function mountApp(doc, db) {
   }
 
   function rememberEdit() {
-    if (!current) return;
-    current.content = source.value;
-    current.updatedAt = Date.now();
+    if (holding || erasing || !current) return;
+    if (source.value !== current.content) {
+      current.dirty = true;
+      current.content = source.value;
+      current.updatedAt = Date.now();
+    }
     title.textContent = noteTitle(current);
     saver.schedule(snapshot);
   }
@@ -804,6 +818,7 @@ export function mountApp(doc, db) {
     if (plan.preventDefault) event.preventDefault();
 
     if (plan.type === 'task') {
+      if (holding) return;
       const next = toggleChecklist(source.value, plan.index);
       const selStart = source.selectionStart;
       const selEnd = source.selectionEnd;
@@ -814,6 +829,7 @@ export function mountApp(doc, db) {
       source.selectionEnd = selEnd;
       source.scrollTop = sourceScroll;
       if (current) {
+        if (next !== current.content) current.dirty = true;
         current.content = next;
         current.updatedAt = Date.now();
         title.textContent = noteTitle(current);
@@ -849,10 +865,101 @@ export function mountApp(doc, db) {
   });
 
   function flushNow() {
-    if (!current) return;
+    if (erasing || !current) return;
     current.content = source.value;
     saver.flush().catch(() => {});
   }
+
+  function holdEditor(held) {
+    holding = Boolean(held);
+    source.readOnly = holding;
+  }
+
+  async function replaceFile(file) {
+    await putFile(db, file);
+    const index = files.findIndex((item) => item.path === file.path);
+    if (index >= 0) files[index] = file;
+    else files.push(file);
+    if (current && current.path === file.path) {
+      if (source.value !== file.content) showNote(file);
+      else current = file;
+    }
+  }
+
+  async function applyDownload(loaded, mode) {
+    if (!(await flushEditing())) {
+      throw new Error("Couldn't save the open note. Nothing was replaced.");
+    }
+    const plan = planDownload(files, loaded, mode);
+    if (!plan.writes.length) {
+      return { downloaded: 0, skipped: plan.skipped.length, empty: loaded.length === 0 };
+    }
+    const now = Date.now();
+    const writes = plan.writes.map((note) => fileFromRemote(
+      { localPath: note.localPath },
+      note.content,
+      note.sha,
+      now,
+    ));
+    await commitFiles(db, { put: writes, remove: plan.remove });
+    if (plan.remove.length) {
+      const removed = new Set(plan.remove);
+      files = files.filter((file) => !removed.has(file.path));
+    }
+    for (const file of writes) {
+      const index = files.findIndex((item) => item.path === file.path);
+      if (index >= 0) files[index] = file;
+      else files.push(file);
+    }
+    if (mode === 'replace') {
+      folders = folderList(files.map((file) => file.path));
+      recent = [];
+      expanded = new Set(folders);
+      await setMeta(db, 'folders', folders);
+      await setMeta(db, 'recent', recent);
+      await setMeta(db, 'expanded', [...expanded]);
+    } else {
+      for (const file of writes) {
+        for (const folder of ancestorFolders(file.path)) {
+          if (!folders.includes(folder)) folders.push(folder);
+          expanded.add(folder);
+        }
+      }
+      await setMeta(db, 'folders', folders);
+      await setMeta(db, 'expanded', [...expanded]);
+    }
+    syncOpen();
+    renderList();
+    return { downloaded: writes.length, skipped: plan.skipped.length, empty: false };
+  }
+
+  async function eraseLocal() {
+    erasing = true;
+    try {
+      await saver.discard();
+      await eraseLocalNotes(db);
+      files = [];
+      folders = [];
+      recent = [];
+      expanded = new Set();
+      clearEditor();
+      renderList();
+      setStatus('saved');
+    } finally {
+      erasing = false;
+    }
+  }
+
+  const github = mountGithub(doc, db, {
+    flush: flushEditing,
+    exportBackup,
+    files: () => files,
+    current: () => current,
+    replaceFile,
+    applyDownload,
+    eraseLocal,
+    hold: holdEditor,
+  });
 
   doc.addEventListener('visibilitychange', () => {
     if (doc.visibilityState === 'hidden') flushNow();
@@ -877,6 +984,7 @@ export function mountApp(doc, db) {
         recent = rememberRecent(recent, session.current.path);
         await setMeta(db, 'recent', recent);
       }
+      await github.refresh();
       setStatus('saved');
     },
   };

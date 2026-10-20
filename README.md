@@ -1,6 +1,6 @@
 # Core Sample
 
-An iPhone-first, local-first Markdown notes app. Stage 1 runs entirely on the phone: notes are stored in IndexedDB, and the installed app can open with no network. GitHub sync is not built yet.
+An iPhone-first, local-first Markdown notes app. Notes are stored in IndexedDB, and the installed app can open with no network. GitHub sign-in, download, and one-note push and pull are manual. Nothing is sent until you push a note.
 
 The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/core-sample/).
 
@@ -13,7 +13,9 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 - Tap a checklist in Preview and the Markdown updates in place.
 - Folders, rename, move, and Trash. Search by name or text. Export and import a backup of this device.
 
-GitHub login is a later stage. See [PLAN.md](PLAN.md) and [DECISIONS.md](DECISIONS.md).
+## GitHub
+
+Notes → GitHub stores a client id and a relay URL on this phone. Both start empty. The steps to create the Cloudflare Worker and the GitHub OAuth app are in [worker/README.md](worker/README.md) and [DECISIONS.md](DECISIONS.md). The token stays in IndexedDB. Repository calls go to `api.github.com`. Disconnect leaves notes on the phone. Automatic sync is not built.
 
 ## Develop
 

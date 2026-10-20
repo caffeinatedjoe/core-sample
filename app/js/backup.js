@@ -16,6 +16,8 @@ function copyFile(file) {
     createdAt: file.createdAt ?? null,
     updatedAt: file.updatedAt ?? null,
     trashedAt: file.trashedAt || null,
+    remoteSha: typeof file.remoteSha === 'string' && file.remoteSha ? file.remoteSha : null,
+    dirty: file.dirty === true,
   };
 }
 

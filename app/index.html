@@ -39,6 +39,11 @@
           <button type="button" id="mode-preview" aria-pressed="false">Preview</button>
         </div>
       </div>
+      <div id="github-file-bar" class="github-file-bar" hidden>
+        <button type="button" id="github-push">Push</button>
+        <button type="button" id="github-pull">Pull</button>
+        <p id="github-file-status" role="status"></p>
+      </div>
     </header>
     <main class="stage">
       <textarea id="source" class="source" spellcheck="true" autocapitalize="sentences" autocomplete="off" autocorrect="on" aria-label="Note markdown" placeholder="Write in Markdown…"></textarea>
@@ -62,10 +67,72 @@
         <div class="browser-actions">
           <button type="button" id="new-folder-button">New folder</button>
           <button type="button" id="backup-button">Backup</button>
+          <button type="button" id="github-button">GitHub</button>
         </div>
         <div id="action-panel" class="action-panel" hidden></div>
         <ul id="notes-list" class="notes-list"></ul>
         <input id="backup-file" type="file" accept="application/json,.json" hidden>
+      </div>
+    </div>
+    <div id="github-sheet" class="sheet" hidden>
+      <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="github-heading">
+        <header class="sheet-head">
+          <h2 id="github-heading">GitHub</h2>
+          <button type="button" id="github-close" class="sheet-done">Done</button>
+        </header>
+        <div class="github-body">
+          <p class="github-lead">Sign in with a device code. The token stays on this phone. A note is sent only when you push it.</p>
+          <label>Client id
+            <input id="github-client-id" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="From your OAuth app">
+          </label>
+          <label>Relay URL
+            <input id="github-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://….workers.dev">
+          </label>
+          <div class="github-actions">
+            <button type="button" id="github-save-config">Save</button>
+            <button type="button" id="github-connect">Connect</button>
+          </div>
+          <div id="github-device" hidden>
+            <button type="button" id="github-user-code" class="user-code"></button>
+            <a id="github-verify" href="https://github.com/login/device">Open github.com/login/device</a>
+            <button type="button" id="github-cancel">Cancel</button>
+          </div>
+          <p id="github-status" class="github-note" role="status"></p>
+          <div id="github-target" hidden>
+            <p id="github-login" class="github-note"></p>
+            <label>Repository
+              <input id="github-repo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="owner/repo">
+            </label>
+            <label>Branch
+              <input id="github-branch" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Branch name">
+            </label>
+            <label>Notes folder
+              <input id="github-root" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Blank uses the whole repo">
+            </label>
+            <div class="github-actions">
+              <button type="button" id="github-save-repo">Save repo</button>
+              <button type="button" id="github-download">Download Markdown</button>
+            </div>
+            <div id="github-choice" hidden>
+              <p class="github-note">This phone already has notes.</p>
+              <div class="github-actions">
+                <button type="button" id="github-alongside">Keep local notes alongside</button>
+                <button type="button" id="github-export-replace">Export backup, then replace</button>
+                <button type="button" id="github-confirm-replace" class="danger" hidden>Replace notes on this phone</button>
+              </div>
+            </div>
+            <button type="button" id="github-disconnect">Disconnect</button>
+            <div id="github-disconnect-confirm" hidden>
+              <p class="github-note">Disconnect removes the GitHub sign-in. Notes on this phone stay.</p>
+              <button type="button" id="github-disconnect-yes">Disconnect GitHub</button>
+            </div>
+            <button type="button" id="github-erase">Erase local copy</button>
+            <div id="github-erase-confirm" hidden>
+              <p class="github-note">This deletes the notes on this phone. It does not change GitHub.</p>
+              <button type="button" id="github-erase-yes" class="danger">Erase notes on this phone</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <p id="boot-error" class="boot-error" hidden></p>
