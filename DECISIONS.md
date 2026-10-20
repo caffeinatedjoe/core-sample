@@ -29,7 +29,10 @@ The product is one offline client. Later, the page will call `api.github.com` di
 | `notes.js` | Titles, paths, wikilink resolution, welcome note, which note to reopen | 1 |
 | `db.js` | IndexedDB | 1 |
 | `save.js` | Debounced local save and immediate flush | 1 |
-| `view.js` | Editor, preview, notes sheet | 1 |
+| `view.js` | Editor, preview, notes browser | 1–2 |
+| `organize.js` | Rename, move, trash, link updates | 2 |
+| `browser.js` | Folder rows, search, recent notes | 2 |
+| `backup.js` | Export and import of the local notes | 2 |
 | `main.js` | Boot, keyboard viewport, service worker, persistent storage | 1 |
 | GitHub, sync, merge modules | Do not add these until their stage | 3–5 |
 
@@ -41,9 +44,11 @@ Database name `core-sample`, version 1.
 
 - `path`, `content`, `kind` (`markdown`; later `text` or `binary`), `encoding`, `createdAt`, `updatedAt`
 
-Folders are not records. The tree is the set of paths. Rename and move, when they arrive, change a path instead of updating a second tree.
+Folders are not records. The tree is the set of paths, plus a `folders` meta list so an empty folder can exist before it has a note. Rename and move change paths. They do not copy the note into a second store.
 
-`meta`, keyed by string. Stage 1 keys: `lastOpened`, `editorMode`.
+A trashed note stays in `files` with `trashedAt` set. The text is unchanged. Restore clears `trashedAt`. Empty Trash is a separate confirmed action and is the only one that deletes note records. Old records without `trashedAt` are live notes.
+
+`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`.
 
 Later versions add fields and stores. Do not invent a parallel place to keep a note.
 
@@ -74,7 +79,7 @@ External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noo
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the visible footer are the same string, `core-sample-shell-v3` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the visible footer are the same string, `core-sample-shell-v4` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -100,6 +105,16 @@ Not part of Stage 1. When it arrives: device flow through a Worker that forwards
 
 `npm test` runs `node --test`. Persistence tests use `fake-indexeddb` and a unique database name per test. Keyboard, Add to Home Screen, and standalone launch are checked on an iPhone. Desktop checks cover render, toggle, save, and reload.
 
-## Left out of Stage 1
+## Rename, move, and links
 
-Folders, rename, move, delete, search, import/export, GitHub auth, sync, conflicts, and background sync.
+The path is the identity. A rename or move rewrites the path, then rewrites links that resolved to that note. A path-style wikilink (`[[folder/note]]`) is pointed at the new path. A bare wikilink (`[[note]]`) is left alone when the file name is unchanged and still unique. A markdown link is rewritten when the relative path would otherwise break. Aliases and headings stay. Links inside fenced or inline code are not touched, and an ambiguous name is not guessed. The open note is flushed before the path change.
+
+## Browser, search, and backup
+
+The notes sheet is the browser: nested folders, expand and collapse, recent notes, and search across file names and note text. Search skips Trash. Nothing in the browser is a second copy of a note.
+
+Export writes one JSON file (`format: core-sample-backup`, version 1) containing every note, including trashed text, plus folders, the last opened path, the editor mode, and recent paths. Import parses that file or refuses it. Add keeps every note already on the device; a path that already has different text is stored beside it as `Name (imported).md`. Replace is a separate confirmation and is the only import that removes notes. On iPhone the export uses the share sheet when the browser allows a file share, and otherwise a download link with no `target`.
+
+## Left out of Stage 2
+
+GitHub auth, sync, conflicts, and background sync.

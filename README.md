@@ -11,8 +11,9 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 - Notes save as you type. The last opened note comes back after a reload.
 - Create and open notes. `[[wikilinks]]` open a local note, or create it if it is not there yet. Web links open outside the app.
 - Tap a checklist in Preview and the Markdown updates in place.
+- Folders, rename, move, and Trash. Search by name or text. Export and import a backup of this device.
 
-Folders, rename, delete, search, and GitHub login are later stages. See [PLAN.md](PLAN.md) and [DECISIONS.md](DECISIONS.md).
+GitHub login is a later stage. See [PLAN.md](PLAN.md) and [DECISIONS.md](DECISIONS.md).
 
 ## Develop
 
