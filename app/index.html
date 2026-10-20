@@ -37,8 +37,10 @@
       <textarea id="source" class="source" spellcheck="true" autocapitalize="sentences" autocomplete="off" autocorrect="on" aria-label="Note markdown" placeholder="Write in Markdown…"></textarea>
       <article id="preview" class="preview" hidden aria-label="Rendered note"></article>
     </main>
-    <p id="build-version" class="build-version"></p>
-    <div id="notes-sheet" class="sheet safe-frame" hidden>
+    <p id="build-version" class="build-version" role="button" tabindex="0"> </p>
+    <div id="safe-probe" class="safe-probe" aria-hidden="true"></div>
+    <pre id="layout-debug" class="layout-debug" hidden></pre>
+    <div id="notes-sheet" class="sheet" hidden>
       <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="notes-heading">
         <header class="sheet-head">
           <h2 id="notes-heading">Notes</h2>

@@ -16,8 +16,6 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --keyboard-inset: 0px;
-  /* Space for the home indicator. Zero while the keyboard covers that band. */
-  --home-clearance: max(0px, calc(var(--safe-bottom) - var(--keyboard-inset)));
   color-scheme: light;
 }
 
@@ -67,15 +65,13 @@ body {
   }
 }
 
-/* One full-bleed frame. Its background reaches the physical edges. The top
-   inset is padding on the header, and the home indicator is padding on the
-   footer and the last list items. Only the keyboard lifts the frame. */
+/* The app is the only fixed frame, sized by CSS. A nested fixed sheet is
+   content-sized on iOS and stops short of the bottom. Bottom leaves the
+   screen only while --keyboard-inset is set, which JS does for a real keyboard. */
 .safe-frame {
   position: fixed;
-  top: 0;
-  right: 0;
+  inset: 0;
   bottom: var(--keyboard-inset);
-  left: 0;
 }
 
 button,
@@ -178,25 +174,29 @@ a:focus-visible {
 .stage {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  position: relative;
 }
 
 .build-version {
-  flex: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
   margin: 0;
-  padding: 2px calc(var(--safe-right) + 16px) calc(4px + var(--home-clearance)) calc(var(--safe-left) + 16px);
-  background: var(--bg);
+  padding: 0 calc(var(--safe-right) + 16px) var(--safe-bottom) calc(var(--safe-left) + 16px);
+  background: transparent;
   font-size: 11px;
   line-height: 1.2;
   text-align: center;
   color: var(--muted);
+  cursor: pointer;
 }
 
 .source,
 .preview {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   margin: 0;
   overflow: auto;
   overscroll-behavior: contain;
@@ -208,7 +208,7 @@ a:focus-visible {
   resize: none;
   border-radius: 0;
   background: transparent;
-  padding: 14px calc(var(--safe-right) + 16px) 20px calc(var(--safe-left) + 16px);
+  padding: 14px calc(var(--safe-right) + 16px) var(--safe-bottom) calc(var(--safe-left) + 16px);
   font-size: 17px;
   line-height: 1.5;
   caret-color: var(--accent);
@@ -221,7 +221,7 @@ a:focus-visible {
 .source::placeholder { color: var(--muted); }
 
 .preview {
-  padding: 8px calc(var(--safe-right) + 18px) 28px calc(var(--safe-left) + 18px);
+  padding: 8px calc(var(--safe-right) + 18px) var(--safe-bottom) calc(var(--safe-left) + 18px);
 }
 
 .preview > :first-child { margin-top: 0.2em; }
@@ -374,6 +374,8 @@ a:focus-visible {
 .preview th { background: var(--soft); font-weight: 600; }
 
 .sheet {
+  position: absolute;
+  inset: 0;
   z-index: 2;
   background: var(--surface);
   display: flex;
@@ -385,7 +387,6 @@ a:focus-visible {
   color: var(--ink);
   flex: 1;
   min-height: 0;
-  max-height: 100%;
   display: flex;
   flex-direction: column;
   padding-left: var(--safe-left);
@@ -503,7 +504,7 @@ a:focus-visible {
 .notes-list {
   list-style: none;
   margin: 0;
-  padding: 0 8px calc(12px + var(--home-clearance));
+  padding: 0 8px var(--safe-bottom);
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -587,6 +588,33 @@ a:focus-visible {
   margin: 0;
   padding: 16px;
   color: var(--danger);
+}
+
+.safe-probe {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+.layout-debug {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(var(--safe-bottom) + 18px);
+  z-index: 4;
+  margin: 0;
+  max-height: 55%;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(20, 16, 12, 0.92);
+  color: #f4efe6;
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
 }
 
 [hidden] { display: none !important; }

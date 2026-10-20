@@ -205,41 +205,14 @@ export function rewriteLinks(content, fromFile, pathMap, files) {
   return out.join('\n');
 }
 
-function fileStem(path) {
-  return String(path ?? '').split('/').pop().replace(/\.md$/i, '');
-}
-
-// The notes list, search, recent notes, and the editor title all show the
-// first heading, not the filename. A rename that only changes the path leaves
-// that heading — and every one of those labels — on the old name.
-function retitleHeading(content, fromPath, toPath) {
-  const from = fileStem(fromPath);
-  const to = fileStem(toPath);
-  if (!from || from === to) return String(content ?? '');
-  const lines = String(content ?? '').split('\n');
-  for (let i = 0; i < lines.length; i += 1) {
-    if (!lines[i].trim()) continue;
-    const match = /^(#{1,6})(\s+)(\S.*?)\s*$/.exec(lines[i]);
-    if (!match) return lines.join('\n');
-    const closing = /\s+#+\s*$/.exec(match[3]);
-    const text = (closing ? match[3].slice(0, closing.index) : match[3]).trim();
-    if (text !== from) return lines.join('\n');
-    lines[i] = `${match[1]}${match[2]}${to}${closing ? closing[0] : ''}`;
-    return lines.join('\n');
-  }
-  return lines.join('\n');
-}
-
 function applyPathMap(files, pathMap, now) {
   const put = [];
   const remove = [];
   const next = files.map((file) => {
     const to = pathMap.get(file.path) || file.path;
-    let content = file.content;
-    if (file.kind === 'markdown') {
-      if (to !== file.path) content = retitleHeading(content, file.path, to);
-      content = rewriteLinks(content, file.path, pathMap, files);
-    }
+    const content = file.kind === 'markdown'
+      ? rewriteLinks(file.content, file.path, pathMap, files)
+      : file.content;
     if (to === file.path && content === file.content) return file;
     const updated = { ...file, path: to, content, updatedAt: now };
     put.push(updated);

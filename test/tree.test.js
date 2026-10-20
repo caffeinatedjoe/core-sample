@@ -30,6 +30,7 @@ test('the browser nests folders and hides collapsed children', () => {
   const nested = open.find((row) => row.path === 'a/b/c.md');
   assert.equal(nested.depth, 2);
   assert.equal(nested.current, true);
+  assert.equal(nested.title, 'c');
   const empty = open.find((row) => row.path === 'empty');
   assert.equal(empty.type, 'folder');
   assert.equal(empty.open, false);

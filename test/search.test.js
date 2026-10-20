@@ -4,7 +4,7 @@ import { listBrowser, searchNotes } from '../app/js/browser.js';
 
 const files = [
   { path: 'Welcome.md', kind: 'markdown', content: '# Welcome\n\nclay strata', trashedAt: null },
-  { path: 'logs/Core.md', kind: 'markdown', content: '# Core\n\nquartz vein', trashedAt: null },
+  { path: 'logs/Core.md', kind: 'markdown', content: '# Not the filename\n\nquartz vein', trashedAt: null },
   { path: 'logs/Hidden.md', kind: 'markdown', content: '# Hidden\n\nclay in trash', trashedAt: 4 },
 ];
 
@@ -12,6 +12,7 @@ test('search matches a filename or the note text and skips trash', () => {
   const byName = searchNotes(files, 'core');
   assert.equal(byName.length, 1);
   assert.equal(byName[0].path, 'logs/Core.md');
+  assert.equal(byName[0].title, 'Core');
   assert.equal(byName[0].kind, 'name');
 
   const byText = searchNotes(files, 'quartz');
@@ -31,5 +32,16 @@ test('search matches a filename or the note text and skips trash', () => {
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].path, 'Welcome.md');
+  assert.equal(rows[0].title, 'Welcome');
+  const named = listBrowser({
+    files,
+    folders: [],
+    expanded: ['logs'],
+    recent: ['logs/Core.md'],
+    query: '',
+    currentPath: '',
+  });
+  assert.equal(named.find((row) => row.path === 'logs/Core.md').title, 'Core');
+  assert.equal(named.some((row) => row.title === 'Not the filename'), false);
   assert.equal(rows.some((row) => row.type === 'trash'), false);
 });

@@ -27,14 +27,21 @@ export function makeFile(path, content, now = Date.now()) {
 }
 
 export function noteTitle(file) {
-  const lines = String(file?.content ?? '').split('\n');
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const match = /^(#{1,6})\s+(\S.*)$/.exec(line.trim());
-    if (match) return match[2].replace(/\s+#+\s*$/, '').trim();
-    break;
+  const base = String(file?.path ?? '').split('/').pop() || '';
+  return base.replace(/\.md$/i, '');
+}
+
+export function noteSnippet(file) {
+  const parts = [];
+  for (const line of String(file?.content ?? '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || /^#{1,6}\s+\S/.test(trimmed)) continue;
+    parts.push(trimmed);
+    if (parts.join(' ').length > 72) break;
   }
-  return String(file?.path ?? '').replace(/\.md$/i, '');
+  const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+  if (text.length <= 72) return text;
+  return `${text.slice(0, 71).trimEnd()}…`;
 }
 
 export function notePathFromName(name, existingPaths, folder = '') {
