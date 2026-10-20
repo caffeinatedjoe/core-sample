@@ -79,7 +79,7 @@ External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noo
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the visible footer are the same string, `core-sample-shell-v5` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the visible footer are the same string, `core-sample-shell-v6` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -91,7 +91,7 @@ Cross-origin requests and anything that is not the shell are ignored. Note text 
 
 ## iPhone layout
 
-`viewport-fit=cover` and `black-translucent` let the page draw under the status bar, so the inset has to live on the frame. `.safe-frame` is that rule: `top`/`right`/`bottom`/`left` are the four `safe-area-inset` values, and the bottom also adds `--keyboard-inset`. `#app` and the notes sheet both use it, so the editor, preview, folder list, search, trash, confirms, and the version footer sit inside the same box in portrait and landscape. The document itself does not scroll (`html` and `body` are fixed). `visualViewport` only updates `--keyboard-inset`. It does not set the frame's `top` from `offsetTop`; that offset is how iOS scrolls a focused note, and using it as `top` slid the header under the clock once the safe-area env value dropped to 0. Light and dark follow `prefers-color-scheme`. The palette is paper, clay, and shale. The band outside the frame is black so the white status-bar text stays readable.
+`viewport-fit=cover` and `apple-mobile-web-app-status-bar-style: black-translucent` let the page draw under the status bar. `.safe-frame` is full-bleed (`top`/`right`/`left` are 0). Its bottom is only `--keyboard-inset`, so with the keyboard closed the paper reaches the physical bottom. The status-bar inset is padding on the header (`.top` and `.sheet-head`), and the home-indicator inset is `--home-clearance` on the version footer and the notes list. Those containers carry `--bg` or `--surface`, including through their padding. `html` and `body` use the same `--bg` in light and dark, with `color-scheme` set for each, so nothing black shows behind the frame. `visualViewport` only updates `--keyboard-inset`. It does not set the frame's `top` from `offsetTop`, and it does not size the frame from `visualViewport.height`. Light and dark follow `prefers-color-scheme`. The palette is paper, clay, and shale. `theme-color` meta tags match that paper in each scheme. The manifest `background_color` and `theme_color` are the light paper (`#f3eee6`) because a manifest has one color; iOS reads the status-bar style and the splash from the page at Add to Home Screen and does not refresh them for an icon that is already installed.
 
 ## Icons
 
@@ -107,7 +107,7 @@ Not part of Stage 1. When it arrives: device flow through a Worker that forwards
 
 ## Rename, move, and links
 
-The path is the identity. A rename or move rewrites the path, then rewrites links that resolved to that note. A path-style wikilink (`[[folder/note]]`) is pointed at the new path. A bare wikilink (`[[note]]`) is left alone when the file name is unchanged and still unique. A markdown link is rewritten when the relative path would otherwise break. Aliases and headings stay. Links inside fenced or inline code are not touched, and an ambiguous name is not guessed. The open note is flushed before the path change.
+The path is the identity. A rename or move rewrites the path, then rewrites links that resolved to that note. A path-style wikilink (`[[folder/note]]`) is pointed at the new path. A bare wikilink (`[[note]]`) is left alone when the file name is unchanged and still unique. A markdown link is rewritten when the relative path would otherwise break. Aliases and heading fragments in links stay. Links inside fenced or inline code are not touched, and an ambiguous name is not guessed. The open note is flushed before the path change. The list, recent notes, search, and the editor title show the first Markdown heading. When that heading is the old file name, the rename updates it to the new file name in the same record, and the old path is deleted. A move keeps the heading and only changes the path.
 
 ## Browser, search, and backup
 

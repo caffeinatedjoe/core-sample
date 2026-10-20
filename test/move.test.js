@@ -28,7 +28,9 @@ test('renaming a note updates wikilinks and markdown links that point at it', ()
   const other = result.files.find((item) => item.path === 'other/Link.md');
   assert.match(other.content, /\[\[Cores\]\]/);
   assert.match(other.content, /\[rel\]\(\.\.\/Cores\.md#Site\)/);
-  assert.match(result.files.find((item) => item.path === 'Cores.md').content, /Stay\./);
+  const cores = result.files.find((item) => item.path === 'Cores.md').content;
+  assert.match(cores, /^# Cores\n/);
+  assert.match(cores, /Stay\./);
 });
 
 test('moving a note keeps a unique bare wikilink and updates path links', () => {
