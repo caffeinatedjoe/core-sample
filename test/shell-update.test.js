@@ -19,11 +19,11 @@ function loadKind() {
   return sandbox.shellRequestKind;
 }
 
-test('the footer build id is the service worker cache name', () => {
+test('the header build id is the service worker cache name', () => {
   const sw = read('app/sw.js');
   const main = read('app/js/main.js');
   const html = read('app/index.html');
-  assert.equal(APP_BUILD, 'core-sample-shell-v9');
+  assert.equal(APP_BUILD, 'core-sample-shell-v10');
   assert.match(sw, new RegExp(`const CACHE = '${APP_BUILD}'`));
   assert.match(html, /id="build-version"/);
   assert.match(main, /import \{ APP_BUILD \} from '\.\/version\.js'/);

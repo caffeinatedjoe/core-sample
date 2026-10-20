@@ -16,9 +16,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --keyboard-inset: 0px;
-  /* 100% is the short standalone layout viewport. The status-bar inset is the
-     missing strip, so this covers the physical screen before JS measures it. */
-  --app-h: calc(100% + var(--safe-top));
+  --scroll-pad: var(--safe-bottom);
   color-scheme: light;
 }
 
@@ -46,12 +44,6 @@ html,
 body {
   margin: 0;
   width: 100%;
-  height: calc(var(--app-h) - var(--keyboard-inset));
-  overflow: hidden;
-  position: fixed;
-  top: 0;
-  right: 0;
-  left: 0;
   background: var(--bg);
   color-scheme: light;
   color: var(--ink);
@@ -62,6 +54,25 @@ body {
   touch-action: manipulation;
 }
 
+html {
+  height: calc(100% - var(--keyboard-inset));
+}
+
+body,
+#app {
+  height: 100%;
+  min-height: 0;
+}
+
+/* In standalone, 100lvh is the full screen. The layout viewport stops at
+   the status bar. A fixed root is clipped to that short viewport, so the
+   shell fills its parent instead. */
+@media (display-mode: standalone) {
+  html {
+    height: calc(100lvh - var(--keyboard-inset));
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   html,
   body {
@@ -70,15 +81,9 @@ body {
   }
 }
 
-/* Fixed inset:0 tracks the short layout viewport (innerHeight), which on a
-   standalone iPhone ends a status-bar height above the physical bottom.
-   --app-h is the physical height. The keyboard inset, and only that, shrinks it. */
 .safe-frame {
-  position: fixed;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: calc(var(--app-h) - var(--keyboard-inset));
+  height: 100%;
+  min-height: 0;
 }
 
 button,
@@ -101,14 +106,17 @@ a:focus-visible {
 }
 
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
   background: var(--bg);
 }
 
 .top {
   flex: none;
-  padding: calc(var(--safe-top) + 4px) calc(var(--safe-right) + 16px) 8px calc(var(--safe-left) + 16px);
+  padding: calc(var(--safe-top) + 44px) calc(var(--safe-right) + 16px) 8px calc(var(--safe-left) + 16px);
   border-bottom: 1px solid var(--line);
   background: var(--bg);
 }
@@ -185,13 +193,15 @@ a:focus-visible {
 }
 
 .build-version {
-  position: absolute;
+  position: fixed;
+  top: var(--safe-top);
   left: 0;
   right: 0;
-  bottom: 0;
-  z-index: 1;
+  z-index: 8;
   margin: 0;
-  padding: 0 calc(var(--safe-right) + 16px) var(--safe-bottom) calc(var(--safe-left) + 16px);
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
   background: transparent;
   font-size: 11px;
   line-height: 1.2;
@@ -215,7 +225,7 @@ a:focus-visible {
   resize: none;
   border-radius: 0;
   background: transparent;
-  padding: 14px calc(var(--safe-right) + 16px) var(--safe-bottom) calc(var(--safe-left) + 16px);
+  padding: 14px calc(var(--safe-right) + 16px) var(--scroll-pad) calc(var(--safe-left) + 16px);
   font-size: 17px;
   line-height: 1.5;
   caret-color: var(--accent);
@@ -228,7 +238,7 @@ a:focus-visible {
 .source::placeholder { color: var(--muted); }
 
 .preview {
-  padding: 8px calc(var(--safe-right) + 18px) var(--safe-bottom) calc(var(--safe-left) + 18px);
+  padding: 8px calc(var(--safe-right) + 18px) var(--scroll-pad) calc(var(--safe-left) + 18px);
 }
 
 .preview > :first-child { margin-top: 0.2em; }
@@ -404,7 +414,7 @@ a:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: calc(var(--safe-top) + 6px) 16px 0;
+  padding: calc(var(--safe-top) + 44px) 16px 0;
   background: var(--surface);
 }
 
@@ -511,7 +521,7 @@ a:focus-visible {
 .notes-list {
   list-style: none;
   margin: 0;
-  padding: 0 8px var(--safe-bottom);
+  padding: 0 8px var(--scroll-pad);
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -597,22 +607,40 @@ a:focus-visible {
   color: var(--danger);
 }
 
-.safe-probe {
+.probe-clip {
   position: absolute;
   width: 0;
   height: 0;
   overflow: hidden;
-  visibility: hidden;
   pointer-events: none;
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
+.safe-probe {
+  width: 0;
+  height: 0;
+  visibility: hidden;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+
+.unit-probe {
+  width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  visibility: hidden;
+}
+
+.probe-lvh { height: 100lvh; }
+.probe-vh { height: 100vh; }
+.probe-dvh { height: 100dvh; }
+.probe-svh { height: 100svh; }
+
 .layout-debug {
-  position: absolute;
+  position: fixed;
+  top: calc(var(--safe-top) + 48px);
   left: 8px;
   right: 8px;
-  bottom: calc(var(--safe-bottom) + 18px);
-  z-index: 4;
+  z-index: 7;
   margin: 0;
   max-height: 55%;
   overflow: auto;

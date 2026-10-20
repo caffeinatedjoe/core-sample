@@ -1,19 +1,21 @@
-// iOS standalone with a translucent status bar paints from physical y=0, but
-// the layout viewport (innerHeight, 100%, inset:0) is shorter by the status
-// bar. On Joe's phone that is 844 - 47 = 797, so a frame sized to the layout
-// viewport ends 47px above the physical bottom. outerHeight is the physical
-// height and follows orientation. screen.width/height stay in portrait.
+// Standalone iOS paints from physical y=0, but innerHeight, 100%, 100dvh, and
+// 100svh can all stop a status-bar height short of the screen (Joe: 797 vs
+// 844). A JS pixel height on a fixed frame lands in that strip and cannot be
+// touched. CSS owns the shell size (100lvh in standalone). This module only
+// answers two questions: whether the keyboard is open, and how much extra
+// padding keeps the last controls inside innerHeight when it stays short.
+// screen.width / screen.height do not swap on iOS; use the oriented side.
 export const KEYBOARD_THRESHOLD = 80;
 
 export function layoutFrame({
   innerHeight = 0,
-  outerHeight = 0,
   screenWidth = 0,
   screenHeight = 0,
   visualViewportHeight = null,
   visualViewportOffsetTop = 0,
   standalone = false,
   landscape = false,
+  safeBottom = 0,
 } = {}) {
   const inner = Number(innerHeight) || 0;
   const vvHeight = visualViewportHeight == null || Number.isNaN(Number(visualViewportHeight))
@@ -22,25 +24,14 @@ export function layoutFrame({
   const overlap = inner - vvHeight - (Number(visualViewportOffsetTop) || 0);
   const keyboard = overlap > KEYBOARD_THRESHOLD ? Math.round(overlap) : 0;
 
-  let full = inner;
-  let source = 'innerHeight';
-  if (standalone) {
-    const outer = Number(outerHeight) || 0;
-    if (outer > 0) {
-      full = outer;
-      source = 'outerHeight';
-    } else {
-      full = orientedScreen(screenWidth, screenHeight, landscape) || inner;
-      source = full === inner && !(Number(screenWidth) || Number(screenHeight)) ? 'innerHeight' : 'screen';
-    }
-  }
-
-  full = Math.round(full);
+  const screenSpan = orientedScreen(screenWidth, screenHeight, landscape);
+  const gap = standalone ? Math.max(0, Math.round(screenSpan - inner)) : 0;
+  const safe = Math.max(0, Math.round(Number(safeBottom) || 0));
   return {
     keyboard,
-    full,
-    appH: Math.max(0, full - keyboard),
-    source,
+    gap,
+    scrollPad: Math.max(safe, gap),
+    screenSpan: Math.round(screenSpan),
   };
 }
 

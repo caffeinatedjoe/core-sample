@@ -18,8 +18,16 @@
   <link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
+  <div class="probe-clip" aria-hidden="true">
+    <div id="safe-probe" class="safe-probe"></div>
+    <div id="probe-lvh" class="unit-probe probe-lvh"></div>
+    <div id="probe-vh" class="unit-probe probe-vh"></div>
+    <div id="probe-dvh" class="unit-probe probe-dvh"></div>
+    <div id="probe-svh" class="unit-probe probe-svh"></div>
+  </div>
   <div id="app" class="app safe-frame">
     <header class="top">
+      <button type="button" id="build-version" class="build-version"></button>
       <div class="top-row">
         <button type="button" id="notes-button" class="text-button">Notes</button>
         <p id="save-status" class="save-status" role="status">Saved on this device</p>
@@ -36,8 +44,6 @@
       <textarea id="source" class="source" spellcheck="true" autocapitalize="sentences" autocomplete="off" autocorrect="on" aria-label="Note markdown" placeholder="Write in Markdown…"></textarea>
       <article id="preview" class="preview" hidden aria-label="Rendered note"></article>
     </main>
-    <p id="build-version" class="build-version" role="button" tabindex="0"> </p>
-    <div id="safe-probe" class="safe-probe" aria-hidden="true"></div>
     <pre id="layout-debug" class="layout-debug" hidden></pre>
     <div id="notes-sheet" class="sheet" hidden>
       <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="notes-heading">
