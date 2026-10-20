@@ -10,7 +10,7 @@ Markdown is hand-rolled. Checklist taps have to flip a specific `[ ]` / `[x]` in
 
 ## Why this shape
 
-The product is one offline client. Later, the page will call `api.github.com` directly. A Cloudflare Worker (Stage 3, not built) exists only because GitHub's device-code endpoints have no CORS. Notes never live in this repo. There is no application server.
+The product is one offline client. The page calls `api.github.com` directly for repository reads and writes. A Cloudflare Worker exists only because GitHub's device-code endpoints have no CORS. Notes never live in this repo. There is no application server.
 
 ## Layout
 
@@ -18,6 +18,7 @@ The product is one offline client. Later, the page will call `api.github.com` di
 - `app/js/` keeps parsing, storage, and save policy out of the DOM so `node --test` can import them.
 - `test/` holds the tests. `fake-indexeddb` is the only dependency, and it is a devDependency.
 - `scripts/render-icons.py` builds the PNGs from `app/icons/source/core-sample-icon-source-v2.jpg`.
+- `worker/` is the device-flow relay. GitHub Pages publishes `app/` only. Joe deploys the Worker himself.
 
 ## Modules
 
@@ -33,8 +34,13 @@ The product is one offline client. Later, the page will call `api.github.com` di
 | `organize.js` | Rename, move, trash, link updates | 2 |
 | `browser.js` | Folder rows, search, recent notes | 2 |
 | `backup.js` | Export and import of the local notes | 2 |
+| `github-redact.js` | Strip tokens from error text | 3 |
+| `github-device.js` | Device-code request, poll interval, `slow_down` | 3 |
+| `github-api.js` | Repo paths, SHA push and pull, Markdown download plan | 3 |
+| `github-store.js` | Token and connection settings in IndexedDB | 3 |
+| `github-ui.js` | GitHub sheet, connect, manual push and pull | 3 |
 | `main.js` | Boot, keyboard viewport, service worker, persistent storage | 1 |
-| GitHub, sync, merge modules | Do not add these until their stage | 3–5 |
+| Sync queue, conflict merge | Do not add these until their stage | 4–5 |
 
 ## Storage
 
@@ -48,14 +54,14 @@ Folders are not records. The tree is the set of paths, plus a `folders` meta lis
 
 A trashed note stays in `files` with `trashedAt` set. The text is unchanged. Restore clears `trashedAt`. Empty Trash is a separate confirmed action and is the only one that deletes note records. Old records without `trashedAt` are live notes.
 
-`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`.
+`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`, `seeded`, and the GitHub connection keys (`githubToken`, `githubClientId`, `githubRelay`, `githubRepo`, `githubBranch`, `githubRoot`, `githubLogin`).
 
 Later versions add fields and stores. Do not invent a parallel place to keep a note.
 
-- Optional file fields when sync exists: `sha` (last synced blob), `baseSha`, `deleted` (tombstone), `conflict`. Old records stay valid if these are missing.
-- An `ops` store for the sync queue (Stage 4). Conflict data stays on the file record (Stage 5) so a note and its conflict cannot drift apart.
+- Stage 3 file fields: `remoteSha` (blob SHA from the last successful push or pull) and `dirty` (local edits since that SHA). Old records stay valid if these are missing. A rename clears `remoteSha` because the SHA belonged to the old path.
+- Still later: `baseSha`, a deleted tombstone, `conflict`, and an `ops` store for the sync queue (Stage 4). Conflict data stays on the file record (Stage 5).
 
-Stage 1 does not write sync fields and does not show a sync status. The status line is only local: Saving…, Saved on this device, or a save failure.
+The editor status line is only local: Saving…, Saved on this device, or a save failure. Push and pull report on their own line. There is no Synced / Syncing / Offline state in this stage.
 
 ## Save policy
 
@@ -79,7 +85,7 @@ External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noo
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in the header are the same string, `core-sample-shell-v11` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in the header are the same string, `core-sample-shell-v12` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -97,9 +103,19 @@ Cross-origin requests and anything that is not the shell are ignored. Note text 
 
 The current icon source is `app/icons/source/core-sample-icon-source-v2.jpg`. The first source file stays in that directory. `scripts/render-icons.py` crops inside the light bezel (`x 76..434`, `y 79..437`) and extends each corner's tile-edge color outward, so the PNGs are opaque and full-bleed. iOS applies its own corner mask. Filenames include `v11` because an existing Home Screen icon is a copy taken at Add to Home Screen, and a new URL only helps the next add. The maskable 512 keeps the cylinder inside the center 80%.
 
-## GitHub (later)
+## GitHub connection
 
-Not part of Stage 1. When it arrives: device flow through a Worker that forwards only the two device endpoints and stores no client secret; repo calls from the page to `api.github.com`; tokens in IndexedDB only; one repo and one branch; no force-push. Do not read `caffeinatedjoe/zt_vault` from this repo until that stage, and never commit vault contents.
+Stage 3 signs in with GitHub's device flow. The browser cannot call `https://github.com/login/device/code` or `https://github.com/login/oauth/access_token` directly, so `worker/` forwards only those two URLs and only for `https://joecoffey.me`. The Worker has no client secret and does not log the body. `wrangler.toml` has no secrets. Joe deploys it; this repo does not.
+
+The client id and the relay origin are typed into Notes → GitHub. They start empty. The token is written only to IndexedDB. The device code stays in memory for the poll and is never shown or stored. Repo, branch, and notes-root calls go to `api.github.com` with the token in an `Authorization` header, never in the URL.
+
+OAuth Apps have no contents-only scope. `repo` is the smallest scope that can read and write a private repository. `public_repo` cannot see a private repo. The scope does not add `workflow`, `admin`, or `delete_repo`. The app still only lists a tree, reads one file, and creates or updates one file. It does not force-push, and it writes only to the repo and branch saved in Settings.
+
+The intended repository is the private vault named in SPEC.md. The app does not fill that name in. The notes folder defaults to the repo root when the field is blank. Paths on the phone are relative to that folder.
+
+Download stores each Markdown file's blob SHA. If the phone already has notes, the download waits for an explicit choice: keep local notes alongside, or export a backup and then confirm replace. A SHA mismatch on push keeps the phone's copy. Pull of a note with local edits keeps the phone's copy unless the text is already identical. Disconnect deletes the token and the repo, branch, and root settings. It leaves the client id, the relay URL, and the notes. Erase local copy is a separate confirmation and does not remove the token.
+
+Automatic sync, debounce, dirty batching, remote polling, retry, backoff, and the sync status machine are Stage 4. Conflicts are Stage 5. Do not commit vault contents.
 
 ## Testing
 
@@ -115,6 +131,6 @@ The notes sheet is the browser: nested folders, expand and collapse, recent note
 
 Export writes one JSON file (`format: core-sample-backup`, version 1) containing every note, including trashed text, plus folders, the last opened path, the editor mode, and recent paths. Import parses that file or refuses it. Add keeps every note already on the device; a path that already has different text is stored beside it as `Name (imported).md`. Replace is a separate confirmation and is the only import that removes notes. On iPhone the export uses the share sheet when the browser allows a file share, and otherwise a download link with no `target`.
 
-## Left out of Stage 2
+## Left out of Stage 3
 
-GitHub auth, sync, conflicts, and background sync.
+Automatic sync, the sync status machine, retry and backoff, and conflict merge.

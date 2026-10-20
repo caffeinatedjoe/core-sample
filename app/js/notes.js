@@ -10,7 +10,7 @@ Core Sample keeps notes on this phone. They are saved as you type.
 - [ ] Open Source and see the Markdown change
 - [ ] Tap [[Another note]] in Preview to open it
 
-This install is local only. GitHub sync is not connected yet.
+Notes → GitHub can sign in and download Markdown. Nothing is sent until you push a note.
 
 Clearing Safari website data for this app deletes these notes.
 `;
@@ -148,11 +148,15 @@ function stringList(value) {
 
 export async function loadSession(db) {
   let files = await listFiles(db);
-  if (files.length === 0) {
+  const seeded = await getMeta(db, 'seeded');
+  if (files.length === 0 && seeded !== true) {
     const welcome = makeFile(WELCOME_PATH, WELCOME_MD);
     await putFile(db, welcome);
     await setMeta(db, 'lastOpened', WELCOME_PATH);
+    await setMeta(db, 'seeded', true);
     files = [welcome];
+  } else if (seeded !== true) {
+    await setMeta(db, 'seeded', true);
   }
   const notes = files.filter((file) => file.kind === 'markdown' && !file.trashedAt);
   const lastOpened = await getMeta(db, 'lastOpened');

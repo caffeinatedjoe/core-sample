@@ -53,9 +53,18 @@ export function createDebouncedSaver({ delay = 400, write, onStatus } = {}) {
     return job;
   }
 
+  function discard() {
+    clearTimeout(timer);
+    timer = null;
+    dirty = false;
+    epoch += 1;
+    return chain;
+  }
+
   return {
     schedule,
     flush,
+    discard,
     get pending() {
       return dirty;
     },

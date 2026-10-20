@@ -32,6 +32,8 @@ Stop here so Joe can install it on his iPhone.
 
 ## Stage 3 — GitHub connection
 
+Implemented as manual connect, download, and one-file push and pull. Stage 4's debounce, remote polling, retry, and status machine are not part of this.
+
 - Cloudflare Worker that forwards only the device-code and token endpoints. No client secret. No token logging. Allowlist those endpoints and the app origin.
 - Checklist for Joe: free Cloudflare account, GitHub OAuth app with device flow, Worker deploy.
 - Device flow from the PWA. Token stays in IndexedDB.

@@ -214,7 +214,15 @@ function applyPathMap(files, pathMap, now) {
       ? rewriteLinks(file.content, file.path, pathMap, files)
       : file.content;
     if (to === file.path && content === file.content) return file;
-    const updated = { ...file, path: to, content, updatedAt: now };
+    const pathChanged = to !== file.path;
+    const updated = {
+      ...file,
+      path: to,
+      content,
+      updatedAt: now,
+      dirty: true,
+      remoteSha: pathChanged ? null : (typeof file.remoteSha === 'string' ? file.remoteSha : null),
+    };
     put.push(updated);
     if (to !== file.path) remove.push(file.path);
     return updated;
