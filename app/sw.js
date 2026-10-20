@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v8';
+const CACHE = 'core-sample-shell-v9';
 
 const SHELL = [
   './',
@@ -23,15 +23,13 @@ const SHELL = [
   './js/organize.js',
   './js/browser.js',
   './js/backup.js',
-  './icons/apple-touch-icon.png',
-  './icons/apple-touch-icon-167.png',
-  './icons/apple-touch-icon-152.png',
-  './icons/apple-touch-icon-120.png',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
-  './icons/icon-512-maskable.png',
-  './icons/icon-192-maskable.png',
-  './icons/favicon-32.png',
+  './icons/icon-v9-180.png',
+  './icons/icon-v9-192.png',
+  './icons/icon-v9-512.png',
+  './icons/icon-v9-512-maskable.png',
+  './icons/icon-v9-32.png',
+  './icons/icon-v9-16.png',
+  './icons/favicon-v9.ico',
 ];
 
 self.addEventListener('install', (event) => {

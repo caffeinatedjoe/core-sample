@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "icons": "node scripts/render-icons.mjs"
+    "icons": "python3 scripts/render-icons.py"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",

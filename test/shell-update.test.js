@@ -23,7 +23,7 @@ test('the footer build id is the service worker cache name', () => {
   const sw = read('app/sw.js');
   const main = read('app/js/main.js');
   const html = read('app/index.html');
-  assert.equal(APP_BUILD, 'core-sample-shell-v8');
+  assert.equal(APP_BUILD, 'core-sample-shell-v9');
   assert.match(sw, new RegExp(`const CACHE = '${APP_BUILD}'`));
   assert.match(html, /id="build-version"/);
   assert.match(main, /import \{ APP_BUILD \} from '\.\/version\.js'/);
@@ -40,7 +40,7 @@ test('shell fetches revalidate the document and scripts and keep icons cached', 
   assert.equal(kind('./js/version.js'), 'network-first');
   assert.equal(kind('./css/app.css'), 'network-first');
   assert.equal(kind('./manifest.json'), 'cache-first');
-  assert.equal(kind('./icons/apple-touch-icon.png'), 'cache-first');
+  assert.equal(kind('./icons/icon-v9-180.png'), 'cache-first');
   assert.equal(kind('./icons/icon-512.png'), 'cache-first');
 
   const sw = read('app/sw.js');
