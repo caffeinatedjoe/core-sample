@@ -25,7 +25,7 @@ python3 -m http.server -d app 8080
 
 Open `http://127.0.0.1:8080/`. Asset URLs are relative, so the same files work at `/` locally and at `/core-sample/` on GitHub Pages.
 
-Icons come from `app/icons/icon.svg`. After editing it, run `npm run icons` and commit the PNGs.
+Icons are built from `app/icons/source/core-sample-icon-source.jpg`. After replacing that file, run `npm run icons` (needs Pillow) and commit the PNGs.
 
 ## Install on an iPhone
 
@@ -33,4 +33,4 @@ Icons come from `app/icons/icon.svg`. After editing it, run `npm run icons` and 
 2. Share → Add to Home Screen.
 3. Open Core Sample from the home screen. It should launch without Safari's toolbar.
 
-Notes live in this install. The line at the bottom of the screen is the shell build. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. There is no account and no sync in this stage.
+Notes live in this install. The line at the bottom of the screen is the shell build. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. There is no account and no sync in this stage. iOS keeps the Home Screen icon from the moment you add it, so a new icon means export a backup, remove the icon, and add it again. Import with Add to this device brings the notes, folders, and Trash back.

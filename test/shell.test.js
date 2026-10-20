@@ -21,7 +21,7 @@ function shellList() {
 function pngSize(relative) {
   const buf = readFileSync(join(appDir, relative));
   assert.equal(buf.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), colorType: buf[25] };
 }
 
 test('the manifest and service worker are relative to the Pages subpath', () => {
@@ -68,22 +68,20 @@ test('the service worker caches every file the shell loads', () => {
 
 test('iOS icon PNGs exist at the sizes a home screen needs', () => {
   const expected = {
-    'icons/apple-touch-icon.png': 180,
-    'icons/apple-touch-icon-167.png': 167,
-    'icons/apple-touch-icon-152.png': 152,
-    'icons/apple-touch-icon-120.png': 120,
-    'icons/icon-192.png': 192,
-    'icons/icon-512.png': 512,
-    'icons/icon-192-maskable.png': 192,
-    'icons/icon-512-maskable.png': 512,
-    'icons/favicon-32.png': 32,
+    'icons/icon-v9-180.png': 180,
+    'icons/icon-v9-192.png': 192,
+    'icons/icon-v9-512.png': 512,
+    'icons/icon-v9-512-maskable.png': 512,
+    'icons/icon-v9-32.png': 32,
+    'icons/icon-v9-16.png': 16,
   };
   for (const [file, size] of Object.entries(expected)) {
     const png = pngSize(file);
     assert.equal(png.width, size, file);
     assert.equal(png.height, size, file);
+    assert.equal(png.colorType, 2, `${file} is opaque RGB`);
   }
-  const svg = read('app/icons/icon.svg');
-  assert.match(svg, /<ellipse/);
-  assert.match(svg, /Core Sample/);
+  const jpg = readFileSync(join(appDir, 'icons/source/core-sample-icon-source.jpg'));
+  assert.equal(jpg.subarray(0, 2).toString('hex'), 'ffd8');
+  assert.equal(existsSync(join(appDir, 'icons/favicon-v9.ico')), true);
 });
