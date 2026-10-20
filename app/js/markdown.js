@@ -74,7 +74,7 @@ function renderInline(text) {
       if (end !== -1) {
         const parsed = parseWikilink(source.slice(index + 2, end));
         if (parsed) {
-          html += `<a class="wikilink" href="#${escapeHtml(parsed.target)}" data-wikilink="${escapeHtml(parsed.target)}" data-heading="${escapeHtml(parsed.heading || '')}">${escapeHtml(parsed.label)}</a>`;
+          html += `<button type="button" class="wikilink" data-wikilink="${escapeHtml(parsed.target)}" data-heading="${escapeHtml(parsed.heading || '')}">${escapeHtml(parsed.label)}</button>`;
           index = end + 2;
           continue;
         }
@@ -155,7 +155,7 @@ function matchLink(text, index) {
     return { html: escapeHtml(label), next: urlEnd + 1 };
   }
   return {
-    html: `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${renderInline(label)}</a>`,
+    html: `<a href="${escapeHtml(url)}" rel="noopener">${renderInline(label)}</a>`,
     next: urlEnd + 1,
   };
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findWikilinks, parseWikilink } from '../app/js/markdown.js';
-import { resolveWikilink } from '../app/js/notes.js';
+import { planWikilink, resolveWikilink } from '../app/js/notes.js';
 
 test('parses target, alias, and heading forms', () => {
   assert.deepEqual(parseWikilink('Note'), {
@@ -53,4 +53,30 @@ test('resolves a local note by path or unique filename', () => {
   assert.equal(resolveWikilink(files, 'Only').file.path, 'solo/Only.md');
   assert.equal(resolveWikilink(files, 'Field notes').status, 'ambiguous');
   assert.equal(resolveWikilink(files, 'Missing').status, 'missing');
+});
+
+test('a wikilink tap opens an existing note', () => {
+  const notes = [{ path: 'Another note.md', kind: 'markdown' }];
+  assert.deepEqual(planWikilink(notes, 'Another note'), {
+    action: 'open',
+    path: 'Another note.md',
+  });
+  assert.deepEqual(planWikilink(notes, 'folder/Only'), {
+    action: 'create',
+    path: 'folder/Only.md',
+    title: 'Only',
+  });
+});
+
+test('a missing wikilink target is created instead of ignored', () => {
+  assert.deepEqual(planWikilink([], 'Another note'), {
+    action: 'create',
+    path: 'Another note.md',
+    title: 'Another note',
+  });
+  assert.equal(planWikilink([
+    { path: 'Field notes.md', kind: 'markdown' },
+    { path: 'logs/Field notes.md', kind: 'markdown' },
+  ], 'Field notes').action, 'ambiguous');
+  assert.equal(planWikilink([], '..').action, 'invalid');
 });

@@ -9,7 +9,7 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 - Home-screen install (manifest, icons, service worker for the app shell only).
 - Source and preview editor. Light and dark follow the system.
 - Notes save as you type. The last opened note comes back after a reload.
-- Create and open notes. `[[wikilinks]]` open another note already on the device.
+- Create and open notes. `[[wikilinks]]` open a local note, or create it if it is not there yet. Web links open outside the app.
 - Tap a checklist in Preview and the Markdown updates in place.
 
 Folders, rename, delete, search, and GitHub login are later stages. See [PLAN.md](PLAN.md) and [DECISIONS.md](DECISIONS.md).

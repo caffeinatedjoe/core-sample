@@ -165,7 +165,6 @@ a:focus-visible {
   min-height: 0;
   margin: 0;
   overflow: auto;
-  -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
 
@@ -211,7 +210,25 @@ a:focus-visible {
 
 .preview p { margin: 0.55em 0; }
 
-.preview a { color: var(--accent); }
+.preview a,
+.wikilink {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.wikilink {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  vertical-align: baseline;
+}
 
 .preview ul,
 .preview ol {
@@ -397,7 +414,6 @@ a:focus-visible {
   margin: 0;
   padding: 0 8px 12px;
   overflow: auto;
-  -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
 

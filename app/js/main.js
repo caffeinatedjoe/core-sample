@@ -13,8 +13,21 @@ function bindViewport() {
   apply();
 }
 
-function registerWorker() {
+function registerWorker(flush) {
   if (!('serviceWorker' in navigator)) return;
+  // The page that is already open does not have this listener until it loads
+  // the new script. An update therefore applies on the next launch. Once this
+  // script is running, a later worker taking control flushes and reloads.
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    Promise.resolve()
+      .then(() => flush?.())
+      .catch(() => {})
+      .finally(() => window.location.reload());
+  });
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
@@ -32,10 +45,10 @@ function showBootError() {
 
 async function main() {
   bindViewport();
-  registerWorker();
   requestPersistence();
   const db = await openDatabase();
   const app = mountApp(document, db);
+  registerWorker(() => app.flush());
   await app.start();
   document.addEventListener('pointerdown', requestPersistence, { once: true });
 }
