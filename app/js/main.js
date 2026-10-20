@@ -9,23 +9,28 @@ function standaloneDisplay() {
   return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
+function readSafeBottom() {
+  const probe = document.getElementById('safe-probe');
+  if (!probe) return 0;
+  return parseFloat(getComputedStyle(probe).paddingBottom) || 0;
+}
+
 function bindViewport() {
   const apply = () => {
     const viewport = window.visualViewport;
     frameState = layoutFrame({
       innerHeight: window.innerHeight,
-      outerHeight: window.outerHeight,
       screenWidth: window.screen?.width,
       screenHeight: window.screen?.height,
       visualViewportHeight: viewport ? viewport.height : null,
       visualViewportOffsetTop: viewport ? viewport.offsetTop : 0,
       standalone: standaloneDisplay(),
       landscape: window.matchMedia('(orientation: landscape)').matches,
+      safeBottom: readSafeBottom(),
     });
     const root = document.documentElement;
-    root.style.setProperty('--app-h', `${frameState.full}px`);
     root.style.setProperty('--keyboard-inset', `${frameState.keyboard}px`);
-    root.dataset.frameSource = frameState.source;
+    root.style.setProperty('--scroll-pad', `${frameState.scrollPad}px`);
     if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
     if (!document.getElementById('layout-debug')?.hidden) paintDebug();
   };
@@ -96,6 +101,11 @@ function activeScroll() {
   return document.getElementById('source');
 }
 
+function probeHeight(id) {
+  const el = document.getElementById(id);
+  return el ? px(el.offsetHeight) : 'none';
+}
+
 function paintDebug() {
   const panel = document.getElementById('layout-debug');
   if (!panel || panel.hidden) return;
@@ -103,8 +113,9 @@ function paintDebug() {
   const probe = document.getElementById('safe-probe');
   const pad = probe ? getComputedStyle(probe) : null;
   const scroll = activeScroll();
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-  const keyboard = getComputedStyle(document.documentElement).getPropertyValue('--keyboard-inset').trim();
   const lines = [
     `innerHeight ${px(window.innerHeight)}`,
     `outerHeight ${px(window.outerHeight)}`,
@@ -117,9 +128,16 @@ function paintDebug() {
     `safe-right ${pad ? pad.paddingRight : 'none'}`,
     `safe-bottom ${pad ? pad.paddingBottom : 'none'}`,
     `safe-left ${pad ? pad.paddingLeft : 'none'}`,
-    `--keyboard-inset ${keyboard || '0px'}`,
-    `--app-h ${getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim() || 'none'}`,
-    `frame-source ${document.documentElement.dataset.frameSource || frameState?.source || 'css:100%+safe-top'}`,
+    `--keyboard-inset ${style.getPropertyValue('--keyboard-inset').trim() || '0px'}`,
+    `--scroll-pad ${style.getPropertyValue('--scroll-pad').trim() || 'none'}`,
+    `gap ${frameState ? px(frameState.gap) : 'none'}`,
+    `100lvh ${probeHeight('probe-lvh')}`,
+    `100vh ${probeHeight('probe-vh')}`,
+    `100dvh ${probeHeight('probe-dvh')}`,
+    `100svh ${probeHeight('probe-svh')}`,
+    `clientHeight ${px(root.clientHeight)}`,
+    `html ${boxLine(root)}`,
+    `body ${boxLine(document.body)}`,
     `#app ${boxLine(document.getElementById('app'))}`,
     `#notes-sheet ${boxLine(document.getElementById('notes-sheet'))}`,
     `scroll ${scroll ? scroll.id : 'none'} ${boxLine(scroll)}`,
@@ -135,12 +153,6 @@ function bindDebug(build) {
     paintDebug();
   };
   build.addEventListener('click', toggle);
-  build.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggle();
-    }
-  });
 }
 
 function clearShellQuery() {

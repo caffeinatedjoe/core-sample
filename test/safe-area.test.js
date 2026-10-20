@@ -43,12 +43,16 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(css, /--safe-bottom:\s*env\(safe-area-inset-bottom/);
   assert.match(css, /--safe-left:\s*env\(safe-area-inset-left/);
   const frame = rule(css, '.safe-frame');
-  assert.match(frame, /position:\s*fixed/);
-  assert.match(frame, /top:\s*0/);
-  assert.match(frame, /height:\s*calc\(var\(--app-h\) - var\(--keyboard-inset\)\)/);
-  assert.equal(frame.includes('bottom'), false);
-  assert.match(css, /--app-h:\s*calc\(100% \+ var\(--safe-top\)\)/);
-  assert.match(css, /html,\s*body \{[^}]*height:\s*calc\(var\(--app-h\) - var\(--keyboard-inset\)\)/);
+  assert.match(frame, /height:\s*100%/);
+  assert.equal(frame.includes('position'), false);
+  assert.equal(frame.includes('--app-h'), false);
+  assert.equal(css.includes('--app-h'), false);
+  assert.match(css, /html \{\s*height:\s*calc\(100% - var\(--keyboard-inset\)\)/);
+  assert.match(css, /body,\s*#app \{\s*height:\s*100%/);
+  assert.match(css, /@media \(display-mode:\s*standalone\) \{\s*html \{\s*height:\s*calc\(100lvh - var\(--keyboard-inset\)\)/);
+  const rootBox = rule(css, 'html,\nbody');
+  assert.equal(rootBox.includes('overflow'), false);
+  assert.equal(rootBox.includes('position'), false);
 
   assert.match(html, /id="app"[^>]*class="[^"]*\bsafe-frame\b/);
   assert.match(html, /id="notes-sheet"[^>]*class="sheet"/);
@@ -58,27 +62,37 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(sheet, /inset:\s*0/);
 
   const top = rule(css, '.top');
-  assert.match(top, /padding:\s*calc\(var\(--safe-top\) \+ 4px\)/);
+  assert.match(top, /padding:\s*calc\(var\(--safe-top\) \+ 44px\)/);
   assert.match(top, /background:\s*var\(--bg\)/);
   const head = rule(css, '.sheet-head');
-  assert.match(head, /padding:\s*calc\(var\(--safe-top\) \+ 6px\)/);
+  assert.match(head, /padding:\s*calc\(var\(--safe-top\) \+ 44px\)/);
   assert.match(head, /background:\s*var\(--surface\)/);
-  const footer = rule(css, '.build-version');
-  assert.match(footer, /position:\s*absolute/);
-  assert.equal(footer.includes('home-clearance'), false);
-  assert.match(rule(css, '.source'), /var\(--safe-bottom\)/);
-  assert.match(css, /\.preview \{[^}]*var\(--safe-bottom\)/);
-  assert.match(rule(css, '.notes-list'), /padding:\s*0 8px var\(--safe-bottom\)/);
+  const build = rule(css, '.build-version');
+  assert.match(build, /position:\s*fixed/);
+  assert.match(build, /top:\s*var\(--safe-top\)/);
+  assert.equal(build.includes('bottom'), false);
+  assert.match(html, /<header class="top">\s*<button type="button" id="build-version"/);
+  assert.match(rule(css, '.source'), /var\(--scroll-pad\)/);
+  assert.match(css, /\.preview \{\s*padding:[^}]*var\(--scroll-pad\)/);
+  assert.match(rule(css, '.notes-list'), /padding:\s*0 8px var\(--scroll-pad\)/);
 
   assert.match(html, /id="layout-debug"[^>]*hidden/);
   assert.match(html, /id="safe-probe"/);
-  assert.match(css, /padding:\s*env\(safe-area-inset-top/);
+  assert.match(html, /id="probe-lvh"/);
+  assert.match(html, /id="probe-vh"/);
+  assert.match(html, /id="probe-dvh"/);
+  assert.match(html, /id="probe-svh"/);
+  assert.match(css, /padding:\s*var\(--safe-top\)/);
   const viewport = read('app/js/viewport.js');
   assert.match(viewport, /KEYBOARD_THRESHOLD = 80/);
   assert.match(viewport, /overlap > KEYBOARD_THRESHOLD/);
+  assert.match(viewport, /scrollPad/);
+  assert.equal(viewport.includes('appH'), false);
+  assert.equal(viewport.includes('outerHeight'), false);
   assert.match(main, /layoutFrame/);
-  assert.match(main, /--app-h/);
-  assert.match(main, /frameSource/);
+  assert.match(main, /--scroll-pad/);
+  assert.match(main, /--keyboard-inset/);
+  assert.equal(main.includes('--app-h'), false);
   assert.match(main, /orientationchange/);
   assert.match(main, /innerHeight/);
   assert.match(main, /visualViewport\.height/);
@@ -86,13 +100,26 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(main, /screen\.height/);
   assert.match(main, /devicePixelRatio/);
   assert.match(main, /display-mode: standalone/);
-  assert.match(main, /--keyboard-inset/);
   assert.match(main, /build-version/);
   assert.match(main, /layout-debug/);
+  assert.match(main, /probe-lvh/);
+  assert.match(main, /probe-vh/);
+  assert.match(main, /probe-dvh/);
+  assert.match(main, /probe-svh/);
+  assert.match(main, /clientHeight/);
+  assert.match(rule(css, '.layout-debug'), /position:\s*fixed/);
 
   assert.equal(css.includes('--vv-top'), false);
   assert.equal(css.includes('--vv-height'), false);
-  assert.equal(css.includes('100vh'), false);
+  const withoutProbes = css
+    .replace(/\.probe-lvh \{[^}]*\}/, '')
+    .replace(/\.probe-vh \{[^}]*\}/, '')
+    .replace(/\.probe-dvh \{[^}]*\}/, '')
+    .replace(/\.probe-svh \{[^}]*\}/, '');
+  assert.equal(withoutProbes.includes('100vh'), false);
+  assert.equal(withoutProbes.includes('100dvh'), false);
+  assert.equal(withoutProbes.includes('100svh'), false);
+  assert.match(withoutProbes, /100lvh/);
   assert.equal(css.includes('home-clearance'), false);
   assert.equal(main.includes('--vv-top'), false);
   assert.equal(main.includes('--vv-height'), false);
