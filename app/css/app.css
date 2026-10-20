@@ -356,13 +356,13 @@ a:focus-visible {
   background: rgba(28, 24, 20, 0.42);
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
 }
 
 .sheet-card {
   background: var(--surface);
   color: var(--ink);
-  border-radius: 18px 18px 0 0;
+  flex: 1;
+  min-height: 0;
   max-height: 100%;
   display: flex;
   flex-direction: column;
@@ -419,12 +419,120 @@ a:focus-visible {
   font-size: 13px;
 }
 
+.search-row {
+  display: block;
+  padding: 8px 16px 0;
+}
+
+.search-row input,
+.action-panel input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.browser-actions,
+.action-panel {
+  display: flex;
+  gap: 8px;
+}
+
+.browser-actions {
+  padding: 4px 16px 8px;
+}
+
+.browser-actions button,
+.action-panel button {
+  border: 0;
+  background: var(--soft);
+  color: var(--ink);
+  border-radius: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.action-panel {
+  flex-direction: column;
+  margin: 0 16px 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--bg);
+  max-height: 42%;
+  overflow: auto;
+}
+
+.action-panel p {
+  margin: 0;
+  font-size: 15px;
+}
+
+.action-panel .danger {
+  background: var(--danger);
+  color: #fff8f4;
+}
+
 .notes-list {
   list-style: none;
   margin: 0;
   padding: 0 8px 12px;
   overflow: auto;
+  flex: 1;
+  min-height: 0;
   overscroll-behavior: contain;
+}
+
+.browser-row,
+.trash-row,
+.browser-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.browser-row .note-link { flex: 1; }
+
+.row-more {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.browser-label {
+  justify-content: space-between;
+  padding: 12px 12px 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.browser-label .row-more {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.trash-row {
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 4px 0 12px;
+}
+
+.browser-empty {
+  padding: 12px 16px;
+  color: var(--muted);
+  font-size: 15px;
 }
 
 .note-link {

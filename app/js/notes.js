@@ -37,14 +37,15 @@ export function noteTitle(file) {
   return String(file?.path ?? '').replace(/\.md$/i, '');
 }
 
-export function notePathFromName(name, existingPaths) {
+export function notePathFromName(name, existingPaths, folder = '') {
   const paths = existingPaths || [];
   const raw = String(name ?? '').trim().replace(/\.md$/i, '').trim();
-  if (!raw) return uniquePath('Untitled', paths);
+  const base = folder ? `${folder}/Untitled` : 'Untitled';
+  if (!raw) return uniquePath(base, paths);
   if (/[\\/\u0000-\u001f]/.test(raw) || raw === '.' || raw === '..') {
     throw new Error('Use a name without slashes.');
   }
-  const path = `${raw}.md`;
+  const path = folder ? `${folder}/${raw}.md` : `${raw}.md`;
   if (paths.includes(path)) {
     throw new Error('A note with that name already exists.');
   }
@@ -90,9 +91,13 @@ export function notePathFromWikilink(target, existingPaths = []) {
 
 export function planWikilink(notes, target) {
   const list = notes || [];
-  const match = resolveWikilink(list, target);
+  const live = list.filter((file) => !file.trashedAt);
+  const match = resolveWikilink(live, target);
   if (match.status === 'ok') return { action: 'open', path: match.file.path };
   if (match.status === 'ambiguous') return { action: 'ambiguous', target };
+  const trashed = resolveWikilink(list.filter((file) => file.trashedAt), target);
+  if (trashed.status === 'ok') return { action: 'restore', path: trashed.file.path };
+  if (trashed.status === 'ambiguous') return { action: 'ambiguous', target };
   try {
     const path = notePathFromWikilink(target, list.map((note) => note.path));
     return {
@@ -130,19 +135,29 @@ export function pickCurrent(notes, lastPath) {
   return [...notes].sort((a, b) => (b.updatedAt - a.updatedAt) || a.path.localeCompare(b.path))[0];
 }
 
+function stringList(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
+}
+
 export async function loadSession(db) {
-  let notes = (await listFiles(db)).filter((file) => file.kind === 'markdown');
-  if (notes.length === 0) {
+  let files = await listFiles(db);
+  if (files.length === 0) {
     const welcome = makeFile(WELCOME_PATH, WELCOME_MD);
     await putFile(db, welcome);
     await setMeta(db, 'lastOpened', WELCOME_PATH);
-    notes = [welcome];
+    files = [welcome];
   }
+  const notes = files.filter((file) => file.kind === 'markdown' && !file.trashedAt);
   const lastOpened = await getMeta(db, 'lastOpened');
   const editorMode = await getMeta(db, 'editorMode');
+  const expanded = await getMeta(db, 'expanded');
   return {
+    files,
     notes,
     current: pickCurrent(notes, lastOpened),
     mode: editorMode === 'preview' ? 'preview' : 'source',
+    folders: stringList(await getMeta(db, 'folders')),
+    recent: stringList(await getMeta(db, 'recent')),
+    expanded: Array.isArray(expanded) ? expanded.filter((item) => typeof item === 'string') : null,
   };
 }

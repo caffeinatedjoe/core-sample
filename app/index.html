@@ -44,12 +44,21 @@
           <h2 id="notes-heading">Notes</h2>
           <button type="button" id="notes-close" class="sheet-done">Done</button>
         </header>
+        <label class="search-row">
+          <input id="notes-search" type="search" placeholder="Search notes" enterkeyhint="search" autocomplete="off" autocapitalize="off" aria-label="Search notes">
+        </label>
         <form id="new-note-form" class="new-note">
           <input id="new-note-name" type="text" name="name" placeholder="New note name" maxlength="120" enterkeyhint="done" autocomplete="off" autocapitalize="sentences" aria-label="New note name">
           <button type="submit">Create</button>
         </form>
         <p id="new-note-error" class="form-error" role="alert"></p>
+        <div class="browser-actions">
+          <button type="button" id="new-folder-button">New folder</button>
+          <button type="button" id="backup-button">Backup</button>
+        </div>
+        <div id="action-panel" class="action-panel" hidden></div>
         <ul id="notes-list" class="notes-list"></ul>
+        <input id="backup-file" type="file" accept="application/json,.json" hidden>
       </div>
     </div>
     <p id="boot-error" class="boot-error" hidden></p>

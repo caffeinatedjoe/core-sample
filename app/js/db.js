@@ -57,6 +57,28 @@ export function getMeta(db, key) {
   return run(db, 'meta', 'readonly', (store) => store.get(key)).then((row) => (row ? row.value : undefined));
 }
 
+export function commitFiles(db, { put = [], remove = [] } = {}) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('files', 'readwrite');
+    const store = tx.objectStore('files');
+    try {
+      for (const path of remove) store.delete(path);
+      for (const file of put) {
+        if (!file || typeof file.path !== 'string' || !file.path) {
+          throw new Error('A note needs a path.');
+        }
+        store.put(file);
+      }
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Could not save notes'));
+    tx.onabort = () => reject(tx.error || new Error('Could not save notes'));
+  });
+}
+
 export function deleteDatabase(name) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(name);

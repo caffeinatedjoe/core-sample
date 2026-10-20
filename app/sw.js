@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v3';
+const CACHE = 'core-sample-shell-v4';
 
 const SHELL = [
   './',
@@ -19,6 +19,9 @@ const SHELL = [
   './js/checklist.js',
   './js/version.js',
   './js/shell-cache.js',
+  './js/organize.js',
+  './js/browser.js',
+  './js/backup.js',
   './icons/apple-touch-icon.png',
   './icons/apple-touch-icon-167.png',
   './icons/apple-touch-icon-152.png',
