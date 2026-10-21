@@ -34,14 +34,39 @@ function cacheKey(repo, path) {
   return `${repo}\n${path}`;
 }
 
-export async function rememberImage(db, { repo = '', path, blob, type, viewedAt = Date.now(), sha = '' } = {}) {
+async function copyBytes(value) {
+  if (!value) return null;
+  if (value instanceof ArrayBuffer) return value.slice(0);
+  if (ArrayBuffer.isView(value)) {
+    return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+  }
+  if (typeof value.arrayBuffer === 'function') {
+    const buffer = await value.arrayBuffer();
+    return buffer.slice(0);
+  }
+  return null;
+}
+
+function hasStoredBytes(row) {
+  if (!row) return false;
+  if (row.data instanceof ArrayBuffer && row.data.byteLength > 0) return true;
+  if (ArrayBuffer.isView(row.data) && row.data.byteLength > 0) return true;
+  if (row.blob && Number(row.blob.size) > 0) return true;
+  return false;
+}
+
+// Bytes only. A Blob read back from IndexedDB must never be written again:
+// WebKit invalidates that handle for the rest of the session.
+export async function rememberImage(db, { repo = '', path, blob, data, type, viewedAt = Date.now(), sha = '' } = {}) {
+  const bytes = await copyBytes(data || blob);
+  if (!bytes) throw new Error('An image needs bytes.');
   const record = {
     key: cacheKey(repo, path),
     repo,
     path,
-    blob,
-    bytes: blob.size,
-    type: type || blob.type || '',
+    data: bytes,
+    bytes: bytes.byteLength,
+    type: type || (blob && blob.type) || '',
     viewedAt,
     sha: typeof sha === 'string' ? sha : '',
   };
@@ -63,16 +88,63 @@ export async function pruneUnreferencedImages(db, repo, referencedPaths) {
   return drop.length;
 }
 
-export async function cachedImage(db, repo, path) {
-  const row = await getImage(db, cacheKey(repo, path));
-  if (!row || !row.blob) return null;
-  row.viewedAt = Date.now();
+async function readStoredBytes(row) {
+  if (!row) return null;
+  if (row.data instanceof ArrayBuffer || ArrayBuffer.isView(row.data)) return copyBytes(row.data);
+  if (row.blob) return copyBytes(row.blob);
+  return null;
+}
+
+async function migrateImageBytes(db, row, bytes) {
+  if (!row || !row.blob || row.data) return;
   try {
-    await putImage(db, row);
+    await putImage(db, {
+      key: row.key,
+      repo: row.repo || '',
+      path: row.path || '',
+      data: bytes,
+      bytes: bytes.byteLength,
+      type: row.type || '',
+      sha: typeof row.sha === 'string' ? row.sha : '',
+      viewedAt: row.viewedAt || 0,
+    });
   } catch {
-    // The bytes are already loaded. A failed timestamp write must not hide them.
+    // The copied bytes can still be shown. The old record stays.
   }
-  return row;
+}
+
+// Read only. A view does not write the record. Last-viewed is not stored:
+// a referenced image is never evicted, so there is no least-recently-viewed list.
+export async function cachedImage(db, repo, path) {
+  const key = cacheKey(repo, path);
+  const load = async () => {
+    const row = await getImage(db, key);
+    if (!row || !hasStoredBytes(row)) return null;
+    const bytes = await readStoredBytes(row);
+    if (!bytes || !bytes.byteLength) return null;
+    return { row, bytes };
+  };
+  let loaded = null;
+  try {
+    loaded = await load();
+  } catch {
+    try {
+      loaded = await load();
+    } catch {
+      return { key, repo, path, unreadable: true };
+    }
+  }
+  if (!loaded) return null;
+  await migrateImageBytes(db, loaded.row, loaded.bytes);
+  return {
+    key,
+    repo: loaded.row.repo || repo,
+    path: loaded.row.path || path,
+    data: loaded.bytes,
+    bytes: loaded.bytes.byteLength,
+    type: loaded.row.type || '',
+    sha: typeof loaded.row.sha === 'string' ? loaded.row.sha : '',
+  };
 }
 
 function blankIndex(settings, extra = {}) {
@@ -309,10 +381,6 @@ async function forgetEmbedPath(db, settings, notePath, link) {
   }
 }
 
-export async function forgetImage(db, repo, path) {
-  await deleteImages(db, [cacheKey(repo, path)]);
-}
-
 function decodeBase64Bytes(value) {
   const clean = String(value || '').replace(/\s/g, '');
   if (!clean) return null;
@@ -370,21 +438,19 @@ async function cachedReady(db, repo, path) {
   try {
     hit = await cachedImage(db, repo, path);
   } catch {
-    hit = null;
+    hit = { unreadable: true };
   }
-  if (!hit || !hit.blob) return null;
+  if (!hit) return null;
+  if (hit.unreadable) return null;
   let payload = null;
   try {
-    payload = imagePayload(await hit.blob.arrayBuffer());
+    payload = imagePayload(hit.data);
   } catch {
     payload = null;
   }
+  // A read that fails, or bytes that are not an image, stays stored.
+  // The only delete is the unreferenced prune. An online miss overwrites this key.
   if (payload) return readyBlob(path, payload, mimeFor(path), hit.type || '');
-  try {
-    await forgetImage(db, repo, path);
-  } catch {
-    // A bad cache entry must not block the download.
-  }
   return null;
 }
 
@@ -742,7 +808,7 @@ export async function prefetchEmbeddedImages(db, fetchImpl, {
       } catch {
         existing = null;
       }
-      if (existing && existing.blob && (!job.sha || existing.sha === job.sha)) {
+      if (hasStoredBytes(existing) && (!job.sha || existing.sha === job.sha)) {
         skipped += 1;
         return;
       }

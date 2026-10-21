@@ -31,7 +31,7 @@ import {
 import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
-import { embedImage, forgetImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
+import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
 import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
@@ -227,10 +227,7 @@ export function mountApp(doc, db) {
     const host = img.closest('.embed');
     if (!host || !img.isConnected) return;
     const src = img.getAttribute('src') || '';
-    const path = img.dataset.imagePath || '';
-    const repo = img.dataset.imageRepo || '';
     if (src) revokeEmbed(src);
-    if (path) forgetImage(db, repo, path).catch(() => {});
     showEmbedReason(host, "Couldn't display");
   }
 

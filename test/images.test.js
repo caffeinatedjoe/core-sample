@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
-import { deleteDatabase, getFile, getImage, getMeta, listImages, openDatabase, putFile, setMeta } from '../app/js/db.js';
+import { deleteDatabase, getFile, getImage, getMeta, listImages, openDatabase, putFile, putImage, setMeta } from '../app/js/db.js';
 import { fetchRawBytes } from '../app/js/github-api.js';
 import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
 import {
@@ -882,6 +882,86 @@ test('prefetch stores every embedded image and a cold start reads them offline',
   assert.equal(missed.reason, OFFLINE_IMAGE_REASON);
   assert.notEqual(missed.reason, 'Sign in again');
   cold.close();
+  await deleteDatabase(name);
+});
+
+test('a legacy blob is copied once and a failed read does not delete it', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const path = 'assets/Field Notes/image-1710000000000.png';
+  const key = `owner/repo\n${path}`;
+  await putImage(db, {
+    key,
+    repo: 'owner/repo',
+    path,
+    blob: new Blob([PNG], { type: 'image/png' }),
+    bytes: PNG.byteLength,
+    type: 'image/png',
+    sha: 'sha-legacy',
+    viewedAt: 1,
+  });
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    throw new Error('offline');
+  };
+  const options = {
+    link: 'image-1710000000000.png',
+    notePath: 'Field Notes.md',
+    paths: [path],
+    attachmentFolderPath: './assets/Field Notes',
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+    offline: true,
+    fetchImpl,
+  };
+  const first = await loadEmbedBlob(db, options);
+  const second = await loadEmbedBlob(db, options);
+  assert.equal(calls, 0);
+  assert.equal(first.status, 'ready');
+  assert.equal(second.status, 'ready');
+  assert.equal(second.blob.size, PNG.byteLength);
+  const copied = await getImage(db, key);
+  assert.equal(copied.blob, undefined);
+  assert.equal(copied.data.byteLength, PNG.byteLength);
+  assert.equal(copied.sha, 'sha-legacy');
+  assert.equal((await listImages(db)).length, 1);
+
+  const brokenName = `core-sample-${randomUUID()}`;
+  const broken = await openDatabase(brokenName);
+  await putImage(broken, {
+    key,
+    repo: 'owner/repo',
+    path,
+    blob: new Blob([PNG], { type: 'image/png' }),
+    bytes: PNG.byteLength,
+    type: 'image/png',
+    sha: 'sha-legacy',
+    viewedAt: 1,
+  });
+  const original = Blob.prototype.arrayBuffer;
+  let reads = 0;
+  Blob.prototype.arrayBuffer = function failRead() {
+    reads += 1;
+    return Promise.reject(new DOMException('The object can not be found here.', 'NotFoundError'));
+  };
+  try {
+    const missed = await loadEmbedBlob(broken, options);
+    assert.equal(missed.reason, OFFLINE_IMAGE_REASON);
+    assert.notEqual(missed.reason, 'Sign in again');
+    assert.equal(reads >= 2, true);
+    assert.equal((await listImages(broken)).length, 1);
+    const kept = await getImage(broken, key);
+    assert.equal(kept.blob instanceof Blob, true);
+    assert.equal(kept.sha, 'sha-legacy');
+  } finally {
+    Blob.prototype.arrayBuffer = original;
+    broken.close();
+    await deleteDatabase(brokenName);
+  }
+  db.close();
   await deleteDatabase(name);
 });
 
