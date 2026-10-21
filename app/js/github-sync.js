@@ -1,6 +1,6 @@
 // Automatic sync. The local-save clock is separate and must already have
 // written the note before a debounced run pushes it.
-import { deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta } from './db.js';
 import {
   decodeUtf8Base64,
   githubRequest,
@@ -10,6 +10,7 @@ import {
 } from './github-api.js';
 import { loadGithubSettings } from './github-store.js';
 import { redact } from './github-redact.js';
+import { GITHUB_DELETED_TEXT, merge2, merge3 } from './conflicts.js';
 
 export const SYNC_DEBOUNCE_MS = 3000;
 export const SYNC_POLL_MS = 60 * 1000;
@@ -27,7 +28,8 @@ export const SYNC_STATUS = {
   failed: 'Sync failed',
 };
 
-const DELETED_COPY = 'GitHub no longer has this note. The copy on this device was kept.\n';
+const DELETED_COPY = GITHUB_DELETED_TEXT;
+export const STALE_RETRY_LIMIT = 3;
 
 export function presentSyncStatus(state = {}) {
   if (!state.configured) return '';
@@ -97,9 +99,14 @@ export function conflictCopyPath(path, when, taken = new Set()) {
   return name;
 }
 
-export function commitMessage(paths) {
-  if (!paths || paths.length === 1) return `Update ${paths[0]} from Core Sample`;
-  return `Update ${paths.length} notes from Core Sample`;
+export function commitMessage(paths, deletions = []) {
+  const notes = paths || [];
+  const removed = deletions || [];
+  if (!notes.length && removed.length === 1) return `Delete ${removed[0]} from Core Sample`;
+  if (!notes.length && removed.length) return `Delete ${removed.length} notes from Core Sample`;
+  if (notes.length === 1 && removed.length === 1) return `Rename ${removed[0]} to ${notes[0]} from Core Sample`;
+  if (notes.length === 1 && !removed.length) return `Update ${notes[0]} from Core Sample`;
+  return `Update ${notes.length + removed.length} notes from Core Sample`;
 }
 
 export function refUpdateBody(sha) {
@@ -115,8 +122,12 @@ export function refUpdatePath(branch) {
   return `/git/refs/heads/${encodeURIComponent(branch)}`;
 }
 
-function preparedKey(parent, files) {
-  return JSON.stringify([parent, (files || []).map((file) => [file.path, String(file.content ?? '')])]);
+function preparedKey(parent, files, deletions = []) {
+  return JSON.stringify([
+    parent,
+    (files || []).map((file) => [file.path, String(file.content ?? '')]),
+    (deletions || []).map((item) => item.path),
+  ]);
 }
 
 export function syncedBase(file) {
@@ -133,12 +144,13 @@ export function reconcileNotes(files, remoteNotes) {
   const pulls = [];
   const creates = [];
   const conflicts = [];
+  const removals = [];
   for (const file of files || []) {
     if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy) continue;
     const found = remote.get(file.path);
     const base = syncedBase(file);
     if (file.conflict === true) {
-      conflicts.push({ path: file.path, reason: 'existing', remote: found || null });
+      conflicts.push({ path: file.path, reason: file.conflictReason || 'existing', remote: found || null });
       continue;
     }
     const dirty = file.dirty === true;
@@ -154,7 +166,8 @@ export function reconcileNotes(files, remoteNotes) {
       continue;
     }
     if (!found) {
-      if (base) conflicts.push({ path: file.path, reason: 'deleted', remote: null });
+      if (base) removals.push(file.path);
+      else pushes.push(file);
       continue;
     }
     if (found.sha !== (file.remoteSha || base)) {
@@ -164,7 +177,7 @@ export function reconcileNotes(files, remoteNotes) {
   for (const note of remoteNotes || []) {
     if (!localPaths.has(note.localPath)) creates.push(note);
   }
-  return { pushes, pulls, creates, conflicts };
+  return { pushes, pulls, creates, conflicts, removals };
 }
 
 function arm(setTimer, fn, ms) {
@@ -265,6 +278,7 @@ export function createAutoSync({
   onStatus = () => {},
   onApplied = () => {},
   onPulled = () => {},
+  onRemoved = () => {},
 } = {}) {
   let chain = Promise.resolve();
   let state = { configured: false, confirmed: false };
@@ -306,22 +320,78 @@ export function createAutoSync({
       nextAttemptAt: 0,
     };
     const existing = (await listOps(db)).find((item) => item.id === file.path);
+    if (existing && (existing.kind === 'delete' || existing.kind === 'rename')) return existing;
     if (existing) {
       op.attempts = existing.attempts || 0;
       op.nextAttemptAt = existing.nextAttemptAt || 0;
       op.enqueuedAt = existing.enqueuedAt || op.enqueuedAt;
+      if (existing.kind) op.kind = existing.kind;
     }
     await putOp(db, op);
     return op;
   }
 
   async function noteEdited(file) {
-    if (!file || !file.path || file.conflictCopy || file.trashedAt) return;
+    if (!file || !file.path || file.conflictCopy || file.backup || file.trashedAt) return;
     const settings = await loadGithubSettings(db);
     if (!settings.token || !settings.repo || !settings.branch) return;
     await ensureOp({ ...file, dirty: true }, settings);
     publish({ configured: true, pending: true, confirmed: false, syncing: false });
     clock.edited();
+  }
+
+  async function noteTrashed({ file, baseSha }) {
+    if (!file || !file.path || file.conflictCopy || file.backup) return;
+    const settings = await loadGithubSettings(db);
+    if (!settings.token || !settings.repo || !settings.branch) return;
+    if (!baseSha) {
+      await deleteOps(db, [file.path]);
+      return;
+    }
+    await putOp(db, {
+      id: file.path,
+      kind: 'delete',
+      repo: settings.repo,
+      branch: settings.branch,
+      path: file.path,
+      baseSha,
+      enqueuedAt: now(),
+      attempts: 0,
+      nextAttemptAt: 0,
+    });
+    publish({ configured: true, pending: true, confirmed: false, syncing: false });
+    clock.edited();
+  }
+
+  async function noteRenamed({ from, to, baseSha, file }) {
+    if (!file || !to) return;
+    const settings = await loadGithubSettings(db);
+    if (!settings.token || !settings.repo || !settings.branch) return;
+    await deleteOps(db, [from, to]);
+    if (!baseSha) {
+      await ensureOp(file, settings);
+    } else {
+      await putOp(db, {
+        id: to,
+        kind: 'rename',
+        repo: settings.repo,
+        branch: settings.branch,
+        path: to,
+        from,
+        to,
+        baseSha,
+        enqueuedAt: now(),
+        attempts: 0,
+        nextAttemptAt: 0,
+      });
+    }
+    publish({ configured: true, pending: true, confirmed: false, syncing: false });
+    clock.edited();
+  }
+
+  async function noteRestored(file) {
+    if (!file || !file.path) return;
+    await deleteOps(db, [file.path]);
   }
 
   async function syncOnce(reason) {
@@ -337,7 +407,8 @@ export function createAutoSync({
     const ops = await listOps(db);
     const pending = ops.some((op) => op.repo === settings.repo && op.branch === settings.branch);
     if (offline()) {
-      return finish({ offline: true, pending, syncing: false });
+      const conflicted = await hasConflict();
+      return finish({ offline: true, pending, syncing: false, conflict: conflicted });
     }
     publish({ configured: true, offline: false, syncing: true, pending, failed: false, authRequired: false });
     try {
@@ -345,11 +416,13 @@ export function createAutoSync({
     } catch (error) {
       const message = redact(error && error.message ? error.message : '', [settings.token]);
       const reached = message.includes('could not be reached') || message.includes('offline');
+      const conflicted = await hasConflict();
       return finish({
         syncing: false,
         offline: reached || offline(),
-        failed: !reached,
+        failed: !reached && !conflicted,
         pending: true,
+        conflict: conflicted,
       });
     }
   }
@@ -372,7 +445,8 @@ export function createAutoSync({
   async function perform(settings, ops, reason, finish, stalePass = 0) {
     const token = settings.token;
     const call = (url, options) => request(fetchImpl, token, url, options);
-    const dirtyFiles = (await listFiles(db)).filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown');
+    const localNotes = await listFiles(db);
+    const dirtyFiles = localNotes.filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown');
     for (const file of dirtyFiles) {
       if (!ops.some((op) => op.id === file.path)) ops.push(await ensureOp(file, settings));
     }
@@ -438,6 +512,10 @@ export function createAutoSync({
 
     if (ref.status === 304 && ready.length === 0) {
       const files = await listFiles(db);
+      const unsentLocal = files.some((file) => file && file.kind === 'markdown' && !file.trashedAt && !file.conflictCopy && !file.conflict && !file.dirty && !syncedBase(file) && !file.remoteSha);
+      if (unsentLocal) {
+        // A note that has never been synced still needs the tree, not a 304 stop.
+      } else {
       const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy);
       await setMeta(db, CURSOR_KEY, {
         repo: settings.repo,
@@ -456,6 +534,7 @@ export function createAutoSync({
         failed: false,
         offline: false,
       });
+      }
     }
 
     const tree = await call(repoUrl(settings.repo, `/git/trees/${treeSha}?recursive=1`));
@@ -496,6 +575,7 @@ export function createAutoSync({
         updatedAt: now(),
       };
       await putFile(db, next);
+      await deleteOps(db, [fresh.path]);
       applied.push(next);
       pulled = true;
     }
@@ -523,22 +603,19 @@ export function createAutoSync({
       pulled = true;
     }
 
+    const removed = [];
+    for (const path of plan.removals || []) {
+      await commitFiles(db, { remove: [path] });
+      await deleteOps(db, [path]);
+      removed.push(path);
+    }
+    if (removed.length) onRemoved(removed);
+
+    const extraPushes = [];
     const taken = new Set((await listFiles(db)).map((file) => file.path));
     let conflicted = false;
-    for (const item of plan.conflicts) {
-      const fresh = await getFile(db, item.path);
-      if (!fresh) continue;
-      if (fresh.conflict === true) {
-        conflicted = true;
-        continue;
-      }
-      let copy = DELETED_COPY;
-      if (item.remote && item.remote.sha) {
-        const blob = await call(repoUrl(settings.repo, `/git/blobs/${item.remote.sha}`));
-        if (!blob.ok) return hold(settings, ops, blob);
-        copy = blobText(blob.body);
-      }
-      const siblingPath = conflictCopyPath(item.path, now(), taken);
+    async function keepConflict(fresh, { reason, copy, remoteSha = '', baseText = '' }) {
+      const siblingPath = conflictCopyPath(fresh.path, now(), taken);
       taken.add(siblingPath);
       const sibling = {
         path: siblingPath,
@@ -554,23 +631,160 @@ export function createAutoSync({
         conflict: false,
         conflictCopy: true,
       };
+      const marked = {
+        ...fresh,
+        conflict: true,
+        dirty: true,
+        conflictAt: now(),
+        conflictReason: reason,
+        conflictRemote: copy,
+        conflictRemoteSha: remoteSha,
+        conflictBase: baseText,
+      };
       await putFile(db, sibling);
-      const marked = { ...fresh, conflict: true, dirty: true };
       await putFile(db, marked);
       await ensureOp(marked, settings);
       applied.push(sibling, marked);
       conflicted = true;
+      return marked;
+    }
+    for (const item of plan.conflicts) {
+      const fresh = await getFile(db, item.path);
+      if (!fresh) continue;
+      if (fresh.conflict === true) {
+        conflicted = true;
+        continue;
+      }
+      let copy = DELETED_COPY;
+      let baseText = '';
+      let baseKnown = false;
+      if (item.remote && item.remote.sha) {
+        const blob = await call(repoUrl(settings.repo, `/git/blobs/${item.remote.sha}`));
+        if (!blob.ok) return hold(settings, ops, blob);
+        copy = blobText(blob.body);
+        const base = syncedBase(fresh);
+        if (base && base !== item.remote.sha) {
+          const baseBlob = await call(repoUrl(settings.repo, `/git/blobs/${base}`));
+          if (baseBlob.status === 404) baseKnown = false;
+          else if (!baseBlob.ok) return hold(settings, ops, baseBlob);
+          else {
+            baseText = blobText(baseBlob.body);
+            baseKnown = true;
+          }
+        }
+        const merged = baseKnown
+          ? merge3(baseText, String(fresh.content ?? ''), copy)
+          : merge2(String(fresh.content ?? ''), copy);
+        if (merged.auto) {
+          const same = merged.text === copy;
+          const next = {
+            ...fresh,
+            content: merged.text,
+            remoteSha: same ? item.remote.sha : fresh.remoteSha,
+            baseSha: item.remote.sha,
+            dirty: !same,
+            conflict: false,
+            conflictRemote: '',
+            conflictBase: '',
+            conflictReason: '',
+          };
+          await putFile(db, next);
+          if (same) await deleteOps(db, [fresh.path]);
+          else {
+            await ensureOp(next, settings);
+            extraPushes.push(next);
+          }
+          applied.push(next);
+          continue;
+        }
+      }
+      await keepConflict(fresh, {
+        reason: item.reason === 'existing' ? 'legacy' : item.reason,
+        copy,
+        remoteSha: item.remote && item.remote.sha ? item.remote.sha : '',
+        baseText,
+      });
+    }
+
+    const deletions = [];
+    const mineNow = (await listOps(db)).filter((op) => op.repo === settings.repo && op.branch === settings.branch);
+    const readyIds = new Set(ready.map((op) => op.id));
+    for (const op of mineNow) {
+      if (!readyIds.has(op.id)) continue;
+      if (op.kind === 'delete') {
+        if (!op.baseSha) {
+          await deleteOps(db, [op.path]);
+          continue;
+        }
+        const remoteNote = remoteNotes.find((note) => note.localPath === op.path);
+        if (!remoteNote) {
+          await deleteOps(db, [op.path]);
+          continue;
+        }
+        if (remoteNote.sha === op.baseSha) {
+          deletions.push({ path: op.path });
+          continue;
+        }
+        const blob = await call(repoUrl(settings.repo, `/git/blobs/${remoteNote.sha}`));
+        if (!blob.ok) return hold(settings, ops, blob);
+        const fresh = await getFile(db, op.path);
+        if (fresh) {
+          await keepConflict({ ...fresh, trashedAt: null }, {
+            reason: 'delete',
+            copy: blobText(blob.body),
+            remoteSha: remoteNote.sha,
+            baseText: '',
+          });
+        }
+        await deleteOps(db, [op.path]);
+        continue;
+      }
+      if (op.kind === 'rename') {
+        const remoteNote = op.baseSha ? remoteNotes.find((note) => note.localPath === op.from) : null;
+        if (!op.baseSha || !remoteNote) continue;
+        if (remoteNote.sha === op.baseSha) {
+          deletions.push({ path: op.from });
+          continue;
+        }
+        const blob = await call(repoUrl(settings.repo, `/git/blobs/${remoteNote.sha}`));
+        if (!blob.ok) return hold(settings, ops, blob);
+        const text = blobText(blob.body);
+        const restored = {
+          path: op.from,
+          content: text,
+          kind: 'markdown',
+          encoding: 'utf-8',
+          createdAt: now(),
+          updatedAt: now(),
+          trashedAt: null,
+          remoteSha: remoteNote.sha,
+          baseSha: remoteNote.sha,
+          dirty: false,
+          conflict: false,
+        };
+        await putFile(db, restored);
+        applied.push(restored);
+        const fresh = await getFile(db, op.to);
+        if (fresh) {
+          await keepConflict(fresh, { reason: 'rename', copy: text, remoteSha: remoteNote.sha, baseText: '' });
+        }
+        await deleteOps(db, [op.id]);
+      }
     }
 
     const pushFiles = [];
     for (const file of plan.pushes) {
       const fresh = await getFile(db, file.path);
       if (!fresh || fresh.conflict || fresh.conflictCopy || fresh.trashedAt) continue;
-      if (!ready.some((op) => op.path === fresh.path) && fresh.dirty) {
-        // A dirty note whose backoff has not elapsed stays pending.
-        continue;
-      }
-      if (!fresh.dirty && !ready.some((op) => op.path === fresh.path)) continue;
+      const queued = ready.some((op) => op.path === fresh.path || op.id === fresh.path);
+      if (!queued && !( !fresh.dirty && !syncedBase(fresh) && !fresh.remoteSha)) continue;
+      if (!queued) await ensureOp(fresh, settings);
+      pushFiles.push(fresh);
+    }
+    for (const file of extraPushes) {
+      const fresh = await getFile(db, file.path);
+      if (!fresh || fresh.conflict || fresh.conflictCopy || fresh.trashedAt) continue;
+      if (pushFiles.some((item) => item.path === fresh.path)) continue;
       pushFiles.push(fresh);
     }
 
@@ -583,7 +797,7 @@ export function createAutoSync({
       }
     }
 
-    if (!pushFiles.length) {
+    if (!pushFiles.length && !deletions.length) {
       const still = (await listOps(db)).some((op) => op.repo === settings.repo && op.branch === settings.branch);
       return finish({
         configured: true,
@@ -611,7 +825,7 @@ export function createAutoSync({
       });
     }
 
-    const key = preparedKey(freshHead, pushFiles);
+    const key = preparedKey(freshHead, pushFiles, deletions);
     let written = prepared && prepared.key === key ? prepared.written : null;
     let commitSha = written ? prepared.commitSha : '';
     if (!written) {
@@ -631,6 +845,14 @@ export function createAutoSync({
         });
         written.push({ path: file.path, sha: blob.body.sha, content: String(file.content ?? '') });
       }
+      for (const item of deletions) {
+        entries.push({
+          path: repoPath(settings.root, item.path),
+          mode: '100644',
+          type: 'blob',
+          sha: null,
+        });
+      }
       const treeWrite = await call(repoUrl(settings.repo, '/git/trees'), {
         method: 'POST',
         body: { base_tree: treeSha, tree: entries },
@@ -639,7 +861,7 @@ export function createAutoSync({
       const commitWrite = await call(repoUrl(settings.repo, '/git/commits'), {
         method: 'POST',
         body: {
-          message: commitMessage(written.map((item) => item.path)),
+          message: commitMessage(written.map((item) => item.path), deletions.map((item) => item.path)),
           tree: treeWrite.body.sha,
           parents: [freshHead],
         },
@@ -655,8 +877,35 @@ export function createAutoSync({
       return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: true });
     }
     const patched = await call(updateUrl, { method: 'PATCH', body: update });
-    if ((patched.status === 422 || patched.status === 409) && stalePass < 1) {
+    if ((patched.status === 422 || patched.status === 409) && stalePass < STALE_RETRY_LIMIT) {
       return perform(settings, await listOps(db), reason, finish, stalePass + 1);
+    }
+    if (patched.status === 422 || patched.status === 409) {
+      for (const file of pushFiles) {
+        const remoteNote = remoteNotes.find((note) => note.localPath === file.path);
+        let remoteText = '';
+        if (remoteNote && remoteNote.sha) {
+          const remoteBlob = await call(repoUrl(settings.repo, `/git/blobs/${remoteNote.sha}`));
+          if (remoteBlob.ok) remoteText = blobText(remoteBlob.body);
+        }
+        const fresh = await getFile(db, file.path);
+        if (fresh && !fresh.conflict) {
+          await keepConflict(fresh, {
+            reason: 'stale',
+            copy: remoteText || String(fresh.content ?? ''),
+            remoteSha: remoteNote ? remoteNote.sha : '',
+            baseText: '',
+          });
+        }
+      }
+      return finish({
+        configured: true,
+        syncing: false,
+        conflict: true,
+        pending: true,
+        confirmed: false,
+        failed: false,
+      });
     }
     const patchedSha = patched.body && patched.body.object && patched.body.object.sha;
     if (!patched.ok || patchedSha !== commitSha) return hold(settings, ops, patched);
@@ -681,6 +930,7 @@ export function createAutoSync({
       await deleteOps(db, [fresh.path]);
       settled.push(next);
     }
+    for (const item of deletions) await deleteOps(db, [item.path]);
     if (settled.length) onApplied(settled);
     const remaining = await listOps(db);
     const stillPending = remaining.some((op) => op.repo === settings.repo && op.branch === settings.branch);
@@ -742,18 +992,49 @@ export function createAutoSync({
       return scheduleRetry(settings, ops, wait);
     }
     const message = result && result.message ? redact(result.message, [settings.token]) : githubStatusReason(result && result.status);
+    const conflicted = await hasConflict();
     return finish({
       configured: true,
-      failed: true,
+      failed: !conflicted,
       syncing: false,
       confirmed: false,
       pending: ops.length > 0,
       detail: message,
+      conflict: conflicted,
+    });
+  }
+
+  async function hasConflict() {
+    const files = await listFiles(db);
+    return files.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+  }
+
+  async function refreshStatus() {
+    const settings = await loadGithubSettings(db);
+    const configured = Boolean(settings.token && settings.repo && settings.branch);
+    if (!configured) return publish({ configured: false, syncing: false, confirmed: false });
+    const pending = (await listOps(db)).some((op) => op.repo === settings.repo && op.branch === settings.branch);
+    const conflicted = (await listFiles(db)).some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+    return publish({
+      configured: true,
+      authRequired: false,
+      conflict: conflicted,
+      offline: offline(),
+      failed: false,
+      syncing: false,
+      pending: pending && !offline(),
+      retrying: false,
+      confirmed: !conflicted && !pending && !offline(),
+      detail: '',
     });
   }
 
   return {
     noteEdited,
+    noteTrashed,
+    noteRenamed,
+    noteRestored,
+    refreshStatus,
     flushNow() {
       clock.flush();
     },

@@ -43,9 +43,10 @@ The product is one offline client. The page calls `api.github.com` directly for 
 | `github-api.js` | Repo paths, SHA push and pull, Markdown download plan | 3 |
 | `github-store.js` | Token and connection settings in IndexedDB | 3 |
 | `github-ui.js` | GitHub sheet, connect, manual push and pull | 3 |
-| `github-sync.js` | Debounced batch sync, poll, retry, keep-both conflict | 4 |
+| `github-sync.js` | Debounced batch sync, poll, retry, deletes, renames | 4–5 |
+| `conflicts.js` | Three-way merge and resolve plans | 5 |
+| `conflict-ui.js` | Conflict list and the phone resolve screen | 5 |
 | `main.js` | Boot, keyboard viewport, service worker, persistent storage | 1 |
-| Conflict merge | Three-way merge stays out until its stage | 5 |
 
 ## Storage
 
@@ -69,8 +70,9 @@ A file may also carry `baseSha` (the blob SHA last known to match GitHub) and `c
 
 Later versions add fields and stores. Do not invent a parallel place to keep a note.
 
-- Stage 3 file fields: `remoteSha` (blob SHA from the last successful push or pull) and `dirty` (local edits since that SHA). Old records stay valid if these are missing. A rename clears `remoteSha` and `baseSha` because those SHAs belonged to the old path. The new path is pushed as a new file. The old GitHub path is left in place. Local trash is not sent as a remote delete.
-- Stage 4: `baseSha`, `conflict`, and the `ops` store. A remote deletion is kept as a conflict copy rather than removing the local note. Three-way merge stays Stage 5.
+- Stage 3 file fields: `remoteSha` (blob SHA from the last successful push or pull) and `dirty` (local edits since that SHA). Old records stay valid if these are missing.
+- Stage 4: `baseSha`, `conflict`, and the `ops` store. A conflict copy is a separate file with `conflictCopy: true` and is not pushed.
+- Stage 5: `conflictAt`, `conflictReason`, `conflictRemote`, `conflictRemoteSha`, and `conflictBase` record why a note is conflicted and the GitHub text, so the resolve screen works offline. A delete or rename is an `ops` row with `kind`. A remote delete is sent only when the blob SHA still matches `baseSha`. A clean remote deletion removes the local note. A note that has never been synced is uploaded. Non-overlapping edits auto-merge. Overlapping edits open the resolve screen. After three rejected ref updates the note is a conflict instead of another silent retry.
 
 The editor status line is only local: Saving…, Saved on this device, or a save failure. The sync line is separate: Synced, Syncing, Offline, Changes pending, Conflict, Authentication required, or Sync failed. Synced is shown only after a poll or a ref update has been confirmed. Push and pull still report on their own line.
 
@@ -100,7 +102,7 @@ Image embeds follow Obsidian. `![[img.png]]`, `![[img.png|300]]`, and `![[img.pn
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in the header are the same string, `core-sample-shell-v24` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in the header are the same string, `core-sample-shell-v25` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 

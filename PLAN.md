@@ -45,7 +45,7 @@ Implemented as manual connect, download, and one-file push and pull. Stage 4's d
 
 ## Stage 4 — Automatic sync
 
-Implemented in core-sample-shell-v23. A conflict keeps both copies on the phone. Three-way merge stays in Stage 5.
+Implemented in core-sample-shell-v23. Conflict resolution is Stage 5.
 
 - Separate the local-save clock (Stage 1) from a 2–5 second sync debounce.
 - Mark notes dirty. Batch a few edits into one commit. Check the remote before writing.
@@ -56,6 +56,8 @@ Implemented in core-sample-shell-v23. A conflict keeps both copies on the phone.
 - A failed push keeps the local note and the pending operation.
 
 ## Stage 5 — Conflicts
+
+Implemented in core-sample-shell-v25. The screen is described in [docs/conflict-ui.md](docs/conflict-ui.md).
 
 - Keep base, local, and remote. Three-way merge.
 - Local-only pushes. Remote-only pulls. Non-overlapping edits auto-merge. Identical edits collapse.
