@@ -65,9 +65,21 @@ function parentDir(notePath) {
   return slash === -1 ? '' : path.slice(0, slash);
 }
 
-// `./folder` is relative to the note. Anything else is from the vault root.
+function noteFileName(notePath) {
+  const name = basename(notePath);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+// `./folder` is relative to the note. A leading slash is still vault-root
+// relative. `${noteFileName}` is the note's file name without its extension.
 export function attachmentFolderFor(notePath, setting) {
-  const raw = String(setting || '').trim().replace(/\\/g, '/');
+  const fileName = noteFileName(notePath);
+  const raw = String(setting || '')
+    .replace(/\$\{noteFileName\}/g, fileName)
+    .replace(/\$\{filename\}/g, fileName)
+    .trim()
+    .replace(/\\/g, '/');
   if (!raw) return '';
   if (raw.startsWith('./')) {
     const rest = raw.slice(2);
@@ -75,6 +87,27 @@ export function attachmentFolderFor(notePath, setting) {
     return normalizeVaultPath(dir ? `${dir}/${rest}` : rest);
   }
   return normalizeVaultPath(raw.replace(/^\/+/, ''));
+}
+
+// Paths worth requesting when the file list does not already name the image.
+// Exact, then beside the note, then the attachment folder, then folder/target.
+export function embedCandidates(link, { notePath = '', attachmentFolderPath = '' } = {}) {
+  const target = normalizeVaultPath(decodePath(link));
+  if (!target) return [];
+  const base = basename(target);
+  const noteDir = parentDir(notePath);
+  const folder = attachmentFolderFor(notePath, attachmentFolderPath);
+  const ordered = [];
+  const add = (path) => {
+    const normal = normalizeVaultPath(path);
+    if (!normal || ordered.includes(normal)) return;
+    ordered.push(normal);
+  };
+  add(target);
+  if (noteDir) add(`${noteDir}/${target}`);
+  if (folder) add(`${folder}/${base}`);
+  if (folder) add(`${folder}/${target}`);
+  return ordered;
 }
 
 export function parseSize(text) {
@@ -155,18 +188,12 @@ export function resolveEmbedPath(link, { notePath = '', paths = [], attachmentFo
     if (joined) return joined;
   }
 
-  const matches = list.filter((path) => basename(path) === base);
+  const want = base.toLowerCase();
+  const matches = list.filter((path) => basename(path).toLowerCase() === want);
   if (matches.length) {
-    matches.sort((a, b) => a.length - b.length || (a < b ? -1 : 1));
+    matches.sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
     return matches[0];
   }
-
-  // The file list is a hint. A bare name still lives in the attachment
-  // folder when that list never included the image, and a full path is
-  // requested as written.
-  if (target.includes('/')) return target;
-  if (inFolder) return inFolder;
-  if (noteDir) return normalizeVaultPath(`${noteDir}/${target}`);
   return null;
 }
 

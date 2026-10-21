@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   attachmentFolderFor,
+  embedCandidates,
   parseWikilinkImage,
   readAttachmentSetting,
   resolveEmbedPath,
@@ -57,26 +58,42 @@ test('a percent-encoded path and the attachment folder are honored', () => {
   );
 });
 
-test('a bare filename still resolves when the file list never included the image', () => {
+test('a bare filename is requested from the attachment folder when the list omitted it', () => {
   const setting = './assets/Field Notes';
   assert.equal(attachmentFolderFor('Field Notes.md', setting), 'assets/Field Notes');
   assert.equal(attachmentFolderFor('Field Notes.md', './/assets//Field Notes'), 'assets/Field Notes');
   assert.equal(attachmentFolderFor('Field Notes.md', '/assets/Field Notes'), 'assets/Field Notes');
+  assert.equal(attachmentFolderFor('Field Notes.md', './assets/${noteFileName}'), 'assets/Field Notes');
+  assert.equal(attachmentFolderFor('Meetings/Field Notes.md', 'assets/${noteFileName}'), 'assets/Field Notes');
+  assert.deepEqual(
+    embedCandidates('image-1710000000000.png', {
+      notePath: 'Field Notes.md',
+      attachmentFolderPath: setting,
+    }),
+    ['image-1710000000000.png', 'assets/Field Notes/image-1710000000000.png'],
+  );
   assert.equal(
     resolveEmbedPath('image-1710000000000.png', {
       notePath: 'Field Notes.md',
       paths: ['Field Notes.md', '.obsidian/app.json'],
       attachmentFolderPath: setting,
     }),
-    'assets/Field Notes/image-1710000000000.png',
+    null,
   );
   assert.equal(
-    resolveEmbedPath('assets/Field Notes/image-1710000000000.png', {
+    resolveEmbedPath('image-1710000000000.png', {
       notePath: 'Field Notes.md',
-      paths: [],
-      attachmentFolderPath: '',
+      paths: ['Assets/Field Notes/Image-1710000000000.PNG', 'zz/longer/image-1710000000000.png'],
+      attachmentFolderPath: setting,
     }),
-    'assets/Field Notes/image-1710000000000.png',
+    'zz/longer/image-1710000000000.png',
+  );
+  assert.equal(
+    resolveEmbedPath('n.png', {
+      notePath: 'Field Notes.md',
+      paths: ['b/n.png', 'a/n.png'],
+    }),
+    'a/n.png',
   );
 });
 

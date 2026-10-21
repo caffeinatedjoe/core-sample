@@ -1,4 +1,5 @@
 import { openDatabase } from './db.js';
+import { dropStaleVaultIndex } from './images.js';
 import { APP_BUILD } from './version.js';
 import { layoutFrame } from './viewport.js';
 import { mountApp } from './view.js';
@@ -171,6 +172,7 @@ async function main() {
   bindViewport();
   requestPersistence();
   const db = await openDatabase();
+  await dropStaleVaultIndex(db);
   const app = mountApp(document, db);
   registerWorker(() => app.flush());
   await app.start();

@@ -14,6 +14,7 @@ import {
   cleanRepo,
   cleanRoot,
   collectDownload,
+  describeAccess,
   lookupLogin,
   lookupRepository,
   pullFile,
@@ -105,6 +106,14 @@ export function mountGithub(doc, db, hooks) {
     const pendingLive = Boolean(pending && now() < pending.expiresAt);
     target.hidden = !signedIn;
     loginText.textContent = settings.login ? `Signed in as ${settings.login}` : (signedIn ? 'Signed in.' : '');
+    if (signedIn) {
+      try {
+        const access = await describeAccess(fetchImpl, settings);
+        if (access) loginText.textContent = access;
+      } catch {
+        loginText.textContent = "Couldn't reach GitHub (offline)";
+      }
+    }
     connectButton.hidden = signedIn || pendingLive;
     if (pendingLive) showPending(pending);
     const ready = signedIn && Boolean(settings.repo) && Boolean(settings.branch);

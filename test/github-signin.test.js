@@ -9,6 +9,8 @@ import {
   loadGithubSettings,
   loadPendingFlow,
   saveGithubConfig,
+  saveGithubSession,
+  saveGithubTarget,
   savePendingFlow,
 } from '../app/js/github-store.js';
 
@@ -387,4 +389,36 @@ test('copy and open uses the device page and keeps the device code out of the UR
   await until(() => nodes['github-status'].textContent === 'Sign-in was cancelled.');
   db.close();
   await deleteDatabase(name);
+});
+
+test('the github sheet names who is signed in, or that the repo cannot be read', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  await saveGithubSession(db, { token: TOKEN, login: 'octocat' });
+  await saveGithubTarget(db, { repo: 'owner/repo', branch: 'main', root: '' });
+  try {
+    const denied = page(async (url) => {
+      assert.equal(String(url).includes(TOKEN), false);
+      if (String(url) === 'https://api.github.com/user') return jsonResponse({ login: 'octocat' });
+      if (String(url) === 'https://api.github.com/repos/owner/repo') return jsonResponse({ message: 'Not Found' }, 404);
+      return jsonResponse({ message: 'nope' }, 404);
+    });
+    const deniedApp = mountGithub(denied.doc, db, { now: () => 1_000, sleep: () => Promise.resolve() });
+    await deniedApp.refresh();
+    assert.equal(denied.nodes['github-login'].textContent, 'Signed in as octocat. No access to repo');
+    assert.equal(domText(denied.nodes).includes(TOKEN), false);
+
+    const expired = page(async (url) => {
+      assert.equal(String(url).includes(TOKEN), false);
+      if (String(url) === 'https://api.github.com/user') return jsonResponse({ message: 'Bad credentials' }, 401);
+      return jsonResponse({ message: 'nope' }, 401);
+    });
+    const expiredApp = mountGithub(expired.doc, db, { now: () => 1_000, sleep: () => Promise.resolve() });
+    await expiredApp.refresh();
+    assert.equal(expired.nodes['github-login'].textContent, 'Sign in again');
+    assert.equal(domText(expired.nodes).includes(TOKEN), false);
+  } finally {
+    db.close();
+    await deleteDatabase(name);
+  }
 });

@@ -146,12 +146,12 @@ export async function fetchRawBytes(fetchImpl, { repo, path, branch, token }) {
       cache: 'no-store',
     });
   } catch {
-    const error = new Error("Couldn't download (offline)");
+    const error = new Error(githubStatusReason(0));
     error.status = 0;
     throw error;
   }
   if (!response.ok) {
-    const error = new Error(`Couldn't download (HTTP ${response.status})`);
+    const error = new Error(githubStatusReason(response.status || 0));
     error.status = response.status || 0;
     throw error;
   }
@@ -283,6 +283,13 @@ export function applyPull(local, remote) {
   };
 }
 
+export function githubStatusReason(status, { missingRepo = false } = {}) {
+  if (status === 401) return 'Sign in again';
+  if (missingRepo && status === 404) return 'No access to repo';
+  if (!status) return "Couldn't reach GitHub (offline)";
+  return `Couldn't reach GitHub (HTTP ${status})`;
+}
+
 export function readErrorMessage(status, bodyText, secrets) {
   let message = `GitHub returned ${status}.`;
   try {
@@ -390,10 +397,40 @@ export async function relayPost(fetchImpl, relayUrl, which, payload, secrets = [
 
 export async function lookupRepository(fetchImpl, { repo, token }) {
   const result = await githubRequest(fetchImpl, repoUrl(repo), { token, secrets: [token] });
-  if (!result.ok) throw new Error(result.message);
+  if (!result.ok) {
+    const error = new Error(githubStatusReason(result.status, { missingRepo: true }));
+    error.status = result.status || 0;
+    throw error;
+  }
   const branch = result.body && result.body.default_branch;
   if (typeof branch !== 'string') throw new Error('GitHub did not name a branch.');
   return { defaultBranch: cleanBranch(branch) };
+}
+
+// Plain words for the GitHub sheet. The token is never part of the text.
+export async function describeAccess(fetchImpl, { token, repo }) {
+  if (!token) return '';
+  let user;
+  try {
+    user = await githubRequest(fetchImpl, 'https://api.github.com/user', { token, secrets: [token] });
+  } catch {
+    return githubStatusReason(0);
+  }
+  if (user.status === 401) return githubStatusReason(401);
+  if (!user.ok) return githubStatusReason(user.status);
+  const login = user.body && user.body.login;
+  const who = typeof login === 'string' && /^[A-Za-z0-9-]+$/.test(login) ? `Signed in as ${login}` : 'Signed in.';
+  if (!repo) return who;
+  let found;
+  try {
+    found = await githubRequest(fetchImpl, repoUrl(repo), { token, secrets: [token] });
+  } catch {
+    return `${who}. ${githubStatusReason(0)}`;
+  }
+  if (found.status === 401) return githubStatusReason(401);
+  if (found.status === 404) return `${who}. ${githubStatusReason(404, { missingRepo: true })}`;
+  if (!found.ok) return `${who}. ${githubStatusReason(found.status)}`;
+  return who;
 }
 
 export async function lookupLogin(fetchImpl, token) {
