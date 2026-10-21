@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
+  datedCopyPath,
   decideAll,
   formatWhen,
   hunksForConflict,
@@ -76,6 +77,10 @@ test('the conflict list names legacy notes and sibling copies', () => {
   );
   const older = new Date(whenDate.getFullYear() - 1, 0, 5, 9, 5, 0, 0);
   assert.equal(formatWhen(older.getTime(), when), `Jan 5, ${older.getFullYear()}, 9:05 AM`);
+  const copyWhen = new Date('2026-10-21T19:18:00Z');
+  const pad = (n) => String(n).padStart(2, '0');
+  const localStamp = `${copyWhen.getFullYear()}-${pad(copyWhen.getMonth() + 1)}-${pad(copyWhen.getDate())} ${pad(copyWhen.getHours())}${pad(copyWhen.getMinutes())}`;
+  assert.equal(datedCopyPath('Field Notes.md', 'backup', copyWhen), `Field Notes (backup ${localStamp}).md`);
   assert.equal(reasonText('both'), 'Edited on this phone and on GitHub');
   const items = listConflicts([
     {
@@ -155,6 +160,7 @@ test('resolve plans keep a backup of the discarded side', () => {
   const original = separate.put.find((item) => item.path === file.path);
   assert.equal(phone.content, 'phone\n');
   assert.equal(phone.dirty, true);
+  assert.equal(phone.origin, 'user');
   assert.equal(original.content, 'github\n');
   assert.equal(original.dirty, false);
   assert.equal(original.conflict, false);

@@ -168,15 +168,27 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
     const origin = `http://127.0.0.1:${port}/`;
     await page.goto(origin, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => navigator.serviceWorker?.controller, null, { timeout: 30000 });
-    // Activate navigates the open page once. Wait that out, then load again
-    // so the seed is not torn down mid-write.
-    await page.waitForLoadState('domcontentloaded').catch(() => {});
-    await page.goto(origin, { waitUntil: 'domcontentloaded' });
+    // Activate navigates once, sometimes with ?shell=<build>. Wait that out
+    // so the next goto is not interrupted mid-flight.
+    await page.waitForFunction(() => {
+      const url = new URL(window.location.href);
+      return !url.searchParams.has('shell')
+        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v26';
+    }, null, { timeout: 30000 }).catch(() => {});
+    try {
+      await page.goto(origin, { waitUntil: 'domcontentloaded' });
+    } catch (error) {
+      if (!String(error).includes('interrupted by another navigation')) throw error;
+      await page.waitForLoadState('domcontentloaded');
+      if (new URL(page.url()).searchParams.has('shell')) {
+        await page.goto(origin, { waitUntil: 'domcontentloaded' });
+      }
+    }
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
       return Boolean(navigator.serviceWorker?.controller)
         && status.includes('Saved')
-        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v25';
+        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v26';
     });
     await page.evaluate(async ({ note, image, link, now }) => {
       const db = await new Promise((resolve, reject) => {

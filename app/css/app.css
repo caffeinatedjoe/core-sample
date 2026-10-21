@@ -1152,9 +1152,25 @@ button.sync-status {
 .conflict-step-label,
 .conflict-remaining,
 .conflict-section-label,
-.conflict-empty {
+.conflict-empty,
+.conflict-offer-text {
   margin: 0.25rem 0;
   font-size: 1rem;
+}
+
+.conflict-offer {
+  margin: 0 0 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.conflict-offer-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 
 .hunk {
