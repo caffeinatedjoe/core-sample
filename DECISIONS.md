@@ -75,7 +75,9 @@ Remote sync will use its own 2–5 second debounce. That clock must never be wha
 
 `checklist.js` owns task parsing and fenced-code rules. The renderer uses those same helpers, so a box inside a code fence is neither a button nor a toggle target.
 
-Toggling replaces one mark character (` ` or `x` / `X`). The string length does not change, so textarea selection offsets stay put. The control is a `button type="button"`. The handler does not focus the textarea, so the keyboard stays down. Preview scroll position is restored after the re-render.
+Toggling replaces one mark character (` ` or `x` / `X`). The string length does not change, so textarea selection offsets stay put. Leading spaces and tabs stay byte for byte, including when the same words appear on more than one line: the tap uses the task index, not the text. The control is a `button type="button"`. The handler does not focus the textarea, so the keyboard stays down. Preview scroll position is restored after the re-render.
+
+Nested lists follow the source indent. A tab is four columns, the same step as four spaces. Two spaces is a shallower step, and a tab plus four spaces is one step deeper than the tab alone. A task is a checkbox with no bullet; its text sits beside the box, and a wrapped line stays under the text. Child items are real nested lists, so they indent from that item whether the parent is a task, a bullet, or a number. A line that is only more indented, and not itself an item, stays inside that item. `- ## Heading` is a heading inside the list item, and the tasks under it stay nested there.
 
 Wikilinks: `[[target]]`, `[[target|alias]]`, `[[target#heading]]`, `[[target#heading|alias]]`. A tap resolves against local notes: full path, otherwise a unique filename, case-insensitive. One match opens that note and scrolls to the heading when there is one. No match creates a note with that name and opens it, which is the Obsidian behavior. More than one match does not guess. The control is a `<button type="button" class="wikilink">`, not an `<a href="#...">`. In an installed iOS app a fragment link with no matching id does nothing, and iOS does not reliably treat that tap as an in-app action.
 
@@ -85,7 +87,7 @@ External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noo
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in the header are the same string, `core-sample-shell-v13` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in the header are the same string, `core-sample-shell-v14` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 

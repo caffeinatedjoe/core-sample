@@ -281,37 +281,120 @@ a:focus-visible {
   vertical-align: baseline;
 }
 
+.preview {
+  --list-marker: 1.5em;
+  --list-step: 0.45em;
+}
+
 .preview ul,
 .preview ol {
   margin: 0.4em 0;
   padding-left: 1.35em;
 }
 
+.preview ul.md-list,
+.preview ol.md-list {
+  margin: 0.3em 0;
+  padding-left: 0;
+  list-style: none;
+}
+
 .preview li { margin: 0.2em 0; }
 
-.preview li.task {
+.preview li.task,
+.preview li.bullet,
+.preview li.ordered {
   list-style: none;
+  margin: 0.22em 0 0.22em calc(var(--cols, 0) * var(--list-step));
+}
+
+.task-line,
+.bullet-line {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
-  margin-left: calc(-1.35em + var(--indent, 0) * 0.65em);
 }
 
-.preview li:not(.task) {
-  margin-left: calc(var(--indent, 0) * 0.65em);
+.task-line > :last-child,
+.bullet-line > :last-child {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
+.bullet-line > h1,
+.bullet-line > h2,
+.bullet-line > h3,
+.bullet-line > h4,
+.bullet-line > h5,
+.bullet-line > h6,
+.task-line > h1,
+.task-line > h2,
+.task-line > h3,
+.task-line > h4,
+.task-line > h5,
+.task-line > h6 {
+  margin: 0;
+}
+
+.item-marker,
 .task-toggle {
-  flex: none;
-  width: 44px;
-  height: 44px;
-  margin: -10px 0 -10px -10px;
+  flex: 0 0 var(--list-marker);
+  width: var(--list-marker);
+  height: 1.45em;
   display: grid;
   place-items: center;
+  position: relative;
+}
+
+.item-marker::before {
+  content: "";
+  width: 0.34em;
+  height: 0.34em;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.item-number {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-basis: auto;
+  width: auto;
+  min-width: var(--list-marker);
+  padding-right: 0.35em;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.92em;
+}
+
+.item-number::before { content: none; }
+
+.item-body {
+  padding-left: var(--list-marker);
+}
+
+.preview .item-body > ul.md-list,
+.preview .item-body > ol.md-list {
+  margin-left: calc(var(--list-marker) * -1);
+}
+
+.item-body > p { margin: 0.3em 0; }
+
+.task-toggle {
+  margin: 0;
   background: transparent;
   border: 0;
   padding: 0;
   color: var(--accent-ink);
+}
+
+.task-toggle::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }
 
 .task-box {

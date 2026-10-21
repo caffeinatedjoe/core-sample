@@ -18,9 +18,11 @@ export function closesFence(line, open) {
   return fence.char === open.char && fence.count >= open.count;
 }
 
-// `- [ ]`, `* [x]`, `+ [X]`, with the original gap preserved.
+// `- [ ]`, `* [x]`, `+ [X]`. Leading spaces and tabs are kept as-is so a
+// nested vault line toggles without the indent changing. The mark is the
+// single character inside the brackets.
 export function parseTask(line) {
-  const match = /^( {0,3})([-*+])(\s+)\[([ xX])\](.*)$/.exec(line);
+  const match = /^([ \t]*)([-*+])([ \t]+)\[([ xX])\](.*)$/.exec(line);
   if (!match) return null;
   const markIndex = match[1].length + match[2].length + match[3].length + 1;
   return {

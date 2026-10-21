@@ -31,6 +31,38 @@ test('preserves a wide gap between the bullet and the box', () => {
   assert.equal(toggleChecklist(src, 0), '-  [x] spaced');
 });
 
+test('flips the asked nested line when the words are identical', () => {
+  const src = '- [ ] item text\n\t- [ ] item text\n- [ ] item text\n';
+  assert.equal(
+    toggleChecklist(src, 1),
+    '- [ ] item text\n\t- [x] item text\n- [ ] item text\n',
+  );
+  assert.equal(
+    toggleChecklist(src, 0),
+    '- [x] item text\n\t- [ ] item text\n- [ ] item text\n',
+  );
+  assert.equal(
+    toggleChecklist(src, 2),
+    '- [ ] item text\n\t- [ ] item text\n- [x] item text\n',
+  );
+});
+
+test('keeps a tab-and-spaces indent byte for byte', () => {
+  const src = '- item text\n\t    - [ ] item text\n\t- [x] item text\n';
+  const next = toggleChecklist(src, 0);
+  assert.equal(next, '- item text\n\t    - [x] item text\n\t- [x] item text\n');
+  assert.equal(next.split('\n')[1].slice(0, 5), '\t    ');
+  const back = toggleChecklist(next, 1);
+  assert.equal(back, '- item text\n\t    - [x] item text\n\t- [ ] item text\n');
+  assert.equal(back.length, src.length);
+});
+
+test('toggles an empty nested box without eating the indent', () => {
+  const src = '- [ ] \n\t- [ ]\n';
+  assert.equal(toggleChecklist(src, 1), '- [ ] \n\t- [x]\n');
+  assert.deepEqual(listTasks(src).map((task) => task.line), [0, 1]);
+});
+
 test('does not treat a tilde fence as closed by backticks', () => {
   const src = '~~~\n- [ ] inside\n```\n- [ ] still inside\n~~~\n- [ ] outside\n';
   assert.deepEqual(listTasks(src).map((task) => task.text), ['outside']);
