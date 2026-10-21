@@ -32,6 +32,7 @@ import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, vaultIndexFor } from './images.js';
+import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
 
@@ -110,12 +111,20 @@ export function mountApp(doc, db) {
 
   let embedTicket = 0;
   const embedUrls = new Set();
-  const viewer = doc.getElementById('image-viewer');
-  const viewerImg = doc.getElementById('image-viewer-img');
+  const viewerUrls = new Set();
+  const photos = createImageViewer(doc, doc.getElementById('image-viewer'), {
+    onClose() {
+      for (const url of viewerUrls) {
+        const shown = [...preview.querySelectorAll('img')].some((img) => img.getAttribute('src') === url);
+        if (!shown) URL.revokeObjectURL(url);
+      }
+      viewerUrls.clear();
+    },
+  });
 
   function revokeEmbed(url) {
     if (!url || !embedUrls.has(url)) return;
-    if (viewerImg && viewerImg.getAttribute('src') === url && viewer && !viewer.hidden) return;
+    if (photos.isUsing(url)) return;
     embedUrls.delete(url);
     URL.revokeObjectURL(url);
   }
@@ -125,23 +134,57 @@ export function mountApp(doc, db) {
   }
 
   function closeViewer() {
-    if (!viewer || !viewerImg) return;
-    const src = viewerImg.getAttribute('src') || '';
-    viewer.hidden = true;
-    viewerImg.removeAttribute('src');
-    viewerImg.alt = '';
-    if (src.startsWith('blob:') && embedUrls.has(src)) {
-      const stillShown = [...preview.querySelectorAll('.embed-image')].some((img) => img.getAttribute('src') === src);
-      if (!stillShown) revokeEmbed(src);
-    }
+    photos.close({ animate: false, restoreFocus: false });
   }
 
-  function openViewer(src, alt) {
-    if (!viewer || !viewerImg || !src) return;
-    if (!/^(blob:|https:|data:image\/)/i.test(src)) return;
-    viewerImg.src = src;
-    viewerImg.alt = alt || '';
-    viewer.hidden = false;
+  async function loadEmbedSrc(embed) {
+    let settings = { token: '', repo: '', branch: '', root: '' };
+    try {
+      settings = await loadGithubSettings(db);
+    } catch {
+      settings = { token: '', repo: '', branch: '', root: '' };
+    }
+    const index = await vaultIndexFor(db, settings, globalThis.fetch.bind(globalThis));
+    const result = await loadEmbedBlob(db, {
+      link: embed,
+      notePath: current && current.path ? current.path : '',
+      paths: index.paths || [],
+      attachmentFolderPath: index.attachmentFolderPath || '',
+      repo: settings.repo,
+      branch: index.branch || settings.branch,
+      root: settings.root,
+      token: settings.token,
+      fetchImpl: globalThis.fetch.bind(globalThis),
+    });
+    if (result.status !== 'ready' || !result.blob) return '';
+    const url = URL.createObjectURL(result.blob);
+    if (!photos.isOpen()) {
+      URL.revokeObjectURL(url);
+      return '';
+    }
+    viewerUrls.add(url);
+    return url;
+  }
+
+  function openViewer(target) {
+    const slides = [];
+    let start = 0;
+    for (const node of preview.querySelectorAll('.embed')) {
+      const img = node.querySelector('img.embed-image');
+      const embed = node.dataset.embed || '';
+      const src = img?.getAttribute('src') || '';
+      const usable = /^(blob:|https:|data:image\/)/i.test(src);
+      if (!usable && !embed) continue;
+      if (img && (img === target || img.contains(target))) start = slides.length;
+      slides.push({
+        src: usable ? src : '',
+        alt: img?.getAttribute('alt') || node.querySelector('.embed-fallback')?.textContent || '',
+        thumb: img || node,
+        load: usable ? null : () => loadEmbedSrc(embed),
+      });
+    }
+    if (!slides.length) return;
+    photos.open({ slides, index: start, scrollEl: preview });
   }
 
   function paintPreview() {
@@ -224,16 +267,6 @@ export function mountApp(doc, db) {
       node.replaceChildren(made.img);
       bindImageErrors(node);
     }
-  }
-
-  if (viewer) {
-    viewer.addEventListener('click', (event) => {
-      const closer = event.target && event.target.id === 'image-viewer-close';
-      if (event.target === viewer || closer) closeViewer();
-    });
-    doc.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !viewer.hidden) closeViewer();
-    });
   }
 
   function showNote(note, { heading = '' } = {}) {
@@ -967,7 +1000,7 @@ export function mountApp(doc, db) {
     }
 
     if (plan.type === 'image') {
-      openViewer(plan.src, plan.alt);
+      openViewer(event.target);
       return;
     }
 

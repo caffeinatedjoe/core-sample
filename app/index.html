@@ -143,9 +143,11 @@
       </div>
     </div>
     <p id="boot-error" class="boot-error" hidden></p>
-    <div id="image-viewer" class="image-viewer" hidden>
+    <div id="image-viewer" class="image-viewer" hidden role="dialog" aria-modal="true" aria-label="Photo">
+      <div class="image-viewer-backdrop"></div>
+      <div class="image-viewer-stage"></div>
       <button type="button" id="image-viewer-close" class="image-viewer-close">Close</button>
-      <img id="image-viewer-img" alt="">
+      <p id="image-viewer-count" class="image-viewer-count" aria-live="polite" hidden></p>
     </div>
   </div>
   <noscript>
