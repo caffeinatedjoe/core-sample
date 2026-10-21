@@ -27,6 +27,17 @@ export function planPreviewClick(target) {
     };
   }
 
+  const image = origin.closest('.embed-image');
+  if (image) {
+    const src = image.getAttribute('src') || '';
+    return {
+      type: 'image',
+      preventDefault: true,
+      src,
+      alt: image.getAttribute('alt') || '',
+    };
+  }
+
   const anchor = origin.closest('a[href]');
   if (anchor) {
     const href = anchor.getAttribute('href') || '';

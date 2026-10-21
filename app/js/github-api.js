@@ -106,6 +106,53 @@ export function githubHeaders(token) {
   };
 }
 
+export function listVaultFiles(treeResponse, root) {
+  if (!treeResponse || !Array.isArray(treeResponse.tree)) {
+    throw new Error('GitHub did not list that branch.');
+  }
+  if (treeResponse.truncated) {
+    throw new Error('That repository listing was cut off.');
+  }
+  const folder = cleanRoot(root);
+  const paths = [];
+  for (const item of treeResponse.tree) {
+    if (!item || item.type !== 'blob' || typeof item.path !== 'string') continue;
+    let local = item.path;
+    if (folder) {
+      const prefix = `${folder}/`;
+      if (!item.path.startsWith(prefix)) continue;
+      local = item.path.slice(prefix.length);
+    }
+    if (!local || local.split('/').some((part) => !part || part === '.' || part === '..')) continue;
+    paths.push(local);
+  }
+  paths.sort((a, b) => a.localeCompare(b));
+  return paths;
+}
+
+export async function fetchRawBytes(fetchImpl, { repo, path, branch, token }) {
+  const url = contentsUrl(repo, path, branch);
+  if (token && String(url).includes(token)) throw new Error('The request was refused.');
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.github.raw',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'core-sample',
+      },
+      cache: 'no-store',
+    });
+  } catch {
+    throw new Error('GitHub could not be reached.');
+  }
+  if (!response.ok) throw new Error('That file could not be read.');
+  const bytes = await response.arrayBuffer();
+  return { bytes, url };
+}
+
 export function selectMarkdown(treeResponse, root) {
   if (!treeResponse || !Array.isArray(treeResponse.tree)) {
     throw new Error('GitHub did not list that branch.');

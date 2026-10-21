@@ -5,10 +5,11 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { planPreviewClick } from '../app/js/preview-tap.js';
 
-function element(tag, { dataset = {}, attrs = {}, parent = null } = {}) {
+function element(tag, { dataset = {}, attrs = {}, className = '', parent = null } = {}) {
   return {
     nodeType: 1,
     tag,
+    className,
     dataset,
     parentElement: parent,
     getAttribute(name) {
@@ -28,6 +29,7 @@ function element(tag, { dataset = {}, attrs = {}, parent = null } = {}) {
 function matches(node, selector) {
   if (selector === '[data-wikilink]') return Object.prototype.hasOwnProperty.call(node.dataset, 'wikilink');
   if (selector === '[data-task-index]') return Object.prototype.hasOwnProperty.call(node.dataset, 'taskIndex');
+  if (selector === '.embed-image') return node.className === 'embed-image';
   if (selector === 'a[href]') return node.tag === 'a' && node.getAttribute('href');
   return false;
 }
@@ -41,6 +43,16 @@ test('a wikilink tap is handled in the app and does not follow a URL', () => {
     preventDefault: true,
     target: 'Another note',
     heading: 'Start',
+  });
+});
+
+test('an image tap is a viewer, not a navigation', () => {
+  const img = element('img', { className: 'embed-image', attrs: { src: 'blob:local', alt: 'img.png' } });
+  assert.deepEqual(planPreviewClick(img), {
+    type: 'image',
+    preventDefault: true,
+    src: 'blob:local',
+    alt: 'img.png',
   });
 });
 

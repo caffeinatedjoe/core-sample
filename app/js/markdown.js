@@ -1,4 +1,5 @@
 import { closesFence, parseFenceLine, parseTask } from './checklist.js';
+import { basename, decodePath, imageKind, normalizeVaultPath, parseSize, parseWikilinkImage } from './embeds.js';
 
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -50,7 +51,7 @@ function isSafeUrl(url) {
 
 function nextSpecial(text, index) {
   const rest = text.slice(index);
-  const found = rest.search(/[`[\*_]/);
+  const found = rest.search(/[`[!*_]/);
   if (found === -1) return text.length;
   return index + found;
 }
@@ -67,6 +68,18 @@ function renderInline(text) {
         index = end + 1;
         continue;
       }
+    }
+
+    if (source[index] === '!') {
+      const image = matchImage(source, index);
+      if (image) {
+        html += image.html;
+        index = image.next;
+        continue;
+      }
+      html += '!';
+      index += 1;
+      continue;
     }
 
     if (source.startsWith('[[', index)) {
@@ -141,6 +154,96 @@ function findCloser(text, index, marker) {
   }
   if (marker.length === 1 && text[end - 1] === ' ') return -1;
   return end;
+}
+
+function imageAttrs(width, height) {
+  const parts = [];
+  if (width) parts.push(`width:${Number(width)}px`);
+  if (height) parts.push(`height:${Number(height)}px`);
+  return parts.length ? ` style="${parts.join(';')}"` : '';
+}
+
+function fallbackEmbed(name, { width = null, height = null, embed = '' } = {}) {
+  const label = escapeHtml(basename(name) || name || 'image');
+  if (!embed) return `<span class="embed"><span class="embed-fallback">${label}</span></span>`;
+  const widthAttr = width ? ` data-width="${width}"` : '';
+  const heightAttr = height ? ` data-height="${height}"` : '';
+  return `<span class="embed" data-embed="${escapeHtml(embed)}"${widthAttr}${heightAttr}><span class="embed-fallback">${label}</span></span>`;
+}
+
+function remoteImage(src, alt, width, height) {
+  return `<span class="embed"><img class="embed-image" alt="${escapeHtml(alt)}" src="${escapeHtml(src)}"${imageAttrs(width, height)}></span>`;
+}
+
+function matchImage(text, index) {
+  if (text[index] !== '!' || text[index + 1] !== '[') return null;
+  if (text.startsWith('![[', index)) {
+    const end = text.indexOf(']]', index + 3);
+    if (end === -1) return null;
+    const spec = parseWikilinkImage(text.slice(index + 3, end));
+    if (!spec) return null;
+    if (spec.kind === 'unsupported') return { html: fallbackEmbed(spec.target), next: end + 2 };
+    return {
+      html: fallbackEmbed(spec.target, { width: spec.width, height: spec.height, embed: spec.target }),
+      next: end + 2,
+    };
+  }
+  const parsed = readMarkdownImage(text, index);
+  if (!parsed) return null;
+  const size = parseSize(parsed.alt);
+  const width = size ? size.width : null;
+  const height = size ? size.height : null;
+  const alt = size ? basename(parsed.dest) : parsed.alt;
+  const dest = parsed.dest.trim();
+  if (/^https:\/\//i.test(dest) && isSafeUrl(dest)) {
+    return { html: remoteImage(dest, alt || basename(dest), width, height), next: parsed.next };
+  }
+  if (/^data:image\/(?:png|jpe?g|gif|webp|svg\+xml)[;,]/i.test(dest)) {
+    return { html: remoteImage(dest, alt || 'image', width, height), next: parsed.next };
+  }
+  if (/^[a-z][a-z+.-]*:/i.test(dest)) {
+    return { html: fallbackEmbed(parsed.alt || 'image'), next: parsed.next };
+  }
+  const link = normalizeVaultPath(decodePath(dest.split(/\s+/)[0]));
+  const kind = link ? imageKind(link) : '';
+  if (kind === 'raster' || kind === 'svg') {
+    return {
+      html: fallbackEmbed(link, { width, height, embed: link }),
+      next: parsed.next,
+    };
+  }
+  if (link && imageKind(link) === 'unsupported') {
+    return { html: fallbackEmbed(basename(link) || alt), next: parsed.next };
+  }
+  return { html: fallbackEmbed(alt || basename(dest) || 'image'), next: parsed.next };
+}
+
+function readMarkdownImage(text, index) {
+  if (!text.startsWith('![', index)) return null;
+  let cursor = index + 2;
+  let depth = 1;
+  while (cursor < text.length && depth > 0) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === '[') depth += 1;
+    else if (text[cursor] === ']') depth -= 1;
+    if (depth === 0) break;
+    cursor += 1;
+  }
+  if (depth !== 0 || text[cursor + 1] !== '(') return null;
+  const alt = text.slice(index + 2, cursor);
+  let end = cursor + 2;
+  let parens = 1;
+  while (end < text.length && parens > 0) {
+    if (text[end] === '(') parens += 1;
+    else if (text[end] === ')') parens -= 1;
+    if (parens === 0) break;
+    end += 1;
+  }
+  if (parens !== 0) return null;
+  return { alt, dest: text.slice(cursor + 2, end).trim(), next: end + 1 };
 }
 
 function matchLink(text, index) {

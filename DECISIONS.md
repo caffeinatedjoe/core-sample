@@ -26,6 +26,8 @@ The product is one offline client. The page calls `api.github.com` directly for 
 | --- | --- | --- |
 | `checklist.js` | Task markers, fence rules, toggle | 1 |
 | `markdown.js` | Render, escape, wikilink parse | 1 |
+| `embeds.js` | Obsidian image paths, size syntax, attachment folder | 3 |
+| `images.js` | Raw GitHub fetch, IndexedDB blob cache, object URLs | 3 |
 | `preview-tap.js` | What a preview tap may preventDefault | 1 |
 | `notes.js` | Titles, paths, wikilink resolution, welcome note, which note to reopen | 1 |
 | `db.js` | IndexedDB | 1 |
@@ -44,7 +46,7 @@ The product is one offline client. The page calls `api.github.com` directly for 
 
 ## Storage
 
-Database name `core-sample`, version 1.
+Database name `core-sample`, version 2.
 
 `files`, keyed by repo-relative path (`Welcome.md`, later `folder/note.md`):
 
@@ -54,7 +56,9 @@ Folders are not records. The tree is the set of paths, plus a `folders` meta lis
 
 A trashed note stays in `files` with `trashedAt` set. The text is unchanged. Restore clears `trashedAt`. Empty Trash is a separate confirmed action and is the only one that deletes note records. Old records without `trashedAt` are live notes.
 
-`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`, `seeded`, and the GitHub connection keys (`githubToken`, `githubClientId`, `githubRelay`, `githubRepo`, `githubBranch`, `githubRoot`, `githubLogin`).
+`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`, `seeded`, the GitHub connection keys (`githubToken`, `githubClientId`, `githubRelay`, `githubRepo`, `githubBranch`, `githubRoot`, `githubLogin`), and `githubVaultIndex` (the path list and attachment folder used to resolve images).
+
+`images`, keyed by repository plus path, holds one cached attachment: `blob`, `bytes`, `type`, and `viewedAt`. Version 2 creates this store when it is missing and does not delete `files` or `meta`.
 
 Later versions add fields and stores. Do not invent a parallel place to keep a note.
 
@@ -81,13 +85,15 @@ Nested lists follow the source indent. A tab is four columns, the same step as f
 
 Wikilinks: `[[target]]`, `[[target|alias]]`, `[[target#heading]]`, `[[target#heading|alias]]`. A tap resolves against local notes: full path, otherwise a unique filename, case-insensitive. One match opens that note and scrolls to the heading when there is one. No match creates a note with that name and opens it, which is the Obsidian behavior. More than one match does not guess. The control is a `<button type="button" class="wikilink">`, not an `<a href="#...">`. In an installed iOS app a fragment link with no matching id does nothing, and iOS does not reliably treat that tap as an in-app action.
 
-External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noopener"` and no `target`. The preview click handler does not call `preventDefault` on them. iOS standalone ignores `target="_blank"` and `window.open` (the new browsing context is dropped, so the tap looks dead). A normal navigation is what that WebKit opens in its in-app Safari view. `javascript:` is not linked. Relative markdown links stay inside the app and are resolved like wikilinks, so removing `target="_blank"` cannot navigate the installed app away from itself. Remote images are rendered as their alt text so the preview does not make third-party requests.
+External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noopener"` and no `target`. The preview click handler does not call `preventDefault` on them. iOS standalone ignores `target="_blank"` and `window.open` (the new browsing context is dropped, so the tap looks dead). A normal navigation is what that WebKit opens in its in-app Safari view. `javascript:` is not linked. Relative markdown links stay inside the app and are resolved like wikilinks, so removing `target="_blank"` cannot navigate the installed app away from itself.
+
+Image embeds follow Obsidian. `![[img.png]]`, `![[img.png|300]]`, and `![[img.png|300x200]]` are images, as is `![alt](path)`. A link resolves to an exact vault path, then a path relative to the note, then a file in the attachment folder from `.obsidian/app.json` (`./` is relative to the note), then the shortest path whose filename matches. `https` images and `data:image/*` URIs render directly. Other image files are fetched on first view from the GitHub contents API with `Accept: application/vnd.github.raw`. The token is only an Authorization header. Bytes are cached as blobs in IndexedDB (database version 2 adds an `images` store and does not delete notes) up to 32 MB, least recently viewed first, and shown with object URLs that are revoked when the preview is replaced. SVG is an `<img>` pointed at that blob, never markup in the page. HEIC is a named placeholder because Safari will not paint it in an `<img>`. A missing file is the same kind of placeholder, with the file name and no broken-image icon. Tapping a loaded image opens a full-screen viewer. Nothing in this path writes to the repository.
 
 ## App shell and subpath
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in the header are the same string, `core-sample-shell-v14` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in the header are the same string, `core-sample-shell-v15` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -111,7 +117,7 @@ Stage 3 signs in with GitHub's device flow. The browser cannot call `https://git
 
 The client id and the relay origin are typed into Notes → GitHub. They start empty. The token is written only to IndexedDB. A pending device flow is stored there too (`deviceCode`, `userCode`, `interval`, `expiresAt`) so signing in can resume after iOS suspends or reloads the installed app. The device code is not shown, logged, or put in a URL. The user code is shown on screen. Repo, branch, and notes-root calls go to `api.github.com` with the token in an `Authorization` header, never in the URL.
 
-OAuth Apps have no contents-only scope. `repo` is the smallest scope that can read and write a private repository. `public_repo` cannot see a private repo. The scope does not add `workflow`, `admin`, or `delete_repo`. The app still only lists a tree, reads one file, and creates or updates one file. It does not force-push, and it writes only to the repo and branch saved in Settings.
+OAuth Apps have no contents-only scope. `repo` is the smallest scope that can read and write a private repository. `public_repo` cannot see a private repo. The scope does not add `workflow`, `admin`, or `delete_repo`. The app lists a tree, reads Markdown and attachment bytes, and creates or updates one Markdown file. It does not write attachment files. It does not force-push, and it writes only to the repo and branch saved in Settings.
 
 The intended repository is the private vault named in SPEC.md. The app does not fill that name in. The notes folder defaults to the repo root when the field is blank. Paths on the phone are relative to that folder.
 
