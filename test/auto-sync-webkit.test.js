@@ -107,16 +107,17 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       await json(route, 200, { login: 'octocat' });
       return;
     }
-    if (url.includes('/git/ref/heads/main') && method !== 'PATCH') {
+    const path = new URL(url).pathname;
+    if (path === '/repos/owner/repo/git/ref/heads/main' && method === 'GET') {
       const etag = `"${state.head}"`;
       await json(route, 200, { ref: 'refs/heads/main', object: { sha: state.head, type: 'commit' } }, { etag });
       return;
     }
-    if (url.includes('/git/commits/') && method === 'GET') {
+    if (/^\/repos\/owner\/repo\/git\/commits\/[^/]+$/.test(path) && method === 'GET') {
       await json(route, 200, { sha: state.head, tree: { sha: state.tree } });
       return;
     }
-    if (url.includes('/git/trees/') && method === 'GET') {
+    if (/^\/repos\/owner\/repo\/git\/trees\/[^/]+$/.test(path) && method === 'GET') {
       await json(route, 200, {
         sha: state.tree,
         truncated: false,
@@ -124,8 +125,8 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       });
       return;
     }
-    if (url.includes('/git/blobs/') && method === 'GET') {
-      const sha = decodeURIComponent(url.split('/').pop());
+    if (/^\/repos\/owner\/repo\/git\/blobs\/[^/]+$/.test(path) && method === 'GET') {
+      const sha = decodeURIComponent(path.split('/').pop());
       const text = state.blobs.get(sha);
       if (text == null) {
         await json(route, 404, { message: 'Not Found' });
@@ -134,14 +135,14 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       await json(route, 200, { sha, encoding: 'base64', content: encodeUtf8Base64(text) });
       return;
     }
-    if (url.endsWith('/git/blobs') && method === 'POST') {
+    if (path === '/repos/owner/repo/git/blobs' && method === 'POST') {
       const body = request.postDataJSON();
       const sha = `blob-new-${state.blobs.size + 1}`;
       state.blobs.set(sha, body.content);
       await json(route, 201, { sha });
       return;
     }
-    if (url.endsWith('/git/trees') && method === 'POST') {
+    if (path === '/repos/owner/repo/git/trees' && method === 'POST') {
       const body = request.postDataJSON();
       const tree = `tree-${state.blobs.size}`;
       state.pendingTree = {
@@ -151,14 +152,14 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       await json(route, 201, { sha: tree });
       return;
     }
-    if (url.endsWith('/git/commits') && method === 'POST') {
+    if (path === '/repos/owner/repo/git/commits' && method === 'POST') {
       const body = request.postDataJSON();
       if (body.force === true) throw new Error('force commit');
       state.commit = `commit-${commits + 2}`;
       await json(route, 201, { sha: state.commit });
       return;
     }
-    if (url.includes('/git/ref/heads/main') && method === 'PATCH') {
+    if (path === '/repos/owner/repo/git/refs/heads/main' && method === 'PATCH') {
       patches += 1;
       const body = request.postDataJSON();
       if (body.force !== false) throw new Error('ref update must not force');
@@ -186,7 +187,7 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v23';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v24';
     });
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {
@@ -333,6 +334,8 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     assert.equal(sibling.content, 'Theirs\n');
     assert.equal(commits, 2);
     assert.equal(urls.some((url) => url.includes('gho_')), false);
+    assert.equal(urls.some((line) => line.startsWith('PATCH ') && line.includes('/git/refs/heads/main')), true);
+    assert.equal(urls.some((line) => line.startsWith('PATCH ') && line.includes('/git/ref/heads/')), false);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
