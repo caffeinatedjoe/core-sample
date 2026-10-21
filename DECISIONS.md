@@ -85,7 +85,7 @@ External `http:`, `https:`, and `mailto:` links are plain anchors with `rel="noo
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in the header are the same string, `core-sample-shell-v12` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in the header are the same string, `core-sample-shell-v13` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -107,7 +107,7 @@ The current icon source is `app/icons/source/core-sample-icon-source-v2.jpg`. Th
 
 Stage 3 signs in with GitHub's device flow. The browser cannot call `https://github.com/login/device/code` or `https://github.com/login/oauth/access_token` directly, so `worker/` forwards only those two URLs and only for `https://joecoffey.me`. The Worker has no client secret and does not log the body. `wrangler.toml` has no secrets. Joe deploys it; this repo does not.
 
-The client id and the relay origin are typed into Notes → GitHub. They start empty. The token is written only to IndexedDB. The device code stays in memory for the poll and is never shown or stored. Repo, branch, and notes-root calls go to `api.github.com` with the token in an `Authorization` header, never in the URL.
+The client id and the relay origin are typed into Notes → GitHub. They start empty. The token is written only to IndexedDB. A pending device flow is stored there too (`deviceCode`, `userCode`, `interval`, `expiresAt`) so signing in can resume after iOS suspends or reloads the installed app. The device code is not shown, logged, or put in a URL. The user code is shown on screen. Repo, branch, and notes-root calls go to `api.github.com` with the token in an `Authorization` header, never in the URL.
 
 OAuth Apps have no contents-only scope. `repo` is the smallest scope that can read and write a private repository. `public_repo` cannot see a private repo. The scope does not add `workflow`, `admin`, or `delete_repo`. The app still only lists a tree, reads one file, and creates or updates one file. It does not force-push, and it writes only to the repo and branch saved in Settings.
 

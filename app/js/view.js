@@ -985,6 +985,7 @@ export function mountApp(doc, db) {
         await setMeta(db, 'recent', recent);
       }
       await github.refresh();
+      github.resume();
       setStatus('saved');
     },
   };

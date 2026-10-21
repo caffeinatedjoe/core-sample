@@ -1,5 +1,12 @@
 import { redact } from './github-redact.js';
-import { signInWithDevice } from './github-device.js';
+import {
+  DEVICE_PAGE,
+  createDeviceSignIn,
+  deviceCodeRequest,
+  pendingFlow,
+  readDeviceStart,
+  tokenPollRequest,
+} from './github-device.js';
 import {
   cleanBranch,
   cleanClientId,
@@ -14,16 +21,19 @@ import {
   relayPost,
 } from './github-api.js';
 import {
+  clearPendingFlow,
   disconnectGithub,
   loadGithubSettings,
+  loadPendingFlow,
   saveGithubConfig,
   saveGithubSession,
   saveGithubTarget,
+  savePendingFlow,
 } from './github-store.js';
 
 export function mountGithub(doc, db, hooks) {
   const sheet = doc.getElementById('github-sheet');
-  if (!sheet) return { async refresh() {} };
+  if (!sheet) return { async refresh() {}, resume() {} };
 
   const clientInput = doc.getElementById('github-client-id');
   const relayInput = doc.getElementById('github-relay');
@@ -32,8 +42,10 @@ export function mountGithub(doc, db, hooks) {
   const rootInput = doc.getElementById('github-root');
   const status = doc.getElementById('github-status');
   const deviceBlock = doc.getElementById('github-device');
+  const signInState = doc.getElementById('github-signin-state');
   const codeButton = doc.getElementById('github-user-code');
   const verifyLink = doc.getElementById('github-verify');
+  const tryAgain = doc.getElementById('github-try-again');
   const target = doc.getElementById('github-target');
   const loginText = doc.getElementById('github-login');
   const choice = doc.getElementById('github-choice');
@@ -45,11 +57,23 @@ export function mountGithub(doc, db, hooks) {
   const fileStatus = doc.getElementById('github-file-status');
   const view = doc.defaultView || globalThis;
   const fetchImpl = view.fetch.bind(view);
+  const now = hooks.now || (() => Date.now());
+  const sleep = hooks.sleep || ((ms) => new Promise((resolve) => {
+    view.setTimeout(resolve, ms);
+  }));
 
   let busy = false;
-  let stopSignIn = false;
+  let starting = false;
+  let relayUrl = '';
+  let clientId = '';
   let pendingDownload = null;
   let exportedForReplace = false;
+
+  function rememberedConfig() {
+    clientId = cleanClientId(clientInput.value);
+    relayUrl = cleanRelayUrl(relayInput.value);
+    return { clientId, relay: relayUrl };
+  }
 
   function setStatus(text) {
     status.textContent = text || '';
@@ -77,70 +101,163 @@ export function mountGithub(doc, db, hooks) {
     branchInput.value = settings.branch;
     rootInput.value = settings.root;
     const signedIn = Boolean(settings.token);
+    const pending = await loadPendingFlow(db);
+    const pendingLive = Boolean(pending && now() < pending.expiresAt);
     target.hidden = !signedIn;
     loginText.textContent = settings.login ? `Signed in as ${settings.login}` : (signedIn ? 'Signed in.' : '');
-    connectButton.hidden = signedIn;
+    connectButton.hidden = signedIn || pendingLive;
+    if (pendingLive) showPending(pending);
     const ready = signedIn && Boolean(settings.repo) && Boolean(settings.branch);
     if (fileBar) fileBar.hidden = !ready;
     if (!ready && fileStatus) fileStatus.textContent = '';
     return settings;
   }
 
+  function showPending(flow) {
+    sheet.hidden = false;
+    deviceBlock.hidden = false;
+    tryAgain.hidden = true;
+    connectButton.hidden = true;
+    codeButton.textContent = flow.userCode;
+    if (signInState) signInState.textContent = 'Finishing sign-in…';
+    verifyLink.href = DEVICE_PAGE;
+    verifyLink.target = '_blank';
+    verifyLink.rel = 'noopener';
+    setStatus('Finishing sign-in…');
+  }
+
+  function hidePending() {
+    deviceBlock.hidden = true;
+    codeButton.textContent = '';
+    if (signInState) signInState.textContent = '';
+  }
+
+  async function onToken(token) {
+    await saveGithubSession(db, { token, login: '' });
+    let login = '';
+    try {
+      login = await lookupLogin(fetchImpl, token);
+    } catch {
+      login = '';
+    }
+    if (login) await saveGithubSession(db, { token, login });
+    await clearPendingFlow(db);
+    hidePending();
+    tryAgain.hidden = true;
+    await refresh();
+    sheet.hidden = false;
+    target.hidden = false;
+    if (repoInput.scrollIntoView) repoInput.scrollIntoView({ block: 'center' });
+    repoInput.focus();
+    setStatus(login ? `Signed in as ${login}.` : 'Signed in.');
+  }
+
+  function onFailure(message) {
+    hidePending();
+    tryAgain.hidden = false;
+    connectButton.hidden = false;
+    setStatus(message || 'GitHub did not sign in.');
+  }
+
+  const signIn = createDeviceSignIn({
+    loadPending: () => loadPendingFlow(db),
+    savePending: (flow) => savePendingFlow(db, flow),
+    clearPending: () => clearPendingFlow(db),
+    postToken: async (deviceCode) => {
+      const settings = await loadGithubSettings(db);
+      const id = settings.clientId || clientId;
+      const relay = settings.relay || relayUrl;
+      return relayPost(
+        fetchImpl,
+        relay,
+        'token',
+        tokenPollRequest(id, deviceCode),
+        [id, deviceCode],
+      );
+    },
+    sleep,
+    now,
+    onPending: showPending,
+    onToken,
+    onFailure,
+  });
+
+  function kick() {
+    if (starting) return undefined;
+    if (signIn.active) return signIn.checkNow();
+    return signIn.resume().catch((error) => showError(error));
+  }
+
   async function saveConfig() {
-    const clientId = cleanClientId(clientInput.value);
-    const relay = cleanRelayUrl(relayInput.value);
-    await saveGithubConfig(db, { clientId, relay });
-    clientInput.value = clientId;
-    relayInput.value = relay;
+    const config = rememberedConfig();
+    await saveGithubConfig(db, config);
+    clientInput.value = config.clientId;
+    relayInput.value = config.relay;
     setStatus('Saved the client id and relay.');
   }
 
   async function connect() {
-    if (busy) return;
-    busy = true;
-    stopSignIn = false;
+    if (starting || signIn.active) return;
+    starting = true;
     hideChoices();
+    tryAgain.hidden = true;
     try {
-      const clientId = cleanClientId(clientInput.value);
-      const relay = cleanRelayUrl(relayInput.value);
-      if (!clientId) throw new Error('Add the client id first.');
-      if (!relay) throw new Error('Add the relay URL first.');
-      await saveGithubConfig(db, { clientId, relay });
-      setStatus('Waiting for GitHub…');
-      const result = await signInWithDevice({
-        clientId,
-        sleep: (ms) => new Promise((resolve) => { view.setTimeout(resolve, ms); }),
-        shouldStop: () => stopSignIn,
-        onCode: ({ userCode, verification }) => {
-          codeButton.textContent = userCode;
-          verifyLink.href = verification;
-          deviceBlock.hidden = false;
-          setStatus('Enter this code on GitHub.');
-        },
-        postJson: (which, payload) => relayPost(fetchImpl, relay, which, payload, [clientId]),
-      });
-      deviceBlock.hidden = true;
-      codeButton.textContent = '';
-      if (result.cancelled) {
-        setStatus('Sign-in was cancelled.');
-        return;
-      }
-      if (!result.token) {
-        setStatus(result.failure || 'GitHub did not sign in.');
-        return;
-      }
-      await saveGithubSession(db, { token: result.token, login: '' });
-      const login = await lookupLogin(fetchImpl, result.token);
-      if (login) await saveGithubSession(db, { token: result.token, login });
-      await refresh();
-      setStatus(login ? `Signed in as ${login}.` : 'Signed in.');
+      const config = rememberedConfig();
+      if (!config.clientId) throw new Error('Add the client id first.');
+      if (!config.relay) throw new Error('Add the relay URL first.');
+      await saveGithubConfig(db, config);
+      clientInput.value = config.clientId;
+      relayInput.value = config.relay;
+      const startBody = await relayPost(
+        fetchImpl,
+        config.relay,
+        'code',
+        deviceCodeRequest(config.clientId),
+        [config.clientId],
+      );
+      const start = readDeviceStart(startBody);
+      await savePendingFlow(db, pendingFlow(start, now()));
+      showPending({ userCode: start.userCode });
+      starting = false;
+      await signIn.start();
     } catch (error) {
-      deviceBlock.hidden = true;
-      codeButton.textContent = '';
+      hidePending();
+      tryAgain.hidden = false;
       showError(error);
     } finally {
-      busy = false;
+      starting = false;
     }
+  }
+
+  function copyAndOpen() {
+    const code = codeButton.textContent;
+    let opened = null;
+    try {
+      opened = view.open(DEVICE_PAGE, '_blank', 'noopener');
+    } catch {
+      opened = null;
+    }
+    const write = view.navigator?.clipboard?.writeText;
+    if (code && write) {
+      Promise.resolve()
+        .then(() => write.call(view.navigator.clipboard, code))
+        .then(
+          () => setStatus('Copied the code. Approve it on GitHub, then come back to Core Sample.'),
+          () => setStatus('Copy the code shown above. Approve it on GitHub, then come back to Core Sample.'),
+        );
+    } else {
+      setStatus('Copy the code shown above. Approve it on GitHub, then come back to Core Sample.');
+    }
+    if (!opened) verifyLink.click();
+  }
+
+  async function cancelSignIn() {
+    starting = false;
+    await signIn.cancel();
+    hidePending();
+    tryAgain.hidden = true;
+    connectButton.hidden = false;
+    setStatus('Sign-in was cancelled.');
   }
 
   async function saveRepo() {
@@ -265,12 +382,12 @@ export function mountGithub(doc, db, hooks) {
   async function disconnect() {
     if (busy) return;
     busy = true;
-    stopSignIn = true;
     try {
+      await signIn.cancel();
       await disconnectGithub(db);
       hideChoices();
-      deviceBlock.hidden = true;
-      codeButton.textContent = '';
+      hidePending();
+      tryAgain.hidden = true;
       await refresh();
       setStatus('Disconnected. Notes on this phone were kept.');
     } catch (error) {
@@ -373,6 +490,7 @@ export function mountGithub(doc, db, hooks) {
   doc.getElementById('github-button').addEventListener('click', () => {
     refresh().then(() => {
       sheet.hidden = false;
+      kick();
     }).catch((error) => showError(error));
   });
   doc.getElementById('github-close').addEventListener('click', () => {
@@ -387,21 +505,39 @@ export function mountGithub(doc, db, hooks) {
   connectButton.addEventListener('click', () => {
     connect();
   });
-  codeButton.addEventListener('click', async () => {
+  codeButton.addEventListener('click', () => {
     const code = codeButton.textContent;
     if (!code) return;
-    try {
-      await view.navigator.clipboard.writeText(code);
-      setStatus('Copied the code.');
-    } catch {
+    const write = view.navigator?.clipboard?.writeText;
+    if (!write) {
       setStatus('Copy the code shown above.');
+      return;
     }
+    Promise.resolve()
+      .then(() => write.call(view.navigator.clipboard, code))
+      .then(
+        () => setStatus('Copied the code.'),
+        () => setStatus('Copy the code shown above.'),
+      );
+  });
+  doc.getElementById('github-open-github').addEventListener('click', () => {
+    copyAndOpen();
+  });
+  doc.getElementById('github-check-now').addEventListener('click', () => {
+    if (signIn.active) signIn.checkNow();
+    else kick();
   });
   doc.getElementById('github-cancel').addEventListener('click', () => {
-    stopSignIn = true;
-    deviceBlock.hidden = true;
-    codeButton.textContent = '';
-    setStatus('Sign-in was cancelled.');
+    cancelSignIn();
+  });
+  tryAgain.addEventListener('click', () => {
+    connect();
+  });
+  doc.addEventListener('visibilitychange', () => {
+    if (doc.visibilityState === 'visible') kick();
+  });
+  view.addEventListener('pageshow', () => {
+    kick();
   });
   doc.getElementById('github-save-repo').addEventListener('click', () => {
     saveRepo();
@@ -435,7 +571,7 @@ export function mountGithub(doc, db, hooks) {
   if (pushButton) pushButton.addEventListener('click', () => { pushCurrent(); });
   if (pullButton) pullButton.addEventListener('click', () => { pullCurrent(); });
 
-  return { refresh };
+  return { refresh, resume: kick };
 }
 
 function downloadMessage(counts) {
