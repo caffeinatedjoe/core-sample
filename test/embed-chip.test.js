@@ -201,7 +201,7 @@ async function seeded(db, { token = TOKEN } = {}) {
 
 test('the preview chip names a sign-in, access, or reach failure', async () => {
   const cases = [
-    ['401', 'Sign in again'],
+    ['401', "Couldn't reach GitHub (HTTP 401)"],
     ['404', 'No access to repo'],
     ['offline', "Couldn't reach GitHub (offline)"],
     ['missing', 'Not found in vault'],

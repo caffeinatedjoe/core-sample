@@ -66,6 +66,7 @@
         <p id="new-note-error" class="form-error" role="alert"></p>
         <div class="browser-actions">
           <button type="button" id="new-folder-button">New folder</button>
+          <button type="button" id="export-backup">Export backup</button>
           <button type="button" id="backup-button">Backup</button>
           <button type="button" id="github-button">GitHub</button>
         </div>
@@ -82,6 +83,8 @@
         </header>
         <div class="github-body">
           <p class="github-lead">Sign in with a device code. The token stays on this phone. A note is sent only when you push it.</p>
+          <p id="github-storage" class="github-note"></p>
+          <button type="button" id="github-export-backup">Export backup</button>
           <label>Client id
             <input id="github-client-id" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="From your OAuth app">
           </label>
@@ -107,6 +110,7 @@
           <button type="button" id="github-try-again" hidden>Try again</button>
           <div id="github-target" hidden>
             <p id="github-login" class="github-note"></p>
+            <button type="button" id="github-sign-in-again" hidden>Sign in again</button>
             <label>Repository
               <input id="github-repo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="owner/repo">
             </label>

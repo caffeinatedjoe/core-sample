@@ -591,12 +591,12 @@ test('a repo 404 does not stick, and the same note loads after the token can rea
   await deleteDatabase(name);
 });
 
-test('a 401 says to sign in again and does not save a file list', async () => {
+test('a 401 from the file list names the HTTP status and does not save a file list', async () => {
   const name = `core-sample-${randomUUID()}`;
   const db = await openDatabase(name);
   const { fetchImpl } = accessFetch(() => 'unauthorized');
   const result = await discover(db, fetchImpl);
-  assert.equal(result.reason, 'Sign in again');
+  assert.equal(result.reason, "Couldn't reach GitHub (HTTP 401)");
   assert.equal(result.reason.includes(TOKEN), false);
   assert.equal(await getMeta(db, 'githubVaultIndex'), undefined);
   assert.equal((await listImages(db)).length, 0);

@@ -1,4 +1,5 @@
 import { openDatabase } from './db.js';
+import { recordStoragePersistence, storagePersistenceText } from './github-store.js';
 import { dropStaleVaultIndex } from './images.js';
 import { APP_BUILD } from './version.js';
 import { layoutFrame } from './viewport.js';
@@ -72,9 +73,10 @@ function registerWorker(flush) {
     .catch(() => {});
 }
 
-function requestPersistence() {
-  if (!navigator.storage?.persist) return;
-  navigator.storage.persist().catch(() => {});
+async function requestPersistence(db) {
+  const granted = await recordStoragePersistence(db, navigator.storage);
+  const line = document.getElementById('github-storage');
+  if (line) line.textContent = storagePersistenceText(granted);
 }
 
 function showBootError() {
@@ -170,13 +172,15 @@ async function main() {
   if (build) build.textContent = APP_BUILD;
   bindDebug(build);
   bindViewport();
-  requestPersistence();
   const db = await openDatabase();
   await dropStaleVaultIndex(db);
+  await requestPersistence(db);
   const app = mountApp(document, db);
   registerWorker(() => app.flush());
   await app.start();
-  document.addEventListener('pointerdown', requestPersistence, { once: true });
+  document.addEventListener('pointerdown', () => {
+    requestPersistence(db).catch(() => {});
+  }, { once: true });
 }
 
 main().catch(() => {

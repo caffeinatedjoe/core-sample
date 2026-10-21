@@ -223,8 +223,7 @@ export function createDeviceSignIn({
         if (!flow) return { done: true, idle: true };
         if (!(now() < flow.expiresAt)) {
           await clearPending();
-          if (onFailure) await onFailure('The code expired. Start again.');
-          return { done: true, failure: 'The code expired. Start again.' };
+          return { done: true, idle: true };
         }
         if (onPending) onPending(flow);
         return await settle(await loop(flow, immediate));

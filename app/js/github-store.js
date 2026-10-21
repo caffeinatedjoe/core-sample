@@ -8,6 +8,37 @@ export const BRANCH_KEY = 'githubBranch';
 export const ROOT_KEY = 'githubRoot';
 export const LOGIN_KEY = 'githubLogin';
 export const PENDING_KEY = 'githubPending';
+export const STORAGE_KEY = 'storagePersistent';
+
+export function storagePersistenceText(granted) {
+  return granted === true
+    ? 'Storage on this phone is set to stay.'
+    : 'Storage on this phone is not set to stay.';
+}
+
+export async function rememberStoragePersistence(storage) {
+  if (!storage || typeof storage.persist !== 'function') return false;
+  try {
+    if (typeof storage.persisted === 'function' && await storage.persisted()) return true;
+    return (await storage.persist()) === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function recordStoragePersistence(db, storage) {
+  const granted = await rememberStoragePersistence(storage);
+  try {
+    await setMeta(db, STORAGE_KEY, granted);
+  } catch {
+    // The notes still open when this flag cannot be stored.
+  }
+  return granted;
+}
+
+export async function loadStorageFlag(db) {
+  return (await getMeta(db, STORAGE_KEY)) === true;
+}
 
 async function clear(db, key) {
   await setMeta(db, key, null);

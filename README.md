@@ -35,4 +35,4 @@ Icons are built from `app/icons/source/core-sample-icon-source-v2.jpg`. After re
 2. Share → Add to Home Screen.
 3. Open Core Sample from the home screen. It should launch without Safari's toolbar.
 
-Notes live in this install. The line under the status bar is the shell build. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. There is no account and no sync in this stage. iOS keeps the Home Screen icon from the moment you add it, so a new icon means export a backup, remove the icon, and add it again. Import with Add to this device brings the notes, folders, and Trash back.
+Notes live in this install. The line under the status bar is the shell build. After an update, check that build id and reload Core Sample from the home screen. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. Export a backup before you ever remove the icon. Import with Add to this device brings the notes, folders, and Trash back.
