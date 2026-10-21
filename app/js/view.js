@@ -31,7 +31,7 @@ import {
 import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
-import { embedImage, loadEmbedBlob, vaultIndexFor } from './images.js';
+import { embedImage, forgetImage, loadEmbedBlob, vaultIndexFor } from './images.js';
 import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
@@ -215,15 +215,25 @@ export function mountApp(doc, db) {
     }
   }
 
+  function showEmbedReason(node, reason) {
+    if (!node) return;
+    node.replaceChildren();
+    const fallback = doc.createElement('button');
+    fallback.type = 'button';
+    fallback.className = 'embed-fallback';
+    fallback.textContent = reason || 'Not found in vault';
+    node.append(fallback);
+  }
+
   function replaceBrokenImage(img) {
     const host = img.closest('.embed');
     if (!host || !img.isConnected) return;
-    const label = img.getAttribute('alt') || 'image';
-    host.replaceChildren();
-    const fallback = doc.createElement('span');
-    fallback.className = 'embed-fallback';
-    fallback.textContent = label;
-    host.append(fallback);
+    const src = img.getAttribute('src') || '';
+    const path = img.dataset.imagePath || '';
+    const repo = img.dataset.imageRepo || '';
+    if (src) revokeEmbed(src);
+    if (path) forgetImage(db, repo, path).catch(() => {});
+    showEmbedReason(host, "Couldn't display");
   }
 
   async function hydrateEmbeds(ticket) {
@@ -256,9 +266,14 @@ export function mountApp(doc, db) {
           fetchImpl: globalThis.fetch.bind(globalThis),
         });
       } catch {
+        showEmbedReason(node, "Couldn't download (offline)");
         continue;
       }
-      if (ticket !== embedTicket || !node.isConnected || result.status !== 'ready') continue;
+      if (ticket !== embedTicket || !node.isConnected) return;
+      if (result.status !== 'ready') {
+        showEmbedReason(node, result.reason);
+        continue;
+      }
       const made = embedImage(result.blob, {
         createObjectURL: URL.createObjectURL.bind(URL),
         createElement: (tag) => doc.createElement(tag),
@@ -273,9 +288,61 @@ export function mountApp(doc, db) {
       }
       embedUrls.add(made.url);
       embedBlobs.set(made.img, result.blob);
+      made.img.dataset.imagePath = result.path || '';
+      made.img.dataset.imageRepo = settings.repo || '';
       node.replaceChildren(made.img);
       bindImageErrors(node);
     }
+  }
+
+  async function retryEmbed(node) {
+    if (!node || !node.isConnected) return;
+    const ticket = embedTicket;
+    let settings = { token: '', repo: '', branch: '', root: '' };
+    try {
+      settings = await loadGithubSettings(db);
+    } catch {
+      settings = { token: '', repo: '', branch: '', root: '' };
+    }
+    const index = await vaultIndexFor(db, settings, globalThis.fetch.bind(globalThis));
+    if (ticket !== embedTicket || !node.isConnected) return;
+    let result;
+    try {
+      result = await loadEmbedBlob(db, {
+        link: node.dataset.embed || '',
+        notePath: current && current.path ? current.path : '',
+        paths: index.paths || [],
+        attachmentFolderPath: index.attachmentFolderPath || '',
+        repo: settings.repo,
+        branch: index.branch || settings.branch,
+        root: settings.root,
+        token: settings.token,
+        fetchImpl: globalThis.fetch.bind(globalThis),
+        fresh: true,
+      });
+    } catch {
+      showEmbedReason(node, "Couldn't download (offline)");
+      return;
+    }
+    if (ticket !== embedTicket || !node.isConnected) return;
+    if (result.status !== 'ready') {
+      showEmbedReason(node, result.reason);
+      return;
+    }
+    const made = embedImage(result.blob, {
+      createObjectURL: URL.createObjectURL.bind(URL),
+      createElement: (tag) => doc.createElement(tag),
+      width: node.dataset.width || '',
+      height: node.dataset.height || '',
+      name: result.name,
+      type: result.type,
+    });
+    embedUrls.add(made.url);
+    embedBlobs.set(made.img, result.blob);
+    made.img.dataset.imagePath = result.path || '';
+    made.img.dataset.imageRepo = settings.repo || '';
+    node.replaceChildren(made.img);
+    bindImageErrors(node);
   }
 
   function showNote(note, { heading = '' } = {}) {
@@ -1010,6 +1077,12 @@ export function mountApp(doc, db) {
 
     if (plan.type === 'image') {
       openViewer(event.target);
+      return;
+    }
+
+    if (plan.type === 'embed-retry') {
+      const node = event.target.closest?.('.embed');
+      if (node) retryEmbed(node);
       return;
     }
 

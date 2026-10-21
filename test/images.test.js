@@ -2,11 +2,15 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
-import { deleteDatabase, getFile, openDatabase, putFile } from '../app/js/db.js';
+import { deleteDatabase, getFile, listImages, openDatabase, putFile } from '../app/js/db.js';
 import { fetchRawBytes } from '../app/js/github-api.js';
-import { embedImage, loadEmbedBlob, rememberImage } from '../app/js/images.js';
+import { embedImage, imagePayload, loadEmbedBlob, refreshVaultIndex, rememberImage } from '../app/js/images.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
+const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const NOTE = 'Field Notes.md';
+const IMAGE = 'assets/Field Notes/image-1710000000000.png';
+const FOLDER = './assets/Field Notes';
 
 function rawResponse(bytes, ok = true) {
   return {
@@ -43,7 +47,7 @@ test('a raw image request keeps the token out of the url', async () => {
 test('a cached image loads offline and the src is an object url', async () => {
   const name = `core-sample-${randomUUID()}`;
   const db = await openDatabase(name);
-  const blob = new Blob([Uint8Array.from([9, 8, 7])], { type: 'image/png' });
+  const blob = new Blob([PNG], { type: 'image/png' });
   await rememberImage(db, { repo: 'owner/repo', path: 'assets/Note Name/img.png', blob, type: 'image/png' }, 100);
   let called = false;
   const result = await loadEmbedBlob(db, {
@@ -184,7 +188,7 @@ test('a failed image-cache write still returns the downloaded bytes', async () =
 test('a failed viewed-at write still returns the cached image', async () => {
   const name = `core-sample-${randomUUID()}`;
   const db = await openDatabase(name);
-  const bytes = Uint8Array.from([9, 8, 7, 6]);
+  const bytes = PNG;
   const blob = new Blob([bytes], { type: 'image/png' });
   await rememberImage(db, {
     repo: 'owner/repo',
@@ -244,7 +248,7 @@ test('an image stored at database version 2 survives a later open of the same da
     request.onerror = () => reject(request.error);
   });
   const first = await openDatabase(name);
-  const blob = new Blob([Uint8Array.from([4, 5, 6, 7])], { type: 'image/png' });
+  const blob = new Blob([PNG], { type: 'image/png' });
   await rememberImage(first, {
     repo: 'owner/repo',
     path: 'assets/Field Notes/image-1710000000000.png',
@@ -302,6 +306,233 @@ test('adding the image store keeps notes saved by the previous database', async 
   assert.equal(file.content, 'keep');
   assert.equal(db.objectStoreNames.contains('images'), true);
   await putFile(db, file);
+  db.close();
+  await deleteDatabase(name);
+});
+
+function httpResponse({ status = 200, body = '' } = {}) {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => (typeof body === 'string' ? body : new TextDecoder().decode(bytes)),
+    arrayBuffer: async () => buffer,
+  };
+}
+
+function vaultFetch({ tree = 'omit', app = true, image = 'png', failTree = false } = {}) {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(url);
+    if (String(url).includes(TOKEN)) throw new Error('token leaked into the url');
+    if (url.includes('/git/trees/')) {
+      if (failTree) throw new Error('tree unreachable');
+      const files = [
+        { path: NOTE, type: 'blob' },
+        { path: '.obsidian/app.json', type: 'blob' },
+      ];
+      if (tree === 'include') files.push({ path: IMAGE, type: 'blob' });
+      return httpResponse({
+        body: JSON.stringify({
+          truncated: tree === 'truncated',
+          tree: files,
+        }),
+      });
+    }
+    if (url.includes('app.json')) {
+      if (!app) return httpResponse({ status: 404, body: 'missing' });
+      return httpResponse({ body: '{"attachmentFolderPath":"./assets/Field Notes"}' });
+    }
+    if (url.includes('image-1710000000000.png')) {
+      if (image === 'missing') return httpResponse({ status: 404, body: 'missing' });
+      if (image === 'offline') throw new Error('socket closed');
+      if (image === 'html') return httpResponse({ body: '<html>nope</html>' });
+      if (image === 'json') {
+        return httpResponse({
+          body: JSON.stringify({
+            encoding: 'base64',
+            content: Buffer.from(PNG).toString('base64'),
+          }),
+        });
+      }
+      return httpResponse({ body: PNG });
+    }
+    return httpResponse({ status: 404, body: 'missing' });
+  };
+  return { seen, fetchImpl };
+}
+
+async function loadFromIndex(db, index, fetchImpl, extra = {}) {
+  return loadEmbedBlob(db, {
+    link: 'image-1710000000000.png',
+    notePath: NOTE,
+    paths: index.paths,
+    attachmentFolderPath: index.attachmentFolderPath,
+    repo: 'owner/repo',
+    branch: index.branch || 'main',
+    root: '',
+    token: TOKEN,
+    fetchImpl,
+    ...extra,
+  });
+}
+
+test('a root note downloads a bare filename from a spaced attachment folder the file list omitted', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const { seen, fetchImpl } = vaultFetch({ tree: 'omit' });
+  const index = await refreshVaultIndex(db, {
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+  }, fetchImpl);
+  assert.equal(index.paths.includes(IMAGE), false);
+  assert.equal(index.attachmentFolderPath, FOLDER);
+  assert.equal(index.attachmentChecked, true);
+  const result = await loadFromIndex(db, index, fetchImpl);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.path, IMAGE);
+  assert.equal(result.blob.size, PNG.byteLength);
+  const imageUrl = seen.find((url) => url.includes('image-1710000000000.png'));
+  assert.match(imageUrl, /\/contents\/assets\/Field%20Notes\/image-1710000000000\.png\?ref=main$/);
+  assert.equal(imageUrl.includes('%2520'), false);
+  assert.equal(imageUrl.includes(TOKEN), false);
+  assert.equal(seen.some((url) => url.includes('.obsidian/app.json') || url.includes('.obsidian%2Fapp.json')), true);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('a cut-off tree and a failed tree still leave the attachment folder usable', async () => {
+  for (const options of [{ tree: 'truncated' }, { failTree: true }]) {
+    const name = `core-sample-${randomUUID()}`;
+    const db = await openDatabase(name);
+    const { fetchImpl, seen } = vaultFetch(options);
+    const index = await refreshVaultIndex(db, {
+      repo: 'owner/repo',
+      branch: 'main',
+      root: '',
+      token: TOKEN,
+    }, fetchImpl);
+    const result = await loadFromIndex(db, index, fetchImpl);
+    assert.equal(result.status, 'ready', JSON.stringify(options));
+    assert.equal(result.path, IMAGE);
+    assert.ok(seen.some((url) => url.includes('/contents/assets/Field%20Notes/')));
+    db.close();
+    await deleteDatabase(name);
+  }
+});
+
+test('a failed download is not cached and the next attempt tries again', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  let calls = 0;
+  const missing = vaultFetch({ tree: 'include', image: 'missing' });
+  const index = await refreshVaultIndex(db, {
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+  }, missing.fetchImpl);
+  const first = await loadFromIndex(db, index, async (url) => {
+    if (url.includes('image-1710000000000.png')) calls += 1;
+    return missing.fetchImpl(url);
+  });
+  assert.equal(first.status, 'error');
+  assert.equal(first.reason, "Couldn't download (HTTP 404)");
+  assert.equal(first.reason.includes(TOKEN), false);
+  assert.equal(first.reason.includes('api.github.com'), false);
+  assert.equal((await listImages(db)).length, 0);
+  const second = await loadFromIndex(db, index, async (url) => {
+    if (url.includes('image-1710000000000.png')) calls += 1;
+    return missing.fetchImpl(url);
+  });
+  assert.equal(second.reason, "Couldn't download (HTTP 404)");
+  assert.equal(calls, 2);
+
+  const offline = await loadFromIndex(db, index, async () => {
+    throw new Error('socket closed');
+  });
+  assert.equal(offline.reason, "Couldn't download (offline)");
+  assert.equal((await listImages(db)).length, 0);
+  const again = await loadFromIndex(db, index, async () => httpResponse({ body: PNG }), { fresh: true });
+  assert.equal(again.status, 'ready');
+  assert.equal(again.blob.size, PNG.byteLength);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('an unsupported image is named and never requested', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  let called = false;
+  const result = await loadEmbedBlob(db, {
+    link: 'photo.heic',
+    notePath: NOTE,
+    paths: ['assets/Field Notes/photo.heic'],
+    attachmentFolderPath: FOLDER,
+    repo: 'owner/repo',
+    branch: 'main',
+    token: TOKEN,
+    fetchImpl: async () => {
+      called = true;
+      return httpResponse({ body: PNG });
+    },
+  });
+  assert.equal(called, false);
+  assert.equal(result.status, 'unsupported');
+  assert.equal(result.reason, 'Unsupported format');
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('a json contents body is decoded once and a non-image is not stored', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const decoded = imagePayload(new TextEncoder().encode(JSON.stringify({
+    encoding: 'base64',
+    content: Buffer.from(PNG).toString('base64'),
+  })));
+  assert.equal(decoded.length, PNG.byteLength);
+  const jsonVault = vaultFetch({ tree: 'omit', image: 'json' });
+  const index = await refreshVaultIndex(db, {
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+  }, jsonVault.fetchImpl);
+  const ready = await loadFromIndex(db, index, jsonVault.fetchImpl);
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.blob.size, PNG.byteLength);
+  assert.equal(ready.blob.type, 'image/png');
+
+  let junkCalls = 0;
+  const junk = await loadFromIndex(db, index, async () => {
+    junkCalls += 1;
+    return httpResponse({ body: 'not an image' });
+  }, { fresh: true });
+  assert.equal(junk.reason, "Couldn't display");
+  assert.equal(junk.reason.includes(TOKEN), false);
+  const rows = await listImages(db);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].path, IMAGE);
+
+  await rememberImage(db, {
+    repo: 'owner/repo',
+    path: IMAGE,
+    blob: new Blob(['not an image'], { type: 'image/png' }),
+    type: 'image/png',
+  });
+  let repaired = 0;
+  const fixed = await loadFromIndex(db, index, async () => {
+    repaired += 1;
+    return httpResponse({ body: PNG });
+  });
+  assert.equal(repaired, 1);
+  assert.equal(fixed.status, 'ready');
+  assert.equal(fixed.blob.size, PNG.byteLength);
+  assert.equal(junkCalls, 1);
   db.close();
   await deleteDatabase(name);
 });
