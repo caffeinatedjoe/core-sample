@@ -57,6 +57,29 @@ test('a percent-encoded path and the attachment folder are honored', () => {
   );
 });
 
+test('a bare filename still resolves when the file list never included the image', () => {
+  const setting = './assets/Field Notes';
+  assert.equal(attachmentFolderFor('Field Notes.md', setting), 'assets/Field Notes');
+  assert.equal(attachmentFolderFor('Field Notes.md', './/assets//Field Notes'), 'assets/Field Notes');
+  assert.equal(attachmentFolderFor('Field Notes.md', '/assets/Field Notes'), 'assets/Field Notes');
+  assert.equal(
+    resolveEmbedPath('image-1710000000000.png', {
+      notePath: 'Field Notes.md',
+      paths: ['Field Notes.md', '.obsidian/app.json'],
+      attachmentFolderPath: setting,
+    }),
+    'assets/Field Notes/image-1710000000000.png',
+  );
+  assert.equal(
+    resolveEmbedPath('assets/Field Notes/image-1710000000000.png', {
+      notePath: 'Field Notes.md',
+      paths: [],
+      attachmentFolderPath: '',
+    }),
+    'assets/Field Notes/image-1710000000000.png',
+  );
+});
+
 test('a root note resolves an embed into an attachment folder whose name has spaces', () => {
   const setting = readAttachmentSetting('{"attachmentFolderPath":"./assets/Field Notes"}');
   assert.equal(setting, './assets/Field Notes');

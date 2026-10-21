@@ -135,30 +135,39 @@ export function resolveEmbedPath(link, { notePath = '', paths = [], attachmentFo
     seen.add(normal);
     list.push(normal);
   }
-  const find = (path) => (seen.has(path) ? path : null);
+  const listed = (path) => (seen.has(path) ? path : null);
+  const base = basename(target);
+  const noteDir = parentDir(notePath);
+  const folder = attachmentFolderFor(notePath, attachmentFolderPath);
+  const inFolder = folder ? normalizeVaultPath(`${folder}/${base}`) : '';
 
-  const exact = find(target);
+  const exact = listed(target);
   if (exact) return exact;
 
-  const dir = parentDir(notePath);
-  if (dir) {
-    const relative = find(normalizeVaultPath(`${dir}/${target}`));
+  if (noteDir) {
+    const relative = listed(normalizeVaultPath(`${noteDir}/${target}`));
     if (relative) return relative;
   }
 
-  const folder = attachmentFolderFor(notePath, attachmentFolderPath);
-  if (folder) {
-    const joined = find(normalizeVaultPath(`${folder}/${target}`));
+  if (inFolder && listed(inFolder)) return inFolder;
+  if (folder && target !== base) {
+    const joined = listed(normalizeVaultPath(`${folder}/${target}`));
     if (joined) return joined;
-    const named = find(normalizeVaultPath(`${folder}/${basename(target)}`));
-    if (named) return named;
   }
 
-  const name = basename(target);
-  const matches = list.filter((path) => basename(path) === name);
-  if (!matches.length) return null;
-  matches.sort((a, b) => a.length - b.length || (a < b ? -1 : 1));
-  return matches[0];
+  const matches = list.filter((path) => basename(path) === base);
+  if (matches.length) {
+    matches.sort((a, b) => a.length - b.length || (a < b ? -1 : 1));
+    return matches[0];
+  }
+
+  // The file list is a hint. A bare name still lives in the attachment
+  // folder when that list never included the image, and a full path is
+  // requested as written.
+  if (target.includes('/')) return target;
+  if (inFolder) return inFolder;
+  if (noteDir) return normalizeVaultPath(`${noteDir}/${target}`);
+  return null;
 }
 
 export function readAttachmentSetting(text) {

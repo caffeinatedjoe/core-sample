@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { planPreviewClick } from '../app/js/preview-tap.js';
 
 function element(tag, { dataset = {}, attrs = {}, className = '', parent = null } = {}) {
-  return {
+  const node = {
     nodeType: 1,
     tag,
     className,
@@ -15,6 +15,7 @@ function element(tag, { dataset = {}, attrs = {}, className = '', parent = null 
     getAttribute(name) {
       return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null;
     },
+    children: [],
     closest(selector) {
       let current = this;
       while (current) {
@@ -23,13 +24,27 @@ function element(tag, { dataset = {}, attrs = {}, className = '', parent = null 
       }
       return null;
     },
+    querySelector(selector) {
+      for (const child of this.children) {
+        if (matches(child, selector)) return child;
+        const nested = child.querySelector?.(selector);
+        if (nested) return nested;
+      }
+      return null;
+    },
   };
+  if (parent) parent.children.push(node);
+  return node;
 }
 
 function matches(node, selector) {
   if (selector === '[data-wikilink]') return Object.prototype.hasOwnProperty.call(node.dataset, 'wikilink');
   if (selector === '[data-task-index]') return Object.prototype.hasOwnProperty.call(node.dataset, 'taskIndex');
   if (selector === '.embed-image') return node.className === 'embed-image';
+  if (selector === '.embed[data-embed]') {
+    return String(node.className || '').split(/\s+/).includes('embed')
+      && Object.prototype.hasOwnProperty.call(node.dataset, 'embed');
+  }
   if (selector === 'a[href]') return node.tag === 'a' && node.getAttribute('href');
   return false;
 }
@@ -68,6 +83,21 @@ test('an image continued under a task opens the viewer', () => {
   });
   assert.equal(planPreviewClick(img).type, 'image');
   assert.equal(planPreviewClick(img).src, 'blob:preview');
+});
+
+test('a placeholder under a nested task retries the download', () => {
+  const item = element('li', { className: 'task' });
+  const line = element('div', { className: 'task-line', parent: item });
+  element('button', { dataset: { taskIndex: '1' }, parent: line });
+  const body = element('div', { className: 'item-body', parent: item });
+  const host = element('span', {
+    className: 'embed',
+    dataset: { embed: 'image-1710000000000.png' },
+    parent: body,
+  });
+  const chip = element('button', { className: 'embed-fallback', parent: host });
+  assert.deepEqual(planPreviewClick(chip), { type: 'embed-retry', preventDefault: true });
+  assert.equal(planPreviewClick(line.querySelector('[data-task-index]') || line.children[0]).type, 'task');
 });
 
 test('a checklist tap is still a toggle', () => {

@@ -38,6 +38,11 @@ export function planPreviewClick(target) {
     };
   }
 
+  const pending = origin.closest('.embed[data-embed]');
+  if (pending && !pending.querySelector('img.embed-image')) {
+    return { type: 'embed-retry', preventDefault: true };
+  }
+
   const anchor = origin.closest('a[href]');
   if (anchor) {
     const href = anchor.getAttribute('href') || '';

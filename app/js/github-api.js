@@ -106,11 +106,11 @@ export function githubHeaders(token) {
   };
 }
 
-export function listVaultFiles(treeResponse, root) {
+export function listVaultFiles(treeResponse, root, { allowTruncated = false } = {}) {
   if (!treeResponse || !Array.isArray(treeResponse.tree)) {
     throw new Error('GitHub did not list that branch.');
   }
-  if (treeResponse.truncated) {
+  if (treeResponse.truncated && !allowTruncated) {
     throw new Error('That repository listing was cut off.');
   }
   const folder = cleanRoot(root);
@@ -146,9 +146,15 @@ export async function fetchRawBytes(fetchImpl, { repo, path, branch, token }) {
       cache: 'no-store',
     });
   } catch {
-    throw new Error('GitHub could not be reached.');
+    const error = new Error("Couldn't download (offline)");
+    error.status = 0;
+    throw error;
   }
-  if (!response.ok) throw new Error('That file could not be read.');
+  if (!response.ok) {
+    const error = new Error(`Couldn't download (HTTP ${response.status})`);
+    error.status = response.status || 0;
+    throw error;
+  }
   const bytes = await response.arrayBuffer();
   return { bytes, url };
 }
