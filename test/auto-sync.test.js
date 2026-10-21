@@ -12,7 +12,9 @@ import {
   createSyncClock,
   presentSyncStatus,
   reconcileNotes,
+  refReadPath,
   refUpdateBody,
+  refUpdatePath,
   retryDelay,
   SYNC_DEBOUNCE_MS,
   SYNC_POLL_MS,
@@ -39,7 +41,8 @@ function note(path, content, extra = {}) {
 }
 
 function json(status, body, headers = {}) {
-  return new Response(status === 304 ? '' : JSON.stringify(body), {
+  if (status === 304) return new Response(null, { status, headers });
+  return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json', ...headers },
   });
@@ -63,12 +66,13 @@ function gitServer() {
     const method = options.method || 'GET';
     const text = String(url);
     if (text.includes(TOKEN)) throw new Error('token leaked into the url');
+    const path = new URL(text).pathname;
     log.push({ method, url: text, body: options.body ? JSON.parse(options.body) : null, headers: options.headers || {} });
-    if (text.endsWith('/user')) {
+    if (path === '/user' && method === 'GET') {
       if (state.userStatus) return json(state.userStatus, { message: 'nope' });
       return json(200, { login: 'octocat' });
     }
-    if (text.includes('/git/ref/heads/') && method !== 'PATCH') {
+    if (path === '/repos/owner/repo/git/ref/heads/main' && method === 'GET') {
       refReads += 1;
       if (state.missing) return json(404, { message: 'Not Found' });
       if (state.rate) {
@@ -86,44 +90,68 @@ function gitServer() {
       const ref = state.wrongRef ? 'refs/heads/other' : 'refs/heads/main';
       return json(200, { ref, object: { sha, type: 'commit' } }, { etag });
     }
-    if (text.includes('/git/commits/')) {
+    const commitRead = path.match(/^\/repos\/owner\/repo\/git\/commits\/([^/]+)$/);
+    if (commitRead && method === 'GET') {
       return json(200, { sha: state.head, tree: { sha: state.tree } });
     }
-    if (text.includes('/git/trees/') && method === 'GET') {
+    const treeRead = path.match(/^\/repos\/owner\/repo\/git\/trees\/([^/]+)$/);
+    if (treeRead && method === 'GET') {
       return json(200, {
         sha: state.tree,
         truncated: Boolean(state.truncated),
-        tree: [...state.files].map(([path, file]) => ({ path, mode: '100644', type: 'blob', sha: file.sha })),
+        tree: [...state.files].map(([notePath, file]) => ({ path: notePath, mode: '100644', type: 'blob', sha: file.sha })),
       });
     }
-    if (text.includes('/git/blobs/') && method === 'GET') {
-      const sha = text.split('/').pop();
+    const blobRead = path.match(/^\/repos\/owner\/repo\/git\/blobs\/([^/]+)$/);
+    if (blobRead && method === 'GET') {
+      const sha = decodeURIComponent(blobRead[1]);
       const content = state.blobs.get(sha);
       if (content == null) return json(404, { message: 'Not Found' });
       return json(200, { sha, encoding: 'base64', content: encodeUtf8Base64(content) });
     }
-    if (text.endsWith('/git/blobs') && method === 'POST') {
+    if (path === '/repos/owner/repo/git/blobs' && method === 'POST') {
       const sha = `blob-new-${state.blobs.size + 1}`;
       state.blobs.set(sha, options.body ? JSON.parse(options.body).content : '');
       return json(201, { sha });
     }
-    if (text.endsWith('/git/trees') && method === 'POST') {
+    if (path === '/repos/owner/repo/git/trees' && method === 'POST') {
       const body = JSON.parse(options.body);
-      state.tree = 'tree-2';
+      const tree = `tree-${state.blobs.size}`;
+      const files = new Map(state.files);
       for (const entry of body.tree) {
-        state.files.set(entry.path, { sha: entry.sha, text: state.blobs.get(entry.sha) || '' });
+        files.set(entry.path, { sha: entry.sha, text: state.blobs.get(entry.sha) || '' });
       }
-      return json(201, { sha: state.tree });
+      state.pending = { tree, files };
+      return json(201, { sha: tree });
     }
-    if (text.endsWith('/git/commits') && method === 'POST') {
-      state.commit = 'commit-2';
+    if (path === '/repos/owner/repo/git/commits' && method === 'POST') {
+      state.commits = (state.commits || 0) + 1;
+      state.commit = `commit-${state.commits + 1}`;
       return json(201, { sha: state.commit });
     }
-    if (text.includes('/git/ref/heads/') && method === 'PATCH') {
+    if (path === '/repos/owner/repo/git/refs/heads/main' && method === 'PATCH') {
       const body = JSON.parse(options.body);
-      if (body.force !== false) return json(500, { message: 'force' });
+      if (body.force !== false) return json(422, { message: 'force is not allowed' });
       if (state.failPatch) return json(500, { message: 'no' });
+      if (state.patchStatus) return json(state.patchStatus, { message: state.patchStatus === 404 ? 'Not Found' : 'rejected' });
+      if (state.notForward) {
+        const mode = state.notForward;
+        state.notForward = null;
+        state.pending = null;
+        state.head = 'commit-moved';
+        if (mode === 'conflict') {
+          state.tree = 'tree-theirs';
+          state.files.set('Field Notes.md', { sha: 'blob-theirs', text: 'Theirs\n' });
+          state.blobs.set('blob-theirs', 'Theirs\n');
+        }
+        return json(422, { message: 'Update is not a fast forward' });
+      }
       state.head = body.sha;
+      if (state.pending) {
+        state.tree = state.pending.tree;
+        state.files = state.pending.files;
+        state.pending = null;
+      }
       return json(200, { ref: 'refs/heads/main', object: { sha: body.sha } });
     }
     return json(404, { message: 'Not Found' });
@@ -238,6 +266,9 @@ test('backoff grows with jitter and rate limits wait out the reset', () => {
   assert.equal(retryDelay({ status: 429, headers: { 'retry-after': '12' }, now }), 12_000);
   assert.equal(retryDelay({ status: 403, headers: { 'x-ratelimit-remaining': '10' }, now }), 0);
   assert.equal(refUpdateBody('abc').force, false);
+  assert.equal(refReadPath('main'), '/git/ref/heads/main');
+  assert.equal(refUpdatePath('main'), '/git/refs/heads/main');
+  assert.notEqual(refReadPath('main'), refUpdatePath('main'));
 });
 
 test('status is never Synced before a confirmed write, and a conflict keeps both sides', () => {
@@ -272,12 +303,16 @@ test('a batch push checks the remote head first and confirms the ref before Sync
     const result = await box.sync.runNow();
     assert.equal(result.status, SYNC_STATUS.synced);
     const posts = box.git.log.filter((item) => item.method === 'POST' || item.method === 'PATCH');
-    const refs = box.git.log.filter((item) => item.url.includes('/git/ref/'));
+    const refs = box.git.log.filter((item) => new URL(item.url).pathname === '/repos/owner/repo/git/ref/heads/main');
     assert.equal(refs.length >= 2, true);
     assert.ok(box.git.log.indexOf(refs[1]) < box.git.log.indexOf(posts[0]));
-    assert.equal(posts.filter((item) => item.url.endsWith('/git/blobs')).length, 2);
-    assert.equal(posts.filter((item) => item.url.endsWith('/git/trees')).length, 1);
-    assert.equal(posts.filter((item) => item.url.endsWith('/git/commits')).length, 1);
+    assert.deepEqual(posts.map((item) => `${item.method} ${new URL(item.url).pathname}`), [
+      'POST /repos/owner/repo/git/blobs',
+      'POST /repos/owner/repo/git/blobs',
+      'POST /repos/owner/repo/git/trees',
+      'POST /repos/owner/repo/git/commits',
+      'PATCH /repos/owner/repo/git/refs/heads/main',
+    ]);
     const commit = posts.find((item) => item.url.endsWith('/git/commits'));
     assert.deepEqual(commit.body.parents, ['commit-1']);
     assert.equal(commit.body.message.includes(TOKEN), false);
@@ -457,6 +492,100 @@ test('a remote change is pulled, and a conflict keeps both copies', async () => 
     assert.equal(sibling.content, 'Theirs\n');
     assert.equal(sibling.dirty, false);
     assert.equal((await listOps(box.db)).some((op) => op.path === 'Field Notes.md'), true);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a singular ref update is a 404, and a failed update is not written again', async () => {
+  const git = gitServer();
+  const base = 'https://api.github.com/repos/owner/repo';
+  const rejected = [
+    ['PATCH', `${base}/git/ref/heads/main`],
+    ['POST', `${base}/git/ref/heads/main`],
+    ['GET', `${base}/git/refs/heads/main`],
+    ['POST', `${base}/git/refs`],
+    ['DELETE', `${base}/git/refs/heads/main`],
+    ['GET', `${base}/git/blobs`],
+    ['PATCH', `${base}/git/blobs`],
+    ['POST', `${base}/git/blobs/blob-1`],
+    ['GET', `${base}/git/commits`],
+    ['PATCH', `${base}/git/commits/commit-1`],
+    ['GET', `${base}/git/trees`],
+    ['PATCH', `${base}/git/trees`],
+    ['GET', `${base}/compare/main...main`],
+    ['PUT', `${base}/contents/Field%20Notes.md`],
+  ];
+  for (const [method, url] of rejected) {
+    const response = await git.fetchImpl(url, { method, body: method === 'GET' ? undefined : '{}' });
+    assert.equal(response.status, 404, `${method} ${url}`);
+  }
+
+  const box = await harness();
+  try {
+    box.git.state.patchStatus = 404;
+    await putFile(box.db, note('Field Notes.md', 'keep me\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const first = await box.sync.runNow();
+    assert.equal(first.status, SYNC_STATUS.failed);
+    assert.equal(first.detail, 'Not Found');
+    assert.equal(box.history.includes(SYNC_STATUS.synced), false);
+    const created = box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/commits')).length;
+    assert.equal(created, 1);
+    const again = await box.sync.runNow();
+    assert.equal(again.status, SYNC_STATUS.failed);
+    assert.equal(box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/commits')).length, created);
+    assert.equal(box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/blobs')).length, 1);
+    assert.equal(box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/trees')).length, 1);
+    const patches = box.git.log.filter((item) => item.method === 'PATCH');
+    assert.equal(patches.length, 2);
+    assert.equal(patches.every((item) => new URL(item.url).pathname === '/repos/owner/repo/git/refs/heads/main'), true);
+    assert.equal((await getFile(box.db, 'Field Notes.md')).content, 'keep me\n');
+    assert.equal((await listOps(box.db)).length, 1);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a 422 ref update reads the branch again and recommits when the note is unchanged', async () => {
+  const box = await harness();
+  try {
+    box.git.state.notForward = 'recommit';
+    await putFile(box.db, note('Field Notes.md', 'from the phone\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const commits = box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/commits'));
+    assert.equal(commits.length, 2);
+    assert.deepEqual(commits[0].body.parents, ['commit-1']);
+    assert.deepEqual(commits[1].body.parents, ['commit-moved']);
+    const patches = box.git.log.filter((item) => item.method === 'PATCH');
+    assert.equal(patches.length, 2);
+    assert.equal(patches.every((item) => item.body.force === false), true);
+    assert.equal(box.git.state.head, patches[1].body.sha);
+    assert.equal((await getFile(box.db, 'Field Notes.md')).dirty, false);
+    assert.equal(box.git.log.some((item) => item.method === 'POST' && new URL(item.url).pathname === '/repos/owner/repo/git/refs'), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a 422 ref update keeps both copies when the remote note changed', async () => {
+  const box = await harness();
+  try {
+    box.git.state.notForward = 'conflict';
+    await putFile(box.db, note('Field Notes.md', 'mine\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.conflict);
+    assert.equal(box.history.includes(SYNC_STATUS.synced), false);
+    const local = await getFile(box.db, 'Field Notes.md');
+    assert.equal(local.content, 'mine\n');
+    assert.equal(local.conflict, true);
+    const sibling = (await listFiles(box.db)).find((file) => file.conflictCopy);
+    assert.ok(sibling);
+    assert.equal(sibling.content, 'Theirs\n');
+    const patches = box.git.log.filter((item) => item.method === 'PATCH');
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].body.force, false);
+    assert.equal(box.git.state.head, 'commit-moved');
   } finally {
     await box.close();
   }

@@ -106,6 +106,19 @@ export function refUpdateBody(sha) {
   return { sha, force: false };
 }
 
+// GitHub's read is singular. The update is plural and rejects a moved head when force is false.
+export function refReadPath(branch) {
+  return `/git/ref/heads/${encodeURIComponent(branch)}`;
+}
+
+export function refUpdatePath(branch) {
+  return `/git/refs/heads/${encodeURIComponent(branch)}`;
+}
+
+function preparedKey(parent, files) {
+  return JSON.stringify([parent, (files || []).map((file) => [file.path, String(file.content ?? '')])]);
+}
+
 export function syncedBase(file) {
   if (!file) return '';
   if (typeof file.baseSha === 'string' && file.baseSha) return file.baseSha;
@@ -256,6 +269,7 @@ export function createAutoSync({
   let chain = Promise.resolve();
   let state = { configured: false, confirmed: false };
   let stopped = false;
+  let prepared = null;
 
   function publish(next) {
     state = { ...state, ...next };
@@ -275,6 +289,7 @@ export function createAutoSync({
       pending: false,
       retrying: false,
       confirmed: false,
+      detail: '',
       ...partial,
     });
   }
@@ -354,14 +369,15 @@ export function createAutoSync({
     onPoll: () => queue('poll'),
   });
 
-  async function perform(settings, ops, reason, finish) {
+  async function perform(settings, ops, reason, finish, stalePass = 0) {
     const token = settings.token;
     const call = (url, options) => request(fetchImpl, token, url, options);
     const dirtyFiles = (await listFiles(db)).filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown');
     for (const file of dirtyFiles) {
       if (!ops.some((op) => op.id === file.path)) ops.push(await ensureOp(file, settings));
     }
-    const refUrl = repoUrl(settings.repo, `/git/ref/heads/${encodeURIComponent(settings.branch)}`);
+    const refUrl = repoUrl(settings.repo, refReadPath(settings.branch));
+    const updateUrl = repoUrl(settings.repo, refUpdatePath(settings.branch));
     const cursor = await getMeta(db, CURSOR_KEY);
     const samePlace = cursor && cursor.repo === settings.repo && cursor.branch === settings.branch && (cursor.root || '') === (settings.root || '');
     const savedEtag = samePlace ? cursor.etag || '' : '';
@@ -595,50 +611,60 @@ export function createAutoSync({
       });
     }
 
-    const entries = [];
-    const written = [];
-    for (const file of pushFiles) {
-      const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
+    const key = preparedKey(freshHead, pushFiles);
+    let written = prepared && prepared.key === key ? prepared.written : null;
+    let commitSha = written ? prepared.commitSha : '';
+    if (!written) {
+      const entries = [];
+      written = [];
+      for (const file of pushFiles) {
+        const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
+          method: 'POST',
+          body: { content: String(file.content ?? ''), encoding: 'utf-8' },
+        });
+        if (!blob.ok || !blob.body || typeof blob.body.sha !== 'string') return hold(settings, ops, blob);
+        entries.push({
+          path: repoPath(settings.root, file.path),
+          mode: '100644',
+          type: 'blob',
+          sha: blob.body.sha,
+        });
+        written.push({ path: file.path, sha: blob.body.sha, content: String(file.content ?? '') });
+      }
+      const treeWrite = await call(repoUrl(settings.repo, '/git/trees'), {
         method: 'POST',
-        body: { content: String(file.content ?? ''), encoding: 'utf-8' },
+        body: { base_tree: treeSha, tree: entries },
       });
-      if (!blob.ok || !blob.body || typeof blob.body.sha !== 'string') return hold(settings, ops, blob);
-      entries.push({
-        path: repoPath(settings.root, file.path),
-        mode: '100644',
-        type: 'blob',
-        sha: blob.body.sha,
+      if (!treeWrite.ok || !treeWrite.body || typeof treeWrite.body.sha !== 'string') return hold(settings, ops, treeWrite);
+      const commitWrite = await call(repoUrl(settings.repo, '/git/commits'), {
+        method: 'POST',
+        body: {
+          message: commitMessage(written.map((item) => item.path)),
+          tree: treeWrite.body.sha,
+          parents: [freshHead],
+        },
       });
-      written.push({ file, sha: blob.body.sha, content: String(file.content ?? '') });
+      if (!commitWrite.ok || !commitWrite.body || typeof commitWrite.body.sha !== 'string') {
+        return hold(settings, ops, commitWrite);
+      }
+      commitSha = commitWrite.body.sha;
+      prepared = { key, commitSha, written };
     }
-    const treeWrite = await call(repoUrl(settings.repo, '/git/trees'), {
-      method: 'POST',
-      body: { base_tree: treeSha, tree: entries },
-    });
-    if (!treeWrite.ok || !treeWrite.body || typeof treeWrite.body.sha !== 'string') return hold(settings, ops, treeWrite);
-    const commitWrite = await call(repoUrl(settings.repo, '/git/commits'), {
-      method: 'POST',
-      body: {
-        message: commitMessage(written.map((item) => item.file.path)),
-        tree: treeWrite.body.sha,
-        parents: [freshHead],
-      },
-    });
-    if (!commitWrite.ok || !commitWrite.body || typeof commitWrite.body.sha !== 'string') {
-      return hold(settings, ops, commitWrite);
-    }
-    const commitSha = commitWrite.body.sha;
     const update = refUpdateBody(commitSha);
     if (update.force !== false) {
       return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: true });
     }
-    const patched = await call(refUrl, { method: 'PATCH', body: update });
+    const patched = await call(updateUrl, { method: 'PATCH', body: update });
+    if ((patched.status === 422 || patched.status === 409) && stalePass < 1) {
+      return perform(settings, await listOps(db), reason, finish, stalePass + 1);
+    }
     const patchedSha = patched.body && patched.body.object && patched.body.object.sha;
     if (!patched.ok || patchedSha !== commitSha) return hold(settings, ops, patched);
+    prepared = null;
 
     const settled = [];
     for (const item of written) {
-      const fresh = await getFile(db, item.file.path);
+      const fresh = await getFile(db, item.path);
       if (!fresh) continue;
       if (String(fresh.content ?? '') !== item.content) {
         await ensureOp(fresh, settings);
