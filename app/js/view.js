@@ -103,6 +103,11 @@ export function mountApp(doc, db) {
       conflictRemoteSha: current.conflictRemoteSha || '',
       conflictBase: typeof current.conflictBase === 'string' ? current.conflictBase : '',
       backup: current.backup === true,
+      origin: current.origin || '',
+      localOnly: current.localOnly === true,
+      syncedAt: current.syncedAt || null,
+      syncedCommit: current.syncedCommit || '',
+      conflictRemoteAt: current.conflictRemoteAt || null,
     };
   }
 
@@ -864,7 +869,7 @@ export function mountApp(doc, db) {
       return;
     }
     const titleText = path.split('/').pop().replace(/\.md$/i, '');
-    const note = { ...makeFile(path, `# ${titleText}\n\n`), dirty: true };
+    const note = { ...makeFile(path, `# ${titleText}\n\n`), dirty: true, origin: 'user' };
     try {
       await putFile(db, note);
       await setMeta(db, 'lastOpened', path);
@@ -1074,7 +1079,7 @@ export function mountApp(doc, db) {
       setStatus('error');
       return;
     }
-    const note = { ...makeFile(plan.path, `# ${plan.title}\n\n`), dirty: true };
+    const note = { ...makeFile(plan.path, `# ${plan.title}\n\n`), dirty: true, origin: 'user' };
     try {
       await putFile(db, note);
       await setMeta(db, 'lastOpened', plan.path);
@@ -1332,6 +1337,7 @@ export function mountApp(doc, db) {
     const index = files.findIndex((item) => item.path === notePath);
     if (index >= 0) files[index] = next;
     renderList();
+    await sync?.refreshStatus();
   }
 
   sync = createAutoSync({
@@ -1339,10 +1345,10 @@ export function mountApp(doc, db) {
     fetchImpl: globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined,
     offline: () => browserOffline(),
     beforeSync: () => saver.flush(),
-    onStatus(text) {
+    onStatus(text, state = {}) {
       if (!syncStatus) return;
       syncStatus.textContent = text;
-      const open = text === 'Conflict';
+      const open = state.conflict === true || Number(state.copies) > 0;
       syncStatus.setAttribute('aria-disabled', open ? 'false' : 'true');
       syncStatus.classList?.toggle?.('sync-status-conflict', open);
     },

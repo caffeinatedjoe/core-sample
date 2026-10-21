@@ -41,6 +41,8 @@ test('a trashed note is still there after the database is reopened', async () =>
   const name = `core-sample-${randomUUID()}`;
   const db = await openDatabase(name);
   const session = await loadSession(db);
+  assert.equal(session.current.origin, 'app');
+  assert.equal(session.current.localOnly, true);
   const extra = makeFile('Field notes.md', '# Field notes\n\ncores and clay');
   const trashed = planTrash([session.current, extra], [], 'Field notes.md', 120);
   await commitFiles(db, { put: trashed.put });

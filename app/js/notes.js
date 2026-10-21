@@ -150,7 +150,7 @@ export async function loadSession(db) {
   let files = await listFiles(db);
   const seeded = await getMeta(db, 'seeded');
   if (files.length === 0 && seeded !== true) {
-    const welcome = makeFile(WELCOME_PATH, WELCOME_MD);
+    const welcome = { ...makeFile(WELCOME_PATH, WELCOME_MD), origin: 'app', localOnly: true };
     await putFile(db, welcome);
     await setMeta(db, 'lastOpened', WELCOME_PATH);
     await setMeta(db, 'seeded', true);

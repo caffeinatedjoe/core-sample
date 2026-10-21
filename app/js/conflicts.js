@@ -345,7 +345,7 @@ function dirOf(path) {
 export function datedCopyPath(path, label, when, taken = new Set()) {
   const stamp = new Date(when);
   const pad = (n) => String(n).padStart(2, '0');
-  const date = `${stamp.getUTCFullYear()}-${pad(stamp.getUTCMonth() + 1)}-${pad(stamp.getUTCDate())} ${pad(stamp.getUTCHours())}${pad(stamp.getUTCMinutes())}`;
+  const date = `${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}${pad(stamp.getMinutes())}`;
   const dir = dirOf(path);
   const stem = stemOf(path);
   let name = `${dir}${stem} (${label} ${date}).md`;
@@ -477,6 +477,8 @@ export function planResolution({
       baseSha: null,
       dirty: true,
       updatedAt: now,
+      origin: 'user',
+      localOnly: false,
     }, {});
     const original = cleared(file, {
       content: remoteText === GITHUB_DELETED_TEXT ? phoneText : remoteText,

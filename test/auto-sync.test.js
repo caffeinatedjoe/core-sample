@@ -10,12 +10,16 @@ import {
   conflictCopyPath,
   createAutoSync,
   createSyncClock,
+  isAppGenerated,
+  isLocalCopyName,
   presentSyncStatus,
   reconcileNotes,
   refReadPath,
   refUpdateBody,
   refUpdatePath,
   retryDelay,
+  shouldAutoUpload,
+  shouldRemoveLocal,
   SYNC_DEBOUNCE_MS,
   SYNC_POLL_MS,
   SYNC_STATUS,
@@ -92,7 +96,11 @@ function gitServer() {
     }
     const commitRead = path.match(/^\/repos\/owner\/repo\/git\/commits\/([^/]+)$/);
     if (commitRead && method === 'GET') {
-      return json(200, { sha: state.head, tree: { sha: state.tree } });
+      return json(200, {
+        sha: state.head,
+        tree: { sha: state.tree },
+        committer: { date: state.commitDate || '2026-10-21T00:00:00.000Z' },
+      });
     }
     const treeRead = path.match(/^\/repos\/owner\/repo\/git\/trees\/([^/]+)$/);
     if (treeRead && method === 'GET') {
@@ -128,7 +136,7 @@ function gitServer() {
     if (path === '/repos/owner/repo/git/commits' && method === 'POST') {
       state.commits = (state.commits || 0) + 1;
       state.commit = `commit-${state.commits + 1}`;
-      return json(201, { sha: state.commit });
+      return json(201, { sha: state.commit, committer: { date: state.commitDate || '2026-10-21T12:00:00.000Z' } });
     }
     if (path === '/repos/owner/repo/git/refs/heads/main' && method === 'PATCH') {
       const body = JSON.parse(options.body);
@@ -277,13 +285,26 @@ test('status is never Synced before a confirmed write, and a conflict keeps both
   assert.equal(presentSyncStatus({ configured: true, confirmed: true, pending: true }), SYNC_STATUS.pending);
   assert.equal(presentSyncStatus({ configured: true, confirmed: true, syncing: true }), SYNC_STATUS.syncing);
   assert.equal(presentSyncStatus({ configured: true, confirmed: true }), SYNC_STATUS.synced);
+  assert.equal(presentSyncStatus({ configured: true, confirmed: true, copies: 1 }), 'Synced · 1 conflict copy');
+  assert.equal(presentSyncStatus({ configured: true, confirmed: true, copies: 2 }), 'Synced · 2 conflict copies');
+  assert.equal(presentSyncStatus({ configured: true, conflict: true, copies: 2 }), SYNC_STATUS.conflict);
   assert.notEqual(presentSyncStatus({ configured: true, pending: true }), SYNC_STATUS.synced);
   assert.equal(presentSyncStatus({ configured: false, confirmed: true }), '');
 
   const when = new Date('2026-10-21T19:18:00Z');
-  assert.equal(conflictCopyPath('Field Notes.md', when), 'Field Notes.md'.replace('.md', ' (conflict 2026-10-21 1918).md'));
-  const taken = new Set(['Field Notes (conflict 2026-10-21 1918).md']);
-  assert.equal(conflictCopyPath('Field Notes.md', when, taken), 'Field Notes (conflict 2026-10-21 1918-2).md');
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}${pad(when.getMinutes())}`;
+  assert.equal(conflictCopyPath('Field Notes.md', when), `Field Notes (conflict ${stamp}).md`);
+  const taken = new Set([`Field Notes (conflict ${stamp}).md`]);
+  assert.equal(conflictCopyPath('Field Notes.md', when, taken), `Field Notes (conflict ${stamp}-2).md`);
+  assert.equal(isLocalCopyName(`Field Notes (conflict ${stamp}).md`), true);
+  assert.equal(isLocalCopyName('Field Notes (backup 2026-10-20 1718).md'), true);
+  assert.equal(isLocalCopyName('Welcome.md'), false);
+  assert.equal(isAppGenerated(note('Welcome.md', '# Welcome\n')), true);
+  assert.equal(shouldAutoUpload(note('Welcome.md', '# Welcome\n')), false);
+  assert.equal(shouldAutoUpload(note('Draft.md', 'new\n', { origin: 'user' })), true);
+  assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', updatedAt: 2 }), { headSha: 'c2', headDate: 10 }), true);
+  assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', syncedCommit: 'c1', syncedAt: 1 }), { headSha: 'c1', headDate: 10 }), false);
 
   const local = note('Field Notes.md', 'mine\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' });
   const both = reconcileNotes([local], [{ localPath: 'Field Notes.md', repoPath: 'Field Notes.md', sha: 'blob-9' }]);
@@ -722,20 +743,24 @@ test('a rename does not delete the old path when GitHub changed it', async () =>
   }
 });
 
-test('a new note and a clean never-synced note upload, and a clean GitHub delete is removed locally', async () => {
+test('a user-created note uploads, Welcome and copies do not, and a clean GitHub delete is removed locally', async () => {
   const box = await harness();
   try {
     await putFile(box.db, note('Welcome.md', '# Welcome\n'));
-    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    await putFile(box.db, note('Draft.md', 'new\n', { dirty: true, origin: 'user' }));
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1', syncedAt: 1, syncedCommit: 'commit-old' }));
     const created = await box.sync.runNow();
     assert.equal(created.status, SYNC_STATUS.synced);
-    assert.equal(box.git.state.files.get('Welcome.md').text, '# Welcome\n');
-    const welcome = await getFile(box.db, 'Welcome.md');
-    assert.equal(welcome.dirty, false);
-    assert.ok(welcome.baseSha);
+    assert.equal(box.git.state.files.has('Welcome.md'), false);
+    assert.equal((await getFile(box.db, 'Welcome.md')).remoteSha, null);
+    assert.equal(box.git.state.files.get('Draft.md').text, 'new\n');
+    const draft = await getFile(box.db, 'Draft.md');
+    assert.equal(draft.dirty, false);
+    assert.ok(draft.baseSha);
 
     box.git.state.files.delete('Field Notes.md');
     box.git.state.head = 'commit-deleted';
+    box.git.state.commitDate = '2026-10-21T12:00:00.000Z';
     const removed = await box.sync.runNow();
     assert.equal(removed.status, SYNC_STATUS.synced);
     assert.equal(await getFile(box.db, 'Field Notes.md'), undefined);
@@ -783,6 +808,186 @@ test('a ref update that keeps failing becomes a conflict after three retries', a
     const saved = await getFile(box.db, 'Field Notes.md');
     assert.equal(saved.content, 'from the phone\n');
     assert.equal(saved.conflictReason, 'stale');
+  } finally {
+    await box.close();
+  }
+});
+
+test('a v24 profile does not upload Welcome or leftover copies until an explicit resolve', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Welcome.md', '# Welcome\n'));
+    await putFile(box.db, note('Field Notes.md', 'mine\n', {
+      dirty: true,
+      conflict: true,
+      conflictReason: 'both',
+      conflictAt: 1,
+      conflictRemote: 'theirs\n',
+      conflictRemoteSha: 'blob-9',
+      conflictBase: 'Local line\n',
+      baseSha: 'blob-1',
+      remoteSha: 'blob-1',
+    }));
+    await putFile(box.db, note('Field Notes (conflict 2026-10-20 1718).md', 'theirs\n', { conflictCopy: true }));
+    await putFile(box.db, note('Logs (conflict 2026-10-20 1718).md', 'orphan\n'));
+    box.git.state.files.set('Field Notes.md', { sha: 'blob-9', text: 'theirs\n' });
+    box.git.state.blobs.set('blob-9', 'theirs\n');
+    const first = await box.sync.runNow();
+    assert.equal(first.status, SYNC_STATUS.conflict);
+    assert.equal(box.git.log.some((item) => item.method === 'POST' || item.method === 'PATCH'), false);
+    assert.equal(box.git.state.files.has('Welcome.md'), false);
+    assert.equal(box.git.state.files.has('Field Notes (conflict 2026-10-20 1718).md'), false);
+    assert.equal(box.git.state.files.has('Logs (conflict 2026-10-20 1718).md'), false);
+
+    const resolved = note('Field Notes.md', 'resolved\n', {
+      dirty: true,
+      origin: 'user',
+      baseSha: 'blob-9',
+      remoteSha: 'blob-1',
+    });
+    await putFile(box.db, resolved);
+    await box.sync.noteEdited(resolved);
+    const after = await box.sync.runNow('resolve');
+    assert.equal(after.status, 'Synced · 1 conflict copy');
+    const writes = box.git.log.filter((item) => item.method === 'POST' || item.method === 'PATCH');
+    assert.deepEqual(writes.map((item) => `${item.method} ${new URL(item.url).pathname}`), [
+      'POST /repos/owner/repo/git/blobs',
+      'POST /repos/owner/repo/git/trees',
+      'POST /repos/owner/repo/git/commits',
+      'PATCH /repos/owner/repo/git/refs/heads/main',
+    ]);
+    const tree = writes.find((item) => item.url.endsWith('/git/trees'));
+    assert.equal(tree.body.tree.some((entry) => entry.path === 'Field Notes.md'), true);
+    assert.equal(tree.body.tree.some((entry) => String(entry.path).includes('Welcome') || String(entry.path).includes('(conflict ')), false);
+    assert.equal((await getFile(box.db, 'Welcome.md')).remoteSha, null);
+    assert.equal(after.copies >= 1, true);
+  } finally {
+    await box.close();
+  }
+});
+
+test('restoring a note after its delete has synced uploads it again', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1', trashedAt: 9 }));
+    await box.sync.noteTrashed({ file: { path: 'Field Notes.md' }, baseSha: 'blob-1' });
+    const deleted = await box.sync.runNow();
+    assert.equal(deleted.status, SYNC_STATUS.synced);
+    assert.equal(box.git.state.files.has('Field Notes.md'), false);
+    const trashed = await getFile(box.db, 'Field Notes.md');
+    assert.equal(trashed.trashedAt, 9);
+    assert.equal(trashed.baseSha, null);
+
+    const restored = { ...trashed, trashedAt: null };
+    await putFile(box.db, restored);
+    await box.sync.noteRestored(restored);
+    const queued = await getFile(box.db, 'Field Notes.md');
+    assert.equal(queued.dirty, true);
+    assert.equal(queued.origin, 'user');
+    assert.equal(queued.baseSha, null);
+    const uploaded = await box.sync.runNow();
+    assert.equal(uploaded.status, SYNC_STATUS.synced);
+    assert.equal(box.git.state.files.get('Field Notes.md').text, 'Local line\n');
+  } finally {
+    await box.close();
+  }
+});
+
+test('a queued delete is cancelled on restore and the base is kept', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    await box.sync.noteTrashed({ file: { path: 'Field Notes.md' }, baseSha: 'blob-1' });
+    assert.equal((await listOps(box.db)).some((op) => op.kind === 'delete'), true);
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    await box.sync.noteRestored(note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    assert.equal((await listOps(box.db)).some((op) => op.kind === 'delete'), false);
+    const saved = await getFile(box.db, 'Field Notes.md');
+    assert.equal(saved.baseSha, 'blob-1');
+    assert.equal(saved.dirty, false);
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    assert.equal(box.git.state.files.has('Field Notes.md'), true);
+    assert.equal(box.git.log.some((item) => item.method === 'POST' && item.url.endsWith('/git/trees')), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a local note is not removed unless the base matches and the remote tree is newer', async () => {
+  const sameHead = await harness();
+  try {
+    await putFile(sameHead.db, note('Field Notes.md', 'Local line\n', {
+      baseSha: 'blob-1',
+      remoteSha: 'blob-1',
+      syncedAt: 1,
+      syncedCommit: 'commit-1',
+    }));
+    sameHead.git.state.files.delete('Field Notes.md');
+    const kept = await sameHead.sync.runNow();
+    assert.equal(kept.status, SYNC_STATUS.synced);
+    assert.ok(await getFile(sameHead.db, 'Field Notes.md'));
+  } finally {
+    await sameHead.close();
+  }
+
+  const mismatch = await harness();
+  try {
+    await putFile(mismatch.db, note('Field Notes.md', 'Local line\n', {
+      baseSha: 'blob-1',
+      remoteSha: 'blob-other',
+      syncedAt: 1,
+      syncedCommit: 'commit-old',
+    }));
+    mismatch.git.state.files.delete('Field Notes.md');
+    mismatch.git.state.head = 'commit-deleted';
+    const kept = await mismatch.sync.runNow();
+    assert.equal(await getFile(mismatch.db, 'Field Notes.md') !== undefined, true);
+    assert.notEqual(kept.status, undefined);
+  } finally {
+    await mismatch.close();
+  }
+});
+
+test('a rename does not download the old path after the commit', async () => {
+  const box = await harness();
+  try {
+    box.git.state.files.set('Logs.md', { sha: 'blob-1', text: 'See [[Field Notes]]\n' });
+    box.git.state.files.delete('Field Notes.md');
+    await putFile(box.db, note('Journal.md', 'See [[Journal]]\n', { dirty: true, origin: 'user' }));
+    await box.sync.noteRenamed({
+      from: 'Logs.md',
+      to: 'Journal.md',
+      baseSha: 'blob-1',
+      file: note('Journal.md', 'See [[Journal]]\n', { dirty: true, origin: 'user' }),
+    });
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const blobGets = box.git.log.filter((item) => item.method === 'GET' && /\/git\/blobs\/[^/]+$/.test(new URL(item.url).pathname));
+    assert.equal(blobGets.some((item) => item.url.endsWith('/blob-1')), false);
+    assert.equal(await getFile(box.db, 'Logs.md'), undefined);
+    const tree = box.git.log.find((item) => item.method === 'POST' && item.url.endsWith('/git/trees'));
+    assert.equal(tree.body.tree.some((entry) => entry.path === 'Logs.md' && entry.sha === null), true);
+    const cursor = await getMeta(box.db, 'githubSyncCursor');
+    assert.equal(cursor.headSha, box.git.state.head);
+    assert.equal(cursor.treeSha, box.git.state.tree);
+  } finally {
+    await box.close();
+  }
+});
+
+test('leftover conflict copies appear on the status and stay local', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    await putFile(box.db, note('Field Notes (conflict 2026-10-20 1718).md', 'theirs\n', { conflictCopy: true }));
+    const result = await box.sync.runNow();
+    assert.equal(result.status, 'Synced · 1 conflict copy');
+    assert.equal(result.copies, 1);
+    assert.equal(box.git.state.files.has('Field Notes (conflict 2026-10-20 1718).md'), false);
+    const copy = await getFile(box.db, 'Field Notes (conflict 2026-10-20 1718).md');
+    assert.equal(copy.trashedAt, null);
+    assert.equal(copy.remoteSha, null);
   } finally {
     await box.close();
   }

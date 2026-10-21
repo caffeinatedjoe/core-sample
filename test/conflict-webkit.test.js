@@ -105,7 +105,11 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
       return json(200, { ref: 'refs/heads/main', object: { sha: state.head, type: 'commit' } });
     }
     if (/^\/repos\/owner\/repo\/git\/commits\/[^/]+$/.test(path) && method === 'GET') {
-      return json(200, { sha: state.head, tree: { sha: state.tree } });
+      return json(200, {
+        sha: state.head,
+        tree: { sha: state.tree },
+        committer: { date: '2026-10-21T19:05:00.000Z' },
+      });
     }
     if (/^\/repos\/owner\/repo\/git\/trees\/[^/]+$/.test(path) && method === 'GET') {
       return json(200, {
@@ -157,7 +161,7 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
   try {
     await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v25');
+    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v26');
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open('core-sample');
@@ -181,6 +185,7 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
           dirty: true,
           conflict: true,
           conflictAt: Date.parse('2026-10-21T19:18:00Z'),
+          conflictRemoteAt: Date.parse('2026-10-21T19:05:00Z'),
           conflictReason: 'both',
           conflictRemote: 'github\nkeep\n',
           conflictRemoteSha: 'blob-remote',
@@ -211,7 +216,8 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
     assert.equal(await page.locator('#conflict-resolve-button').isDisabled(), true);
     const opened = await page.locator('#conflict-resolve-view').innerText();
     assert.equal(opened.includes('Today 12:10 PM'), true);
-    assert.equal(opened.includes('Today 12:18 PM'), true);
+    assert.equal(opened.includes('Today 12:05 PM'), true);
+    assert.equal(opened.includes('Today 12:18 PM'), false);
     await assertChoicesHittable();
     await shot('resolve-light.png');
     await page.emulateMedia({ colorScheme: 'dark' });

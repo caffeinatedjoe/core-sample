@@ -120,7 +120,11 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       return;
     }
     if (/^\/repos\/owner\/repo\/git\/commits\/[^/]+$/.test(path) && method === 'GET') {
-      await json(route, 200, { sha: state.head, tree: { sha: state.tree } });
+      await json(route, 200, {
+        sha: state.head,
+        tree: { sha: state.tree },
+        committer: { date: '2026-10-21T12:00:00.000Z' },
+      });
       return;
     }
     if (/^\/repos\/owner\/repo\/git\/trees\/[^/]+$/.test(path) && method === 'GET') {
@@ -201,7 +205,7 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v25';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v26';
     });
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {

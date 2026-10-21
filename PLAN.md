@@ -57,7 +57,7 @@ Implemented in core-sample-shell-v23. Conflict resolution is Stage 5.
 
 ## Stage 5 — Conflicts
 
-Implemented in core-sample-shell-v25. The screen is described in [docs/conflict-ui.md](docs/conflict-ui.md).
+Implemented in core-sample-shell-v25. Vault safety fixes for Welcome uploads, trash restore, rename ghosts, and leftover conflict copies shipped in core-sample-shell-v26. The screen is described in [docs/conflict-ui.md](docs/conflict-ui.md).
 
 - Keep base, local, and remote. Three-way merge.
 - Local-only pushes. Remote-only pulls. Non-overlapping edits auto-merge. Identical edits collapse.

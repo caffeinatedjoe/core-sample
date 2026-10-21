@@ -48,6 +48,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
   let focusAt = 0;
   let undo = null;
   let toastTimer = null;
+  let pendingOffer = '';
 
   function fileByPath(notePath) {
     return (files() || []).find((file) => file.path === notePath && !file.trashedAt);
@@ -94,11 +95,38 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     }
     heading.textContent = 'Conflicts';
     listView.replaceChildren();
+    if (pendingOffer) {
+      const leftover = (files() || []).find((file) => file.path === pendingOffer && file.conflictCopy && !file.trashedAt);
+      if (!leftover) pendingOffer = '';
+      else {
+        const offer = el(doc, 'div', 'conflict-offer');
+        offer.append(el(doc, 'p', 'conflict-offer-text', 'Move the leftover conflict copy to Trash? You can restore it later.'));
+        const actions = el(doc, 'div', 'conflict-offer-actions');
+        const trash = button(doc, 'conflict-primary', 'Move copy to Trash');
+        trash.id = 'conflict-trash-copy';
+        trash.addEventListener('click', async () => {
+          const path = pendingOffer;
+          pendingOffer = '';
+          await dismiss(path);
+          paintList();
+        });
+        const keep = button(doc, 'conflict-dismiss', 'Keep copy');
+        keep.id = 'conflict-keep-copy';
+        keep.addEventListener('click', () => {
+          pendingOffer = '';
+          paintList();
+        });
+        actions.append(trash, keep);
+        offer.append(actions);
+        listView.append(offer);
+      }
+    }
     const items = listConflicts(files());
-    if (!items.length) {
+    if (!items.length && !pendingOffer) {
       listView.append(el(doc, 'p', 'conflict-empty', 'No conflicts on this phone.'));
       return;
     }
+    if (!items.length) return;
     const list = el(doc, 'ul', 'conflict-list');
     list.id = 'conflict-list';
     for (const item of items) {
@@ -232,7 +260,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     resolveView.append(whole);
 
     const phoneWhen = formatWhen(file.updatedAt);
-    const githubWhen = formatWhen(file.conflictAt);
+    const githubWhen = formatWhen(file.conflictRemoteAt || file.conflictAt);
     hunks.forEach((hunk, index) => {
       if (hunk.kind === 'same') {
         const block = el(doc, 'div', 'hunk hunk-context');
@@ -380,8 +408,14 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
       now: Date.now(),
       taken,
     });
+    const sibling = (files() || []).find((item) => (
+      item.conflictCopy && !item.backup && !item.trashedAt && item.path.includes('(conflict ')
+      && item.path.startsWith(file.path.replace(/[^/]+$/, ''))
+      && item.path !== file.path
+    ));
     const result = await apply(plan);
     showToast(plan.summary, result && result.undo);
+    pendingOffer = sibling && sibling.path ? sibling.path : '';
     paintList();
   }
 

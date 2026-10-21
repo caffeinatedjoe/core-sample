@@ -33,14 +33,20 @@ export const STALE_RETRY_LIMIT = 3;
 
 export function presentSyncStatus(state = {}) {
   if (!state.configured) return '';
-  if (state.authRequired) return SYNC_STATUS.auth;
-  if (state.conflict) return SYNC_STATUS.conflict;
-  if (state.offline) return SYNC_STATUS.offline;
-  if (state.failed) return SYNC_STATUS.failed;
-  if (state.syncing) return SYNC_STATUS.syncing;
-  if (state.pending || state.retrying) return SYNC_STATUS.pending;
-  if (state.confirmed) return SYNC_STATUS.synced;
-  return SYNC_STATUS.syncing;
+  let text = '';
+  if (state.authRequired) text = SYNC_STATUS.auth;
+  else if (state.conflict) text = SYNC_STATUS.conflict;
+  else if (state.offline) text = SYNC_STATUS.offline;
+  else if (state.failed) text = SYNC_STATUS.failed;
+  else if (state.syncing) text = SYNC_STATUS.syncing;
+  else if (state.pending || state.retrying) text = SYNC_STATUS.pending;
+  else if (state.confirmed) text = SYNC_STATUS.synced;
+  else text = SYNC_STATUS.syncing;
+  const copies = Number(state.copies) || 0;
+  if (copies > 0 && text && text !== SYNC_STATUS.conflict) {
+    text += ` · ${copies} conflict ${copies === 1 ? 'copy' : 'copies'}`;
+  }
+  return text;
 }
 
 export function backoffDelay(attempt, random = Math.random) {
@@ -79,7 +85,7 @@ export function retryDelay({ status = 0, headers = {}, attempt = 0, now = Date.n
 export function utcConflictStamp(when) {
   const date = when instanceof Date ? when : new Date(when);
   const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
 export function conflictCopyPath(path, when, taken = new Set()) {
@@ -137,7 +143,58 @@ export function syncedBase(file) {
   return '';
 }
 
-export function reconcileNotes(files, remoteNotes) {
+export function isLocalCopyName(path) {
+  return / \((?:conflict|backup) \d{4}-\d{2}-\d{2} \d{4}(?:-\d+)?\)\.md$/i.test(String(path || ''));
+}
+
+export function isAppGenerated(file) {
+  if (!file) return false;
+  if (file.localOnly === true || file.origin === 'app') return true;
+  if (file.origin === 'user') return false;
+  return file.path === 'Welcome.md' && !syncedBase(file) && !file.remoteSha;
+}
+
+export function shouldAutoUpload(file) {
+  if (!file || file.kind !== 'markdown') return false;
+  if (file.trashedAt || file.conflictCopy || file.backup || file.conflict === true) return false;
+  if (file.localOnly === true || isAppGenerated(file) || isLocalCopyName(file.path)) return false;
+  if (file.origin === 'user') return true;
+  return file.dirty === true;
+}
+
+export function shouldRemoveLocal(file, context = {}) {
+  if (!file || file.trashedAt || file.conflict || file.conflictCopy || file.dirty) return false;
+  const base = typeof file.baseSha === 'string' ? file.baseSha : '';
+  const remote = typeof file.remoteSha === 'string' ? file.remoteSha : '';
+  if (!base || !remote || base !== remote) return false;
+  const headSha = context.headSha || '';
+  if (file.syncedCommit && headSha && file.syncedCommit === headSha) return false;
+  const syncedAt = Number(file.syncedAt) || Number(file.updatedAt) || 0;
+  const headDate = Number(context.headDate) || 0;
+  if (!syncedAt || !headDate) return false;
+  return headDate > syncedAt;
+}
+
+function countCopies(files) {
+  return (files || []).filter((file) => file && file.conflictCopy && !file.backup && !file.trashedAt).length;
+}
+
+function commitDateMs(body, fallback) {
+  const raw = body && body.committer && body.committer.date;
+  const parsed = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function blockedCreatePaths(ops) {
+  const blocked = new Set();
+  for (const op of ops || []) {
+    if (op.kind === 'rename' && op.from) blocked.add(op.from);
+    if (op.kind === 'delete' && op.path) blocked.add(op.path);
+  }
+  return blocked;
+}
+
+export function reconcileNotes(files, remoteNotes, context = {}) {
   const remote = new Map((remoteNotes || []).map((note) => [note.localPath, note]));
   const localPaths = new Set((files || []).map((file) => file && file.path));
   const pushes = [];
@@ -145,6 +202,7 @@ export function reconcileNotes(files, remoteNotes) {
   const creates = [];
   const conflicts = [];
   const removals = [];
+  const blocked = blockedCreatePaths(context.ops);
   for (const file of files || []) {
     if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy) continue;
     const found = remote.get(file.path);
@@ -157,17 +215,22 @@ export function reconcileNotes(files, remoteNotes) {
     if (dirty) {
       if (!found) {
         if (base) conflicts.push({ path: file.path, reason: 'deleted', remote: null });
-        else pushes.push(file);
+        else if (shouldAutoUpload(file)) pushes.push(file);
       } else if (base && found.sha === base) {
-        pushes.push(file);
+        if (shouldAutoUpload(file) || (file.origin !== 'app' && !file.localOnly && !isLocalCopyName(file.path))) {
+          pushes.push(file);
+        }
       } else {
         conflicts.push({ path: file.path, reason: 'both', remote: found });
       }
       continue;
     }
     if (!found) {
-      if (base) removals.push(file.path);
-      else pushes.push(file);
+      if (base) {
+        if (shouldRemoveLocal(file, context)) removals.push(file.path);
+      } else if (shouldAutoUpload(file)) {
+        pushes.push(file);
+      }
       continue;
     }
     if (found.sha !== (file.remoteSha || base)) {
@@ -175,7 +238,8 @@ export function reconcileNotes(files, remoteNotes) {
     }
   }
   for (const note of remoteNotes || []) {
-    if (!localPaths.has(note.localPath)) creates.push(note);
+    if (localPaths.has(note.localPath) || blocked.has(note.localPath)) continue;
+    creates.push(note);
   }
   return { pushes, pulls, creates, conflicts, removals };
 }
@@ -292,7 +356,9 @@ export function createAutoSync({
     return { ...state, status: text };
   }
 
-  function finish(partial) {
+  async function finish(partial) {
+    let copies = partial && partial.copies;
+    if (copies == null) copies = countCopies(await listFiles(db));
     return publish({
       configured: true,
       authRequired: false,
@@ -304,6 +370,7 @@ export function createAutoSync({
       retrying: false,
       confirmed: false,
       detail: '',
+      copies,
       ...partial,
     });
   }
@@ -333,6 +400,7 @@ export function createAutoSync({
 
   async function noteEdited(file) {
     if (!file || !file.path || file.conflictCopy || file.backup || file.trashedAt) return;
+    if (file.localOnly || isAppGenerated(file) || isLocalCopyName(file.path)) return;
     const settings = await loadGithubSettings(db);
     if (!settings.token || !settings.repo || !settings.branch) return;
     await ensureOp({ ...file, dirty: true }, settings);
@@ -389,9 +457,54 @@ export function createAutoSync({
     clock.edited();
   }
 
+  async function forgetRemote(path) {
+    const leftover = await getFile(db, path);
+    if (!leftover) return null;
+    const next = {
+      ...leftover,
+      baseSha: null,
+      remoteSha: null,
+      syncedAt: null,
+      syncedCommit: '',
+      origin: leftover.origin || 'user',
+    };
+    await putFile(db, next);
+    return next;
+  }
+
   async function noteRestored(file) {
     if (!file || !file.path) return;
+    const settings = await loadGithubSettings(db);
+    const ops = await listOps(db);
+    const queuedDelete = ops.find((op) => (op.id === file.path || op.path === file.path) && op.kind === 'delete');
+    if (queuedDelete) {
+      await deleteOps(db, [file.path]);
+      return;
+    }
     await deleteOps(db, [file.path]);
+    if (!settings.token || !settings.repo || !settings.branch) return;
+    if (file.conflictCopy || file.backup || file.localOnly || isAppGenerated(file) || isLocalCopyName(file.path)) {
+      return;
+    }
+    const hadBase = Boolean(syncedBase(file));
+    const userNote = file.origin === 'user' || hadBase || (!isAppGenerated(file) && !file.localOnly);
+    if (!userNote) return;
+    const next = {
+      ...file,
+      dirty: true,
+      baseSha: null,
+      remoteSha: null,
+      origin: 'user',
+      localOnly: false,
+      trashedAt: null,
+      syncedAt: null,
+      syncedCommit: '',
+    };
+    await putFile(db, next);
+    await ensureOp(next, settings);
+    onApplied([next]);
+    publish({ configured: true, pending: true, confirmed: false, syncing: false });
+    clock.edited();
   }
 
   async function syncOnce(reason) {
@@ -489,9 +602,11 @@ export function createAutoSync({
 
     let headSha = '';
     let treeSha = '';
+    let headDate = 0;
     if (ref.status === 304 && samePlace && cursor.headSha && cursor.treeSha) {
       headSha = cursor.headSha;
       treeSha = cursor.treeSha;
+      headDate = Number(cursor.headDate) || 0;
     } else {
       headSha = readRef(ref.body, settings.branch);
       if (!headSha) {
@@ -503,6 +618,7 @@ export function createAutoSync({
         return hold(settings, ops, commit);
       }
       treeSha = commit.body.tree.sha;
+      headDate = commitDateMs(commit.body, now());
     }
 
     const mine = ops.filter((op) => op.path && op.repo === settings.repo && op.branch === settings.branch);
@@ -512,11 +628,11 @@ export function createAutoSync({
 
     if (ref.status === 304 && ready.length === 0) {
       const files = await listFiles(db);
-      const unsentLocal = files.some((file) => file && file.kind === 'markdown' && !file.trashedAt && !file.conflictCopy && !file.conflict && !file.dirty && !syncedBase(file) && !file.remoteSha);
+      const unsentLocal = files.some((file) => shouldAutoUpload(file) && !file.dirty && !syncedBase(file) && !file.remoteSha);
       if (unsentLocal) {
-        // A note that has never been synced still needs the tree, not a 304 stop.
+        // A user-created note that has never been synced still needs the tree, not a 304 stop.
       } else {
-      const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy);
+      const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
       await setMeta(db, CURSOR_KEY, {
         repo: settings.repo,
         branch: settings.branch,
@@ -524,6 +640,7 @@ export function createAutoSync({
         etag: savedEtag,
         headSha,
         treeSha,
+        headDate,
       });
       return finish({
         configured: true,
@@ -533,6 +650,7 @@ export function createAutoSync({
         pending: mine.length > 0 && ready.length === 0,
         failed: false,
         offline: false,
+        copies: countCopies(files),
       });
       }
     }
@@ -553,10 +671,11 @@ export function createAutoSync({
       etag: ref.etag || savedEtag,
       headSha,
       treeSha,
+      headDate,
     });
 
     const files = await listFiles(db);
-    const plan = reconcileNotes(files, remoteNotes);
+    const plan = reconcileNotes(files, remoteNotes, { headSha, headDate, ops: mine });
     const applied = [];
     let pulled = false;
     for (const item of plan.pulls) {
@@ -573,6 +692,10 @@ export function createAutoSync({
         dirty: false,
         conflict: false,
         updatedAt: now(),
+        syncedAt: headDate || now(),
+        syncedCommit: headSha,
+        localOnly: false,
+        origin: fresh.origin === 'app' ? '' : fresh.origin,
       };
       await putFile(db, next);
       await deleteOps(db, [fresh.path]);
@@ -595,6 +718,8 @@ export function createAutoSync({
         baseSha: note.sha,
         dirty: false,
         conflict: false,
+        syncedAt: headDate || now(),
+        syncedCommit: headSha,
       };
       const already = await getFile(db, created.path);
       if (already) continue;
@@ -630,12 +755,14 @@ export function createAutoSync({
         dirty: false,
         conflict: false,
         conflictCopy: true,
+        origin: 'app',
       };
       const marked = {
         ...fresh,
         conflict: true,
         dirty: true,
         conflictAt: now(),
+        conflictRemoteAt: headDate || now(),
         conflictReason: reason,
         conflictRemote: copy,
         conflictRemoteSha: remoteSha,
@@ -687,6 +814,9 @@ export function createAutoSync({
             conflictRemote: '',
             conflictBase: '',
             conflictReason: '',
+            syncedAt: same ? (headDate || now()) : fresh.syncedAt,
+            syncedCommit: same ? headSha : fresh.syncedCommit,
+            localOnly: false,
           };
           await putFile(db, next);
           if (same) await deleteOps(db, [fresh.path]);
@@ -719,6 +849,8 @@ export function createAutoSync({
         const remoteNote = remoteNotes.find((note) => note.localPath === op.path);
         if (!remoteNote) {
           await deleteOps(db, [op.path]);
+          const forgotten = await forgetRemote(op.path);
+          if (forgotten) applied.push(forgotten);
           continue;
         }
         if (remoteNote.sha === op.baseSha) {
@@ -777,7 +909,7 @@ export function createAutoSync({
       const fresh = await getFile(db, file.path);
       if (!fresh || fresh.conflict || fresh.conflictCopy || fresh.trashedAt) continue;
       const queued = ready.some((op) => op.path === fresh.path || op.id === fresh.path);
-      if (!queued && !( !fresh.dirty && !syncedBase(fresh) && !fresh.remoteSha)) continue;
+      if (!queued && !(shouldAutoUpload(fresh) && !fresh.dirty && !syncedBase(fresh) && !fresh.remoteSha)) continue;
       if (!queued) await ensureOp(fresh, settings);
       pushFiles.push(fresh);
     }
@@ -870,7 +1002,13 @@ export function createAutoSync({
         return hold(settings, ops, commitWrite);
       }
       commitSha = commitWrite.body.sha;
-      prepared = { key, commitSha, written };
+      prepared = {
+        key,
+        commitSha,
+        written,
+        treeSha: treeWrite.body.sha,
+        headDate: commitDateMs(commitWrite.body, now()),
+      };
     }
     const update = refUpdateBody(commitSha);
     if (update.force !== false) {
@@ -909,7 +1047,18 @@ export function createAutoSync({
     }
     const patchedSha = patched.body && patched.body.object && patched.body.object.sha;
     if (!patched.ok || patchedSha !== commitSha) return hold(settings, ops, patched);
+    const writtenTreeSha = prepared && prepared.treeSha ? prepared.treeSha : treeSha;
+    const writtenDate = prepared && prepared.headDate ? prepared.headDate : now();
     prepared = null;
+    await setMeta(db, CURSOR_KEY, {
+      repo: settings.repo,
+      branch: settings.branch,
+      root: settings.root || '',
+      etag: '',
+      headSha: commitSha,
+      treeSha: writtenTreeSha,
+      headDate: writtenDate,
+    });
 
     const settled = [];
     for (const item of written) {
@@ -925,16 +1074,23 @@ export function createAutoSync({
         baseSha: item.sha,
         dirty: false,
         conflict: false,
+        syncedAt: writtenDate,
+        syncedCommit: commitSha,
       };
       await putFile(db, next);
       await deleteOps(db, [fresh.path]);
       settled.push(next);
     }
-    for (const item of deletions) await deleteOps(db, [item.path]);
+    for (const item of deletions) {
+      await deleteOps(db, [item.path]);
+      const forgotten = await forgetRemote(item.path);
+      if (forgotten) settled.push(forgotten);
+    }
     if (settled.length) onApplied(settled);
     const remaining = await listOps(db);
     const stillPending = remaining.some((op) => op.repo === settings.repo && op.branch === settings.branch);
-    const stillConflict = (await listFiles(db)).some((file) => file && file.conflict === true && !file.conflictCopy);
+    const after = await listFiles(db);
+    const stillConflict = after.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
     return finish({
       configured: true,
       syncing: false,
@@ -943,6 +1099,7 @@ export function createAutoSync({
       conflict: stillConflict,
       failed: false,
       offline: false,
+      copies: countCopies(after),
     });
   }
 
@@ -1012,9 +1169,11 @@ export function createAutoSync({
   async function refreshStatus() {
     const settings = await loadGithubSettings(db);
     const configured = Boolean(settings.token && settings.repo && settings.branch);
-    if (!configured) return publish({ configured: false, syncing: false, confirmed: false });
+    if (!configured) return publish({ configured: false, syncing: false, confirmed: false, copies: 0 });
     const pending = (await listOps(db)).some((op) => op.repo === settings.repo && op.branch === settings.branch);
-    const conflicted = (await listFiles(db)).some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+    const files = await listFiles(db);
+    const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+    const copies = countCopies(files);
     return publish({
       configured: true,
       authRequired: false,
@@ -1026,6 +1185,7 @@ export function createAutoSync({
       retrying: false,
       confirmed: !conflicted && !pending && !offline(),
       detail: '',
+      copies,
     });
   }
 
