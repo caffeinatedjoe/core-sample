@@ -45,6 +45,8 @@ Implemented as manual connect, download, and one-file push and pull. Stage 4's d
 
 ## Stage 4 — Automatic sync
 
+Implemented in core-sample-shell-v23. A conflict keeps both copies on the phone. Three-way merge stays in Stage 5.
+
 - Separate the local-save clock (Stage 1) from a 2–5 second sync debounce.
 - Mark notes dirty. Batch a few edits into one commit. Check the remote before writing.
 - While the app is open, look for remote changes about every 60 seconds, and also on foreground, network return, and page hide.

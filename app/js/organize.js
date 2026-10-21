@@ -222,6 +222,7 @@ function applyPathMap(files, pathMap, now) {
       updatedAt: now,
       dirty: true,
       remoteSha: pathChanged ? null : (typeof file.remoteSha === 'string' ? file.remoteSha : null),
+      baseSha: pathChanged ? null : (typeof file.baseSha === 'string' ? file.baseSha : null),
     };
     put.push(updated);
     if (to !== file.path) remove.push(file.path);

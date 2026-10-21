@@ -32,6 +32,7 @@ import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
+import { createAutoSync } from './github-sync.js';
 import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
@@ -63,11 +64,16 @@ export function mountApp(doc, db) {
   let erasing = false;
   let holding = false;
 
+  let sync = null;
+  const syncStatus = doc.getElementById('sync-status');
   const saver = createDebouncedSaver({
     delay: SAVE_DELAY,
-    write: (note) => {
+    write: async (note) => {
       if (erasing) return undefined;
-      return putFile(db, note);
+      await putFile(db, note);
+      const index = files.findIndex((item) => item.path === note.path);
+      if (index >= 0) files[index] = { ...files[index], ...note };
+      if (note.dirty) await sync?.noteEdited(note);
     },
     onStatus: (state) => setStatus(state),
   });
@@ -86,7 +92,10 @@ export function mountApp(doc, db) {
       updatedAt: current.updatedAt,
       trashedAt: current.trashedAt || null,
       remoteSha: typeof current.remoteSha === 'string' ? current.remoteSha : null,
+      baseSha: typeof current.baseSha === 'string' ? current.baseSha : null,
       dirty: current.dirty === true,
+      conflict: current.conflict === true,
+      conflictCopy: current.conflictCopy === true,
     };
   }
 
@@ -820,7 +829,7 @@ export function mountApp(doc, db) {
       return;
     }
     const titleText = path.split('/').pop().replace(/\.md$/i, '');
-    const note = makeFile(path, `# ${titleText}\n\n`);
+    const note = { ...makeFile(path, `# ${titleText}\n\n`), dirty: true };
     try {
       await putFile(db, note);
       await setMeta(db, 'lastOpened', path);
@@ -836,6 +845,7 @@ export function mountApp(doc, db) {
     nameInput.value = '';
     showNote(note);
     closeSheet();
+    sync?.noteEdited(note);
     if (mode === 'source') source.focus();
   }
 
@@ -1029,7 +1039,7 @@ export function mountApp(doc, db) {
       setStatus('error');
       return;
     }
-    const note = makeFile(plan.path, `# ${plan.title}\n\n`);
+    const note = { ...makeFile(plan.path, `# ${plan.title}\n\n`), dirty: true };
     try {
       await putFile(db, note);
       await setMeta(db, 'lastOpened', plan.path);
@@ -1038,6 +1048,7 @@ export function mountApp(doc, db) {
       return;
     }
     files.push(note);
+    sync?.noteEdited(note);
     for (const ancestor of ancestorFolders(plan.path)) expanded.add(ancestor);
     recent = rememberRecent(recent, plan.path);
     await setMeta(db, 'recent', recent);
@@ -1201,6 +1212,34 @@ export function mountApp(doc, db) {
     }
   }
 
+  function applySyncedFiles(nextFiles) {
+    for (const file of nextFiles || []) {
+      const index = files.findIndex((item) => item.path === file.path);
+      if (index >= 0) files[index] = file;
+      else files.push(file);
+      if (!current || current.path !== file.path) continue;
+      const typed = source.value !== current.content && source.value !== file.content;
+      if (typed) continue;
+      current = file;
+      source.value = file.content;
+      title.textContent = noteTitle(current);
+      if (mode === 'preview') paintPreview();
+    }
+    renderList();
+  }
+
+  sync = createAutoSync({
+    db,
+    fetchImpl: globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined,
+    offline: () => browserOffline(),
+    beforeSync: () => saver.flush(),
+    onStatus(text) {
+      if (syncStatus) syncStatus.textContent = text;
+    },
+    onApplied: applySyncedFiles,
+    onPulled: () => startImagePrefetch(db),
+  });
+
   const github = mountGithub(doc, db, {
     flush: flushEditing,
     exportBackup,
@@ -1212,10 +1251,17 @@ export function mountApp(doc, db) {
     hold: holdEditor,
   });
 
+  function hideFlush() {
+    flushNow();
+    sync?.flushNow();
+  }
+
   doc.addEventListener('visibilitychange', () => {
-    if (doc.visibilityState === 'hidden') flushNow();
+    if (doc.visibilityState === 'hidden') hideFlush();
+    else sync?.visible();
   });
-  window.addEventListener('pagehide', flushNow);
+  window.addEventListener('pagehide', hideFlush);
+  window.addEventListener('online', () => sync?.online());
 
   return {
     flush: flushNow,
@@ -1238,6 +1284,7 @@ export function mountApp(doc, db) {
       await github.refresh();
       github.resume();
       setStatus('saved');
+      await sync.start();
     },
   };
 }

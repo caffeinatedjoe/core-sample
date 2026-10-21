@@ -300,7 +300,7 @@ test('a saved image has no chip offline, and a true miss does not ask for sign-i
       const img = await until(() => (shown.nodes.preview.querySelector('img.embed-image') ? 'yes' : ''));
       assert.equal(img, 'yes');
       assert.equal(chipText(shown.nodes.preview), '');
-      assert.equal(github.urls.length, 0);
+      assert.equal(github.urls.some((url) => url.includes('/contents/') || url.includes(LINK)), false);
       assert.equal(shown.nodes.preview.textContent.includes('Sign in again'), false);
     } finally {
       shown.restore();

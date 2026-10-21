@@ -1,0 +1,755 @@
+// Automatic sync. The local-save clock is separate and must already have
+// written the note before a debounced run pushes it.
+import { deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta } from './db.js';
+import {
+  decodeUtf8Base64,
+  githubRequest,
+  githubStatusReason,
+  repoPath,
+  selectMarkdown,
+} from './github-api.js';
+import { loadGithubSettings } from './github-store.js';
+import { redact } from './github-redact.js';
+
+export const SYNC_DEBOUNCE_MS = 3000;
+export const SYNC_POLL_MS = 60 * 1000;
+const BACKOFF_BASE_MS = 2000;
+const BACKOFF_CAP_MS = 5 * 60 * 1000;
+const CURSOR_KEY = 'githubSyncCursor';
+
+export const SYNC_STATUS = {
+  synced: 'Synced',
+  syncing: 'Syncing',
+  offline: 'Offline',
+  pending: 'Changes pending',
+  conflict: 'Conflict',
+  auth: 'Authentication required',
+  failed: 'Sync failed',
+};
+
+const DELETED_COPY = 'GitHub no longer has this note. The copy on this device was kept.\n';
+
+export function presentSyncStatus(state = {}) {
+  if (!state.configured) return '';
+  if (state.authRequired) return SYNC_STATUS.auth;
+  if (state.conflict) return SYNC_STATUS.conflict;
+  if (state.offline) return SYNC_STATUS.offline;
+  if (state.failed) return SYNC_STATUS.failed;
+  if (state.syncing) return SYNC_STATUS.syncing;
+  if (state.pending || state.retrying) return SYNC_STATUS.pending;
+  if (state.confirmed) return SYNC_STATUS.synced;
+  return SYNC_STATUS.syncing;
+}
+
+export function backoffDelay(attempt, random = Math.random) {
+  const n = Math.max(0, Number(attempt) || 0);
+  const exp = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * (2 ** n));
+  const roll = Math.min(1, Math.max(0, Number(random()) || 0));
+  return Math.round(exp * (0.5 + roll * 0.5));
+}
+
+function header(headers, name) {
+  if (!headers) return '';
+  const value = headers[name] ?? headers[name.toLowerCase()];
+  return value == null ? '' : String(value);
+}
+
+// 403 counts only when the rate-limit quota is spent. 429 always counts.
+export function retryDelay({ status = 0, headers = {}, attempt = 0, now = Date.now(), random = () => 0 } = {}) {
+  const remaining = header(headers, 'x-ratelimit-remaining');
+  const reset = header(headers, 'x-ratelimit-reset');
+  const retryAfter = header(headers, 'retry-after');
+  const limited = status === 429 || (status === 403 && remaining === '0');
+  if (limited) {
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+      const when = Date.parse(retryAfter);
+      if (!Number.isNaN(when)) return Math.max(0, when - now);
+    }
+    const resetMs = Number(reset) * 1000;
+    if (reset && Number.isFinite(resetMs)) return Math.max(0, resetMs - now);
+  }
+  if (limited || status === 0 || status >= 500) return backoffDelay(attempt, random);
+  return 0;
+}
+
+export function utcConflictStamp(when) {
+  const date = when instanceof Date ? when : new Date(when);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`;
+}
+
+export function conflictCopyPath(path, when, taken = new Set()) {
+  const stamp = utcConflictStamp(when);
+  const slash = String(path).lastIndexOf('/');
+  const dir = slash >= 0 ? path.slice(0, slash + 1) : '';
+  const base = slash >= 0 ? path.slice(slash + 1) : String(path);
+  const stem = base.replace(/\.md$/i, '');
+  const first = `${dir}${stem} (conflict ${stamp}).md`;
+  if (!taken.has(first)) return first;
+  let n = 2;
+  let name = `${dir}${stem} (conflict ${stamp}-${n}).md`;
+  while (taken.has(name)) {
+    n += 1;
+    name = `${dir}${stem} (conflict ${stamp}-${n}).md`;
+  }
+  return name;
+}
+
+export function commitMessage(paths) {
+  if (!paths || paths.length === 1) return `Update ${paths[0]} from Core Sample`;
+  return `Update ${paths.length} notes from Core Sample`;
+}
+
+export function refUpdateBody(sha) {
+  return { sha, force: false };
+}
+
+export function syncedBase(file) {
+  if (!file) return '';
+  if (typeof file.baseSha === 'string' && file.baseSha) return file.baseSha;
+  if (typeof file.remoteSha === 'string' && file.remoteSha) return file.remoteSha;
+  return '';
+}
+
+export function reconcileNotes(files, remoteNotes) {
+  const remote = new Map((remoteNotes || []).map((note) => [note.localPath, note]));
+  const localPaths = new Set((files || []).map((file) => file && file.path));
+  const pushes = [];
+  const pulls = [];
+  const creates = [];
+  const conflicts = [];
+  for (const file of files || []) {
+    if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy) continue;
+    const found = remote.get(file.path);
+    const base = syncedBase(file);
+    if (file.conflict === true) {
+      conflicts.push({ path: file.path, reason: 'existing', remote: found || null });
+      continue;
+    }
+    const dirty = file.dirty === true;
+    if (dirty) {
+      if (!found) {
+        if (base) conflicts.push({ path: file.path, reason: 'deleted', remote: null });
+        else pushes.push(file);
+      } else if (base && found.sha === base) {
+        pushes.push(file);
+      } else {
+        conflicts.push({ path: file.path, reason: 'both', remote: found });
+      }
+      continue;
+    }
+    if (!found) {
+      if (base) conflicts.push({ path: file.path, reason: 'deleted', remote: null });
+      continue;
+    }
+    if (found.sha !== (file.remoteSha || base)) {
+      pulls.push({ file, remote: found });
+    }
+  }
+  for (const note of remoteNotes || []) {
+    if (!localPaths.has(note.localPath)) creates.push(note);
+  }
+  return { pushes, pulls, creates, conflicts };
+}
+
+function arm(setTimer, fn, ms) {
+  const id = setTimer(fn, ms);
+  if (id && typeof id.unref === 'function') id.unref();
+  return id;
+}
+
+export function createSyncClock({
+  debounceMs = SYNC_DEBOUNCE_MS,
+  pollMs = SYNC_POLL_MS,
+  setTimer = (fn, ms) => setTimeout(fn, ms),
+  clearTimer = (id) => clearTimeout(id),
+  onDebounced,
+  onPoll,
+} = {}) {
+  let debounceId = null;
+  let pollId = null;
+  let stopped = false;
+
+  function clearDebounce() {
+    if (debounceId != null) clearTimer(debounceId);
+    debounceId = null;
+  }
+
+  return {
+    edited() {
+      if (stopped) return;
+      clearDebounce();
+      debounceId = arm(setTimer, () => {
+        debounceId = null;
+        onDebounced?.();
+      }, debounceMs);
+    },
+    flush() {
+      if (stopped) return;
+      clearDebounce();
+      onDebounced?.();
+    },
+    start() {
+      if (stopped || pollId != null) return;
+      const tick = () => {
+        if (stopped) return;
+        onPoll?.();
+        pollId = arm(setTimer, tick, pollMs);
+      };
+      pollId = arm(setTimer, tick, pollMs);
+    },
+    stop() {
+      stopped = true;
+      clearDebounce();
+      if (pollId != null) clearTimer(pollId);
+      pollId = null;
+    },
+  };
+}
+
+function repoUrl(repo, suffix) {
+  return `https://api.github.com/repos/${repo}${suffix}`;
+}
+
+function readRef(body, branch) {
+  const want = `refs/heads/${branch}`;
+  if (!body || body.ref !== want) return '';
+  const sha = body.object && body.object.sha;
+  return typeof sha === 'string' ? sha : '';
+}
+
+function blobText(body) {
+  if (!body || typeof body.content !== 'string') {
+    throw new Error('GitHub left out the text of that note. Nothing was changed.');
+  }
+  if (body.encoding === 'utf-8') return body.content;
+  if (body.encoding === 'base64') return decodeUtf8Base64(body.content);
+  throw new Error('GitHub left out the text of that note. Nothing was changed.');
+}
+
+async function request(fetchImpl, token, url, options = {}) {
+  return githubRequest(fetchImpl, url, { token, secrets: [token], ...options });
+}
+
+function limited(result) {
+  return retryDelay({ status: result.status, headers: result.headers || {} }) > 0
+    && (result.status === 429 || (result.status === 403 && header(result.headers, 'x-ratelimit-remaining') === '0'));
+}
+
+export function createAutoSync({
+  db,
+  fetchImpl = globalThis.fetch,
+  now = () => Date.now(),
+  random = Math.random,
+  debounceMs = SYNC_DEBOUNCE_MS,
+  pollMs = SYNC_POLL_MS,
+  setTimer = (fn, ms) => setTimeout(fn, ms),
+  clearTimer = (id) => clearTimeout(id),
+  offline = () => false,
+  beforeSync = async () => {},
+  onStatus = () => {},
+  onApplied = () => {},
+  onPulled = () => {},
+} = {}) {
+  let chain = Promise.resolve();
+  let state = { configured: false, confirmed: false };
+  let stopped = false;
+
+  function publish(next) {
+    state = { ...state, ...next };
+    const text = presentSyncStatus(state);
+    onStatus(text, state);
+    return { ...state, status: text };
+  }
+
+  function finish(partial) {
+    return publish({
+      configured: true,
+      authRequired: false,
+      conflict: false,
+      offline: false,
+      failed: false,
+      syncing: false,
+      pending: false,
+      retrying: false,
+      confirmed: false,
+      ...partial,
+    });
+  }
+
+  async function ensureOp(file, settings) {
+    const op = {
+      id: file.path,
+      repo: settings.repo,
+      branch: settings.branch,
+      path: file.path,
+      baseSha: syncedBase(file),
+      enqueuedAt: now(),
+      attempts: 0,
+      nextAttemptAt: 0,
+    };
+    const existing = (await listOps(db)).find((item) => item.id === file.path);
+    if (existing) {
+      op.attempts = existing.attempts || 0;
+      op.nextAttemptAt = existing.nextAttemptAt || 0;
+      op.enqueuedAt = existing.enqueuedAt || op.enqueuedAt;
+    }
+    await putOp(db, op);
+    return op;
+  }
+
+  async function noteEdited(file) {
+    if (!file || !file.path || file.conflictCopy || file.trashedAt) return;
+    const settings = await loadGithubSettings(db);
+    if (!settings.token || !settings.repo || !settings.branch) return;
+    await ensureOp({ ...file, dirty: true }, settings);
+    publish({ configured: true, pending: true, confirmed: false, syncing: false });
+    clock.edited();
+  }
+
+  async function syncOnce(reason) {
+    if (stopped) return finish(state);
+    try {
+      await beforeSync();
+    } catch {
+      // The note stays on screen. Sync tries again with whatever was saved.
+    }
+    const settings = await loadGithubSettings(db);
+    const configured = Boolean(settings.token && settings.repo && settings.branch);
+    if (!configured) return finish({ configured: false, syncing: false, confirmed: false });
+    const ops = await listOps(db);
+    const pending = ops.some((op) => op.repo === settings.repo && op.branch === settings.branch);
+    if (offline()) {
+      return finish({ offline: true, pending, syncing: false });
+    }
+    publish({ configured: true, offline: false, syncing: true, pending, failed: false, authRequired: false });
+    try {
+      return await perform(settings, ops, reason, finish);
+    } catch (error) {
+      const message = redact(error && error.message ? error.message : '', [settings.token]);
+      const reached = message.includes('could not be reached') || message.includes('offline');
+      return finish({
+        syncing: false,
+        offline: reached || offline(),
+        failed: !reached,
+        pending: true,
+      });
+    }
+  }
+
+  function queue(reason) {
+    const job = chain.then(() => syncOnce(reason));
+    chain = job.then(() => {}, () => {});
+    return job;
+  }
+
+  const clock = createSyncClock({
+    debounceMs,
+    pollMs,
+    setTimer,
+    clearTimer,
+    onDebounced: () => queue('edit'),
+    onPoll: () => queue('poll'),
+  });
+
+  async function perform(settings, ops, reason, finish) {
+    const token = settings.token;
+    const call = (url, options) => request(fetchImpl, token, url, options);
+    const dirtyFiles = (await listFiles(db)).filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown');
+    for (const file of dirtyFiles) {
+      if (!ops.some((op) => op.id === file.path)) ops.push(await ensureOp(file, settings));
+    }
+    const refUrl = repoUrl(settings.repo, `/git/ref/heads/${encodeURIComponent(settings.branch)}`);
+    const cursor = await getMeta(db, CURSOR_KEY);
+    const samePlace = cursor && cursor.repo === settings.repo && cursor.branch === settings.branch && (cursor.root || '') === (settings.root || '');
+    const savedEtag = samePlace ? cursor.etag || '' : '';
+
+    let ref = await call(refUrl, { etag: savedEtag });
+    if (ref.status === 401) {
+      const user = await call('https://api.github.com/user');
+      if (user.status === 401) {
+        return finish({
+          configured: true,
+          authRequired: true,
+          syncing: false,
+          confirmed: false,
+          pending: ops.length > 0,
+          failed: false,
+        });
+      }
+      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
+    }
+    if (limited(ref)) {
+      const wait = retryDelay({ status: ref.status, headers: ref.headers, now: now(), random });
+      return scheduleRetry(settings, ops, wait);
+    }
+    if (ref.status === 404) {
+      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
+    }
+    if (ref.status !== 304 && !ref.ok) {
+      if (ref.status === 0) {
+        return finish({ configured: true, offline: true, syncing: false, confirmed: false, pending: ops.length > 0 });
+      }
+      const wait = retryDelay({ status: ref.status, headers: ref.headers, attempt: 0, now: now(), random });
+      if (wait) return scheduleRetry(settings, ops, wait);
+      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
+    }
+
+    let headSha = '';
+    let treeSha = '';
+    if (ref.status === 304 && samePlace && cursor.headSha && cursor.treeSha) {
+      headSha = cursor.headSha;
+      treeSha = cursor.treeSha;
+    } else {
+      headSha = readRef(ref.body, settings.branch);
+      if (!headSha) {
+        return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
+      }
+      const commit = await call(repoUrl(settings.repo, `/git/commits/${headSha}`));
+      if (commit.status === 401) return authOrFail(settings, ops);
+      if (!commit.ok || !commit.body || !commit.body.tree || typeof commit.body.tree.sha !== 'string') {
+        return hold(settings, ops, commit);
+      }
+      treeSha = commit.body.tree.sha;
+    }
+
+    const mine = ops.filter((op) => op.path && op.repo === settings.repo && op.branch === settings.branch);
+    const ready = reason === 'flush' || reason === 'online'
+      ? mine
+      : mine.filter((op) => !op.nextAttemptAt || op.nextAttemptAt <= now());
+
+    if (ref.status === 304 && ready.length === 0) {
+      const files = await listFiles(db);
+      const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy);
+      await setMeta(db, CURSOR_KEY, {
+        repo: settings.repo,
+        branch: settings.branch,
+        root: settings.root || '',
+        etag: savedEtag,
+        headSha,
+        treeSha,
+      });
+      return finish({
+        configured: true,
+        syncing: false,
+        confirmed: !conflicted,
+        conflict: conflicted,
+        pending: mine.length > 0 && ready.length === 0,
+        failed: false,
+        offline: false,
+      });
+    }
+
+    const tree = await call(repoUrl(settings.repo, `/git/trees/${treeSha}?recursive=1`));
+    if (tree.status === 401) return authOrFail(settings, ops);
+    if (!tree.ok) return hold(settings, ops, tree);
+    let remoteNotes = [];
+    try {
+      remoteNotes = selectMarkdown(tree.body, settings.root);
+    } catch {
+      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: mine.length > 0 });
+    }
+    await setMeta(db, CURSOR_KEY, {
+      repo: settings.repo,
+      branch: settings.branch,
+      root: settings.root || '',
+      etag: ref.etag || savedEtag,
+      headSha,
+      treeSha,
+    });
+
+    const files = await listFiles(db);
+    const plan = reconcileNotes(files, remoteNotes);
+    const applied = [];
+    let pulled = false;
+    for (const item of plan.pulls) {
+      const fresh = await getFile(db, item.file.path);
+      if (!fresh || fresh.dirty || fresh.conflict) continue;
+      const blob = await call(repoUrl(settings.repo, `/git/blobs/${item.remote.sha}`));
+      if (!blob.ok) return hold(settings, ops, blob);
+      const text = blobText(blob.body);
+      const next = {
+        ...fresh,
+        content: text,
+        remoteSha: item.remote.sha,
+        baseSha: item.remote.sha,
+        dirty: false,
+        conflict: false,
+        updatedAt: now(),
+      };
+      await putFile(db, next);
+      applied.push(next);
+      pulled = true;
+    }
+    for (const note of plan.creates) {
+      const blob = await call(repoUrl(settings.repo, `/git/blobs/${note.sha}`));
+      if (!blob.ok) return hold(settings, ops, blob);
+      const text = blobText(blob.body);
+      const created = {
+        path: note.localPath,
+        content: text,
+        kind: 'markdown',
+        encoding: 'utf-8',
+        createdAt: now(),
+        updatedAt: now(),
+        trashedAt: null,
+        remoteSha: note.sha,
+        baseSha: note.sha,
+        dirty: false,
+        conflict: false,
+      };
+      const already = await getFile(db, created.path);
+      if (already) continue;
+      await putFile(db, created);
+      applied.push(created);
+      pulled = true;
+    }
+
+    const taken = new Set((await listFiles(db)).map((file) => file.path));
+    let conflicted = false;
+    for (const item of plan.conflicts) {
+      const fresh = await getFile(db, item.path);
+      if (!fresh) continue;
+      if (fresh.conflict === true) {
+        conflicted = true;
+        continue;
+      }
+      let copy = DELETED_COPY;
+      if (item.remote && item.remote.sha) {
+        const blob = await call(repoUrl(settings.repo, `/git/blobs/${item.remote.sha}`));
+        if (!blob.ok) return hold(settings, ops, blob);
+        copy = blobText(blob.body);
+      }
+      const siblingPath = conflictCopyPath(item.path, now(), taken);
+      taken.add(siblingPath);
+      const sibling = {
+        path: siblingPath,
+        content: copy,
+        kind: 'markdown',
+        encoding: 'utf-8',
+        createdAt: now(),
+        updatedAt: now(),
+        trashedAt: null,
+        remoteSha: null,
+        baseSha: null,
+        dirty: false,
+        conflict: false,
+        conflictCopy: true,
+      };
+      await putFile(db, sibling);
+      const marked = { ...fresh, conflict: true, dirty: true };
+      await putFile(db, marked);
+      await ensureOp(marked, settings);
+      applied.push(sibling, marked);
+      conflicted = true;
+    }
+
+    const pushFiles = [];
+    for (const file of plan.pushes) {
+      const fresh = await getFile(db, file.path);
+      if (!fresh || fresh.conflict || fresh.conflictCopy || fresh.trashedAt) continue;
+      if (!ready.some((op) => op.path === fresh.path) && fresh.dirty) {
+        // A dirty note whose backoff has not elapsed stays pending.
+        continue;
+      }
+      if (!fresh.dirty && !ready.some((op) => op.path === fresh.path)) continue;
+      pushFiles.push(fresh);
+    }
+
+    if (applied.length) onApplied(applied);
+    if (pulled) {
+      try {
+        await onPulled();
+      } catch {
+        // The notes are saved. Images can be fetched on the next sync.
+      }
+    }
+
+    if (!pushFiles.length) {
+      const still = (await listOps(db)).some((op) => op.repo === settings.repo && op.branch === settings.branch);
+      return finish({
+        configured: true,
+        syncing: false,
+        conflict: conflicted,
+        pending: still && !conflicted,
+        confirmed: !conflicted && !still,
+        failed: false,
+        offline: false,
+      });
+    }
+
+    const again = await call(refUrl);
+    if (again.status === 401) return authOrFail(settings, ops);
+    if (!again.ok) return hold(settings, ops, again);
+    const freshHead = readRef(again.body, settings.branch);
+    if (!freshHead || freshHead !== headSha) {
+      return finish({
+        configured: true,
+        syncing: false,
+        pending: true,
+        confirmed: false,
+        failed: false,
+        conflict: conflicted,
+      });
+    }
+
+    const entries = [];
+    const written = [];
+    for (const file of pushFiles) {
+      const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
+        method: 'POST',
+        body: { content: String(file.content ?? ''), encoding: 'utf-8' },
+      });
+      if (!blob.ok || !blob.body || typeof blob.body.sha !== 'string') return hold(settings, ops, blob);
+      entries.push({
+        path: repoPath(settings.root, file.path),
+        mode: '100644',
+        type: 'blob',
+        sha: blob.body.sha,
+      });
+      written.push({ file, sha: blob.body.sha, content: String(file.content ?? '') });
+    }
+    const treeWrite = await call(repoUrl(settings.repo, '/git/trees'), {
+      method: 'POST',
+      body: { base_tree: treeSha, tree: entries },
+    });
+    if (!treeWrite.ok || !treeWrite.body || typeof treeWrite.body.sha !== 'string') return hold(settings, ops, treeWrite);
+    const commitWrite = await call(repoUrl(settings.repo, '/git/commits'), {
+      method: 'POST',
+      body: {
+        message: commitMessage(written.map((item) => item.file.path)),
+        tree: treeWrite.body.sha,
+        parents: [freshHead],
+      },
+    });
+    if (!commitWrite.ok || !commitWrite.body || typeof commitWrite.body.sha !== 'string') {
+      return hold(settings, ops, commitWrite);
+    }
+    const commitSha = commitWrite.body.sha;
+    const update = refUpdateBody(commitSha);
+    if (update.force !== false) {
+      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: true });
+    }
+    const patched = await call(refUrl, { method: 'PATCH', body: update });
+    const patchedSha = patched.body && patched.body.object && patched.body.object.sha;
+    if (!patched.ok || patchedSha !== commitSha) return hold(settings, ops, patched);
+
+    const settled = [];
+    for (const item of written) {
+      const fresh = await getFile(db, item.file.path);
+      if (!fresh) continue;
+      if (String(fresh.content ?? '') !== item.content) {
+        await ensureOp(fresh, settings);
+        continue;
+      }
+      const next = {
+        ...fresh,
+        remoteSha: item.sha,
+        baseSha: item.sha,
+        dirty: false,
+        conflict: false,
+      };
+      await putFile(db, next);
+      await deleteOps(db, [fresh.path]);
+      settled.push(next);
+    }
+    if (settled.length) onApplied(settled);
+    const remaining = await listOps(db);
+    const stillPending = remaining.some((op) => op.repo === settings.repo && op.branch === settings.branch);
+    const stillConflict = (await listFiles(db)).some((file) => file && file.conflict === true && !file.conflictCopy);
+    return finish({
+      configured: true,
+      syncing: false,
+      confirmed: !stillPending && !stillConflict,
+      pending: stillPending && !stillConflict,
+      conflict: stillConflict,
+      failed: false,
+      offline: false,
+    });
+  }
+
+  async function authOrFail(settings, ops) {
+    const user = await request(fetchImpl, settings.token, 'https://api.github.com/user');
+    if (user.status === 401) {
+      return finish({
+        configured: true,
+        authRequired: true,
+        syncing: false,
+        confirmed: false,
+        pending: ops.length > 0,
+        failed: false,
+      });
+    }
+    return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
+  }
+
+  async function scheduleRetry(settings, ops, wait) {
+    const when = now() + wait;
+    for (const op of ops) {
+      if (op.repo !== settings.repo || op.branch !== settings.branch) continue;
+      await putOp(db, { ...op, attempts: (op.attempts || 0) + 1, nextAttemptAt: when });
+    }
+    arm(setTimer, () => queue('retry'), wait);
+    return finish({
+      configured: true,
+      syncing: false,
+      retrying: true,
+      pending: true,
+      confirmed: false,
+      failed: false,
+    });
+  }
+
+  async function hold(settings, ops, result) {
+    if (result && result.status === 401) return authOrFail(settings, ops);
+    if (result && (limited(result) || result.status === 0 || result.status >= 500)) {
+      const attempt = ops.reduce((max, op) => Math.max(max, op.attempts || 0), 0);
+      const wait = retryDelay({
+        status: result.status || 0,
+        headers: result.headers || {},
+        attempt,
+        now: now(),
+        random,
+      }) || backoffDelay(attempt, random);
+      return scheduleRetry(settings, ops, wait);
+    }
+    const message = result && result.message ? redact(result.message, [settings.token]) : githubStatusReason(result && result.status);
+    return finish({
+      configured: true,
+      failed: true,
+      syncing: false,
+      confirmed: false,
+      pending: ops.length > 0,
+      detail: message,
+    });
+  }
+
+  return {
+    noteEdited,
+    flushNow() {
+      clock.flush();
+    },
+    visible() {
+      queue('visible');
+    },
+    online() {
+      queue('online');
+    },
+    start() {
+      clock.start();
+      return queue('launch');
+    },
+    runNow(reason = 'manual') {
+      return queue(reason);
+    },
+    stop() {
+      stopped = true;
+      clock.stop();
+    },
+    status() {
+      return presentSyncStatus(state);
+    },
+  };
+}

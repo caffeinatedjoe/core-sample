@@ -224,7 +224,9 @@ export function fileFromRemote(note, content, sha, now = Date.now()) {
     updatedAt: now,
     trashedAt: null,
     remoteSha: sha,
+    baseSha: sha,
     dirty: false,
+    conflict: false,
   };
 }
 
@@ -252,7 +254,7 @@ export function applyPushResult(file, result) {
     return { file, changed: false, message };
   }
   return {
-    file: { ...file, remoteSha: result.sha, dirty: false },
+    file: { ...file, remoteSha: result.sha, baseSha: result.sha, dirty: false, conflict: false },
     changed: true,
     message: 'Pushed this note.',
   };
@@ -272,7 +274,7 @@ export function applyPull(local, remote) {
   if (local.content === remote.content) {
     return {
       action: 'adopt',
-      file: { ...local, remoteSha: remote.sha, dirty: false },
+      file: { ...local, remoteSha: remote.sha, baseSha: remote.sha, dirty: false, conflict: false },
       message: 'This note already matches GitHub.',
     };
   }
@@ -285,7 +287,7 @@ export function applyPull(local, remote) {
   }
   return {
     action: 'update',
-    file: { ...local, content: remote.content, remoteSha: remote.sha, dirty: false, updatedAt: Date.now() },
+    file: { ...local, content: remote.content, remoteSha: remote.sha, baseSha: remote.sha, dirty: false, conflict: false, updatedAt: Date.now() },
     message: 'Pulled this note.',
   };
 }
@@ -333,10 +335,29 @@ export function readRemoteContent(body, localPath) {
   }
 }
 
-export async function githubRequest(fetchImpl, url, { token, method = 'GET', body, secrets = [] } = {}) {
+function responseHeaders(response) {
+  const out = {};
+  const headers = response && response.headers;
+  if (!headers) return out;
+  if (typeof headers.forEach === 'function') {
+    headers.forEach((value, key) => {
+      out[String(key).toLowerCase()] = value;
+    });
+    return out;
+  }
+  if (typeof headers.entries === 'function') {
+    for (const [key, value] of headers.entries()) out[String(key).toLowerCase()] = value;
+    return out;
+  }
+  for (const [key, value] of Object.entries(headers)) out[String(key).toLowerCase()] = value;
+  return out;
+}
+
+export async function githubRequest(fetchImpl, url, { token, method = 'GET', body, secrets = [], etag = '' } = {}) {
   if (token && String(url).includes(token)) throw new Error('The request was refused.');
   const headers = githubHeaders(token);
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (etag) headers['If-None-Match'] = etag;
   let response;
   try {
     response = await fetchImpl(url, {
@@ -354,11 +375,14 @@ export async function githubRequest(fetchImpl, url, { token, method = 'GET', bod
   } catch {
     text = '';
   }
+  const headerMap = responseHeaders(response);
   return {
     ok: response.ok,
     status: response.status,
     body: parseJson(text),
     message: readErrorMessage(response.status, text, [token, ...secrets]),
+    headers: headerMap,
+    etag: headerMap.etag || '',
   };
 }
 

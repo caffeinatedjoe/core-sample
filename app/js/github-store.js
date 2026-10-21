@@ -1,4 +1,4 @@
-import { commitFiles, getMeta, listFiles, setMeta } from './db.js';
+import { commitFiles, deleteOps, getMeta, listFiles, listOps, setMeta } from './db.js';
 
 export const TOKEN_KEY = 'githubToken';
 export const CLIENT_ID_KEY = 'githubClientId';
@@ -121,6 +121,8 @@ export async function disconnectGithub(db) {
 export async function eraseLocalNotes(db) {
   const files = await listFiles(db);
   await commitFiles(db, { remove: files.map((file) => file.path) });
+  const ops = await listOps(db);
+  if (ops.length) await deleteOps(db, ops.map((op) => op.id));
   await setMeta(db, 'folders', []);
   await setMeta(db, 'recent', []);
   await setMeta(db, 'expanded', []);

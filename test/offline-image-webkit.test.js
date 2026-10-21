@@ -170,7 +170,7 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
       const status = document.getElementById('save-status')?.textContent || '';
       return Boolean(navigator.serviceWorker?.controller)
         && status.includes('Saved')
-        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v22';
+        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v23';
     });
     await page.evaluate(async ({ note, image, link, now }) => {
       const db = await new Promise((resolve, reject) => {

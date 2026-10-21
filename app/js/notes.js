@@ -10,7 +10,7 @@ Core Sample keeps notes on this phone. They are saved as you type.
 - [ ] Open Source and see the Markdown change
 - [ ] Tap [[Another note]] in Preview to open it
 
-Notes → GitHub can sign in and download Markdown. Nothing is sent until you push a note.
+Notes → GitHub can sign in and download Markdown. Edits to the saved branch sync after a short pause.
 
 Clearing Safari website data for this app deletes these notes.
 `;
