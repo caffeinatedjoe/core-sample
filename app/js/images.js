@@ -54,7 +54,11 @@ export async function cachedImage(db, repo, path) {
   const row = await getImage(db, cacheKey(repo, path));
   if (!row || !row.blob) return null;
   row.viewedAt = Date.now();
-  await putImage(db, row);
+  try {
+    await putImage(db, row);
+  } catch {
+    // The bytes are already loaded. A failed timestamp write must not hide them.
+  }
   return row;
 }
 
@@ -130,7 +134,12 @@ export async function loadEmbedBlob(db, {
   if (!kind || kind === 'unsupported') return { status: 'missing', name };
   const resolved = resolveEmbedPath(link, { notePath, paths, attachmentFolderPath });
   if (!resolved) return { status: 'missing', name };
-  const hit = await cachedImage(db, repo, resolved);
+  let hit = null;
+  try {
+    hit = await cachedImage(db, repo, resolved);
+  } catch {
+    hit = null;
+  }
   if (hit) return { status: 'ready', name: basename(resolved), path: resolved, blob: hit.blob, type: hit.type || mimeFor(resolved) };
   if (!token || !repo || !fetchImpl) return { status: 'missing', name: basename(resolved) };
   const file = await fetchRawBytes(fetchImpl, {
@@ -141,7 +150,11 @@ export async function loadEmbedBlob(db, {
   });
   const type = mimeFor(resolved);
   const blob = new Blob([file.bytes], { type });
-  await rememberImage(db, { repo, path: resolved, blob, type }, limit);
+  try {
+    await rememberImage(db, { repo, path: resolved, blob, type }, limit);
+  } catch {
+    // The download can still be shown when IndexedDB rejects the blob.
+  }
   return { status: 'ready', name: basename(resolved), path: resolved, blob, type };
 }
 

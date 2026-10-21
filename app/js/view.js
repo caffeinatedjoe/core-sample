@@ -111,6 +111,7 @@ export function mountApp(doc, db) {
 
   let embedTicket = 0;
   const embedUrls = new Set();
+  const embedBlobs = new WeakMap();
   const viewerUrls = new Set();
   const photos = createImageViewer(doc, doc.getElementById('image-viewer'), {
     onClose() {
@@ -178,6 +179,7 @@ export function mountApp(doc, db) {
       if (img && (img === target || img.contains(target))) start = slides.length;
       slides.push({
         src: usable ? src : '',
+        blob: img ? embedBlobs.get(img) || null : null,
         alt: img?.getAttribute('alt') || node.querySelector('.embed-fallback')?.textContent || '',
         thumb: img || node,
         load: usable ? null : () => loadEmbedSrc(embed),
@@ -202,8 +204,14 @@ export function mountApp(doc, db) {
     for (const img of root.querySelectorAll('img.embed-image')) {
       if (img.dataset.embedBound === '1') continue;
       img.dataset.embedBound = '1';
-      img.addEventListener('error', () => replaceBrokenImage(img));
-      if (img.complete && img.getAttribute('src') && img.naturalWidth === 0) replaceBrokenImage(img);
+      img.addEventListener('error', () => {
+        const src = img.getAttribute('src');
+        const frame = doc.defaultView?.requestAnimationFrame?.bind(doc.defaultView) || ((fn) => fn());
+        frame(() => {
+          if (!img.isConnected || img.getAttribute('src') !== src || img.naturalWidth > 0) return;
+          replaceBrokenImage(img);
+        });
+      });
     }
   }
 
@@ -264,6 +272,7 @@ export function mountApp(doc, db) {
         return;
       }
       embedUrls.add(made.url);
+      embedBlobs.set(made.img, result.blob);
       node.replaceChildren(made.img);
       bindImageErrors(node);
     }

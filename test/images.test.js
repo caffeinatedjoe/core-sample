@@ -146,6 +146,136 @@ test('the image cache drops the least recently viewed blobs past the limit', asy
   await deleteDatabase(name);
 });
 
+test('a failed image-cache write still returns the downloaded bytes', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const original = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function rejectImages(record) {
+    if (this.name === 'images') throw new Error('blob store rejected');
+    return original.call(this, record);
+  };
+  try {
+    let calls = 0;
+    const result = await loadEmbedBlob(db, {
+      link: 'image-1710000000000.png',
+      notePath: 'Field Notes.md',
+      paths: ['assets/Field Notes/image-1710000000000.png'],
+      attachmentFolderPath: './assets/Field Notes',
+      repo: 'owner/repo',
+      branch: 'main',
+      token: TOKEN,
+      fetchImpl: async () => {
+        calls += 1;
+        return rawResponse(png.buffer);
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'ready');
+    assert.equal(result.path, 'assets/Field Notes/image-1710000000000.png');
+    assert.equal(result.blob.size, png.byteLength);
+  } finally {
+    IDBObjectStore.prototype.put = original;
+    db.close();
+    await deleteDatabase(name);
+  }
+});
+
+test('a failed viewed-at write still returns the cached image', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const bytes = Uint8Array.from([9, 8, 7, 6]);
+  const blob = new Blob([bytes], { type: 'image/png' });
+  await rememberImage(db, {
+    repo: 'owner/repo',
+    path: 'assets/Field Notes/image-1710000000000.png',
+    blob,
+    type: 'image/png',
+  });
+  const original = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function rejectImages(record) {
+    if (this.name === 'images') throw new Error('viewedAt write failed');
+    return original.call(this, record);
+  };
+  try {
+    let calls = 0;
+    const result = await loadEmbedBlob(db, {
+      link: 'image-1710000000000.png',
+      notePath: 'Field Notes.md',
+      paths: ['assets/Field Notes/image-1710000000000.png'],
+      attachmentFolderPath: './assets/Field Notes',
+      repo: 'owner/repo',
+      branch: 'main',
+      token: TOKEN,
+      fetchImpl: async () => {
+        calls += 1;
+        return rawResponse(bytes.buffer);
+      },
+    });
+    assert.equal(calls, 0);
+    assert.equal(result.status, 'ready');
+    assert.equal(result.blob.size, bytes.byteLength);
+  } finally {
+    IDBObjectStore.prototype.put = original;
+    db.close();
+    await deleteDatabase(name);
+  }
+});
+
+test('an image stored at database version 2 survives a later open of the same database', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore('files', { keyPath: 'path' });
+      db.createObjectStore('meta', { keyPath: 'key' });
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('files', 'readwrite');
+      tx.objectStore('files').put({ path: 'Field Notes.md', content: 'keep', kind: 'markdown', updatedAt: 1 });
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    };
+    request.onerror = () => reject(request.error);
+  });
+  const first = await openDatabase(name);
+  const blob = new Blob([Uint8Array.from([4, 5, 6, 7])], { type: 'image/png' });
+  await rememberImage(first, {
+    repo: 'owner/repo',
+    path: 'assets/Field Notes/image-1710000000000.png',
+    blob,
+    type: 'image/png',
+  });
+  first.close();
+  const second = await openDatabase(name);
+  const file = await getFile(second, 'Field Notes.md');
+  assert.equal(file.content, 'keep');
+  let calls = 0;
+  const result = await loadEmbedBlob(second, {
+    link: 'image-1710000000000.png',
+    notePath: 'Field Notes.md',
+    paths: ['assets/Field Notes/image-1710000000000.png'],
+    attachmentFolderPath: './assets/Field Notes',
+    repo: 'owner/repo',
+    branch: 'main',
+    token: TOKEN,
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error('offline');
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.blob.size, blob.size);
+  second.close();
+  await deleteDatabase(name);
+});
+
 test('adding the image store keeps notes saved by the previous database', async () => {
   const name = `core-sample-${randomUUID()}`;
   await new Promise((resolve, reject) => {
