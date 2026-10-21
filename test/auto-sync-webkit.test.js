@@ -46,11 +46,18 @@ function serve() {
   });
 }
 
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, PATCH, PUT, OPTIONS',
+  'access-control-allow-headers': 'authorization, content-type, if-none-match, accept',
+  'access-control-expose-headers': 'etag, retry-after, x-ratelimit-remaining, x-ratelimit-reset',
+};
+
 function json(route, status, body, headers = {}) {
   return route.fulfill({
     status,
     contentType: 'application/json',
-    headers,
+    headers: { ...CORS, ...headers },
     body: status === 304 ? '' : JSON.stringify(body),
   });
 }
@@ -85,16 +92,23 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     const method = request.method();
     urls.push(`${method} ${url}`);
     if (url.includes('gho_')) throw new Error('token leaked into the url');
+    if (method === 'OPTIONS') {
+      const requested = request.headers()['access-control-request-headers'];
+      await route.fulfill({
+        status: 204,
+        headers: {
+          ...CORS,
+          'access-control-allow-headers': requested || CORS['access-control-allow-headers'],
+        },
+      });
+      return;
+    }
     if (url.endsWith('/user')) {
       await json(route, 200, { login: 'octocat' });
       return;
     }
     if (url.includes('/git/ref/heads/main') && method !== 'PATCH') {
       const etag = `"${state.head}"`;
-      if (request.headers()['if-none-match'] === etag) {
-        await json(route, 304, null, { etag });
-        return;
-      }
       await json(route, 200, { ref: 'refs/heads/main', object: { sha: state.head, type: 'commit' } }, { etag });
       return;
     }
