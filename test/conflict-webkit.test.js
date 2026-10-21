@@ -149,9 +149,9 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
       const hit = await choice.evaluate((node) => {
         const rect = node.getBoundingClientRect();
         const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        return target === node;
+        return target === node ? true : `${target?.id || ''}.${target?.className || ''} at ${Math.round(rect.top)}`;
       });
-      assert.equal(hit, true);
+      assert.equal(hit, true, String(hit));
     }
   }
   try {
@@ -248,6 +248,18 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
     const resolveHeight = await page.locator('#conflict-resolve-button').evaluate((node) => node.getBoundingClientRect().height);
     assert.equal(target >= 44, true);
     assert.equal(resolveHeight >= 44, true);
+    const resolveInView = await page.locator('#conflict-resolve-button').evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    });
+    assert.equal(resolveInView, true);
+    for (const id of ['#conflict-prev', '#conflict-next']) {
+      const size = await page.locator(id).evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        return Math.min(rect.width, rect.height);
+      });
+      assert.equal(size >= 44, true);
+    }
     await page.locator('.hunk-choice[data-choice="phone"]').click();
     assert.equal(await page.locator('#conflict-resolve-button').isDisabled(), false);
 

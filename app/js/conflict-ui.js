@@ -82,11 +82,16 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     return doc.getElementById('conflict-resolve-bar');
   }
 
+  function stepBar() {
+    return doc.getElementById('conflict-step-bar');
+  }
+
   function paintList() {
     listView.hidden = false;
     resolveView.hidden = true;
-    const bar = resolveBar();
-    if (bar) bar.hidden = true;
+    for (const bar of [resolveBar(), stepBar()]) {
+      if (bar) bar.hidden = true;
+    }
     heading.textContent = 'Conflicts';
     listView.replaceChildren();
     const items = listConflicts(files());
@@ -144,17 +149,17 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
   function refreshChrome() {
     const conflicts = hunks.filter((hunk) => hunk.kind === 'conflict');
     const left = unresolvedCount(hunks);
-    const count = resolveView.querySelector('#conflict-remaining');
+    const count = doc.getElementById('conflict-remaining');
     if (count) {
       count.textContent = left === 0 ? 'No conflicts left' : `${left} conflict${left === 1 ? '' : 's'} left`;
     }
-    const label = resolveView.querySelector('#conflict-step-label');
+    const label = doc.getElementById('conflict-step-label');
     if (label) {
       const shown = Math.min(focusAt + 1, Math.max(conflicts.length, 1));
       label.textContent = conflicts.length ? `Conflict ${shown} of ${conflicts.length}` : 'No conflicting lines';
     }
-    const prev = resolveView.querySelector('#conflict-prev');
-    const next = resolveView.querySelector('#conflict-next');
+    const prev = doc.getElementById('conflict-prev');
+    const next = doc.getElementById('conflict-next');
     if (prev) prev.disabled = focusAt <= 0;
     if (next) next.disabled = focusAt >= conflicts.length - 1;
     const resolve = doc.getElementById('conflict-resolve-button');
@@ -173,25 +178,39 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     const file = currentFile();
     resolveView.replaceChildren();
     if (!file) {
+      for (const bar of [resolveBar(), stepBar()]) {
+        if (bar) bar.hidden = true;
+      }
       resolveView.append(el(doc, 'p', 'conflict-empty', 'That note is no longer on this phone.'));
       return;
     }
     heading.textContent = file.path;
     const nav = el(doc, 'div', 'conflict-nav');
-    const prev = button(doc, 'conflict-step', 'Previous');
+    const prev = button(doc, 'conflict-step', '‹');
     prev.id = 'conflict-prev';
+    prev.setAttribute('aria-label', 'Previous conflict');
+    const counts = el(doc, 'div', 'conflict-counts');
     const step = el(doc, 'p', 'conflict-step-label', '');
     step.id = 'conflict-step-label';
-    const next = button(doc, 'conflict-step', 'Next');
-    next.id = 'conflict-next';
-    prev.addEventListener('click', () => focusConflict(-1));
-    next.addEventListener('click', () => focusConflict(1));
     const left = el(doc, 'p', 'conflict-remaining', '');
     left.id = 'conflict-remaining';
-    nav.append(prev, step, next);
-    const bar = el(doc, 'div', 'conflict-bar');
-    bar.append(nav, left);
-    resolveView.append(bar);
+    left.setAttribute('aria-live', 'polite');
+    counts.append(step, left);
+    const next = button(doc, 'conflict-step', '›');
+    next.id = 'conflict-next';
+    next.setAttribute('aria-label', 'Next conflict');
+    prev.addEventListener('click', () => focusConflict(-1));
+    next.addEventListener('click', () => focusConflict(1));
+    nav.append(prev, counts, next);
+    const fixedStep = stepBar();
+    if (fixedStep) {
+      fixedStep.replaceChildren(nav);
+      fixedStep.hidden = false;
+    } else {
+      const bar = el(doc, 'div', 'conflict-bar');
+      bar.append(nav);
+      resolveView.append(bar);
+    }
 
     const whole = el(doc, 'div', 'conflict-whole');
     whole.append(el(doc, 'p', 'conflict-section-label', 'Whole note'));

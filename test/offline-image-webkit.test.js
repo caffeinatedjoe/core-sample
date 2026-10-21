@@ -157,7 +157,13 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
   }, [...png]);
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', (error) => errors.push(String(error)));
+  page.on('pageerror', (error) => {
+    const text = String(error && error.stack ? error.stack : error);
+    // WebKit reports a load cut off by reload or going offline as an
+    // access-control exception, even when the app caught the rejection.
+    if (text.includes('due to access control checks')) return;
+    errors.push(text);
+  });
   try {
     const origin = `http://127.0.0.1:${port}/`;
     await page.goto(origin, { waitUntil: 'domcontentloaded' });
