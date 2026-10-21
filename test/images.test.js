@@ -2,9 +2,9 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
-import { deleteDatabase, getFile, listImages, openDatabase, putFile } from '../app/js/db.js';
+import { deleteDatabase, getFile, getMeta, listImages, openDatabase, putFile, setMeta } from '../app/js/db.js';
 import { fetchRawBytes } from '../app/js/github-api.js';
-import { embedImage, imagePayload, loadEmbedBlob, refreshVaultIndex, rememberImage } from '../app/js/images.js';
+import { dropStaleVaultIndex, embedImage, imagePayload, loadEmbedBlob, refreshVaultIndex, rememberImage } from '../app/js/images.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -345,6 +345,7 @@ function vaultFetch({ tree = 'omit', app = true, image = 'png', failTree = false
       return httpResponse({ body: '{"attachmentFolderPath":"./assets/Field Notes"}' });
     }
     if (url.includes('image-1710000000000.png')) {
+      if (!url.includes('Field%20Notes')) return httpResponse({ status: 404, body: 'missing' });
       if (image === 'missing') return httpResponse({ status: 404, body: 'missing' });
       if (image === 'offline') throw new Error('socket closed');
       if (image === 'html') return httpResponse({ body: '<html>nope</html>' });
@@ -378,50 +379,52 @@ async function loadFromIndex(db, index, fetchImpl, extra = {}) {
   });
 }
 
-test('a root note downloads a bare filename from a spaced attachment folder the file list omitted', async () => {
-  const name = `core-sample-${randomUUID()}`;
-  const db = await openDatabase(name);
-  const { seen, fetchImpl } = vaultFetch({ tree: 'omit' });
-  const index = await refreshVaultIndex(db, {
+function discover(db, fetchImpl, extra = {}) {
+  return loadEmbedBlob(db, {
+    link: 'image-1710000000000.png',
+    notePath: NOTE,
     repo: 'owner/repo',
     branch: 'main',
     root: '',
     token: TOKEN,
-  }, fetchImpl);
-  assert.equal(index.paths.includes(IMAGE), false);
-  assert.equal(index.attachmentFolderPath, FOLDER);
-  assert.equal(index.attachmentChecked, true);
-  const result = await loadFromIndex(db, index, fetchImpl);
+    fetchImpl,
+    ...extra,
+  });
+}
+
+test('a root note downloads a bare filename from a spaced attachment folder the file list omitted', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const { seen, fetchImpl } = vaultFetch({ tree: 'truncated' });
+  const result = await discover(db, fetchImpl);
   assert.equal(result.status, 'ready');
   assert.equal(result.path, IMAGE);
   assert.equal(result.blob.size, PNG.byteLength);
-  const imageUrl = seen.find((url) => url.includes('image-1710000000000.png'));
+  const imageUrl = seen.find((url) => url.includes('Field%20Notes') && url.includes('image-1710000000000.png'));
   assert.match(imageUrl, /\/contents\/assets\/Field%20Notes\/image-1710000000000\.png\?ref=main$/);
   assert.equal(imageUrl.includes('%2520'), false);
   assert.equal(imageUrl.includes(TOKEN), false);
-  assert.equal(seen.some((url) => url.includes('.obsidian/app.json') || url.includes('.obsidian%2Fapp.json')), true);
+  const saved = await getMeta(db, 'githubVaultIndex');
+  assert.equal(saved.paths.includes(IMAGE), false);
+  assert.equal(saved.attachmentFolderPath, FOLDER);
+  assert.equal(typeof saved.fetchedAt, 'number');
+  assert.equal(saved.truncated, true);
   db.close();
   await deleteDatabase(name);
 });
 
-test('a cut-off tree and a failed tree still leave the attachment folder usable', async () => {
-  for (const options of [{ tree: 'truncated' }, { failTree: true }]) {
-    const name = `core-sample-${randomUUID()}`;
-    const db = await openDatabase(name);
-    const { fetchImpl, seen } = vaultFetch(options);
-    const index = await refreshVaultIndex(db, {
-      repo: 'owner/repo',
-      branch: 'main',
-      root: '',
-      token: TOKEN,
-    }, fetchImpl);
-    const result = await loadFromIndex(db, index, fetchImpl);
-    assert.equal(result.status, 'ready', JSON.stringify(options));
-    assert.equal(result.path, IMAGE);
-    assert.ok(seen.some((url) => url.includes('/contents/assets/Field%20Notes/')));
-    db.close();
-    await deleteDatabase(name);
-  }
+test('a failed tree does not save an empty index and a direct request can still find the image', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const { fetchImpl, seen } = vaultFetch({ failTree: true });
+  const result = await discover(db, fetchImpl);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.path, IMAGE);
+  assert.equal(await getMeta(db, 'githubVaultIndex'), undefined);
+  assert.ok(seen.some((url) => url.includes('/contents/assets/Field%20Notes/')));
+  assert.equal(seen.some((url) => url.includes(TOKEN)), false);
+  db.close();
+  await deleteDatabase(name);
 });
 
 test('a failed download is not cached and the next attempt tries again', async () => {
@@ -440,7 +443,7 @@ test('a failed download is not cached and the next attempt tries again', async (
     return missing.fetchImpl(url);
   });
   assert.equal(first.status, 'error');
-  assert.equal(first.reason, "Couldn't download (HTTP 404)");
+  assert.equal(first.reason, "Couldn't reach GitHub (HTTP 404)");
   assert.equal(first.reason.includes(TOKEN), false);
   assert.equal(first.reason.includes('api.github.com'), false);
   assert.equal((await listImages(db)).length, 0);
@@ -448,13 +451,13 @@ test('a failed download is not cached and the next attempt tries again', async (
     if (url.includes('image-1710000000000.png')) calls += 1;
     return missing.fetchImpl(url);
   });
-  assert.equal(second.reason, "Couldn't download (HTTP 404)");
+  assert.equal(second.reason, "Couldn't reach GitHub (HTTP 404)");
   assert.equal(calls, 2);
 
   const offline = await loadFromIndex(db, index, async () => {
     throw new Error('socket closed');
   });
-  assert.equal(offline.reason, "Couldn't download (offline)");
+  assert.equal(offline.reason, "Couldn't reach GitHub (offline)");
   assert.equal((await listImages(db)).length, 0);
   const again = await loadFromIndex(db, index, async () => httpResponse({ body: PNG }), { fresh: true });
   assert.equal(again.status, 'ready');
@@ -495,7 +498,7 @@ test('a json contents body is decoded once and a non-image is not stored', async
     content: Buffer.from(PNG).toString('base64'),
   })));
   assert.equal(decoded.length, PNG.byteLength);
-  const jsonVault = vaultFetch({ tree: 'omit', image: 'json' });
+  const jsonVault = vaultFetch({ tree: 'include', image: 'json' });
   const index = await refreshVaultIndex(db, {
     repo: 'owner/repo',
     branch: 'main',
@@ -533,6 +536,121 @@ test('a json contents body is decoded once and a non-image is not stored', async
   assert.equal(fixed.status, 'ready');
   assert.equal(fixed.blob.size, PNG.byteLength);
   assert.equal(junkCalls, 1);
+  db.close();
+  await deleteDatabase(name);
+});
+
+function accessFetch(mode) {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    const text = String(url);
+    seen.push(text);
+    if (text.includes(TOKEN)) throw new Error('token leaked into the url');
+    if (mode() === 'denied') return httpResponse({ status: 404, body: '{"message":"Not Found"}' });
+    if (mode() === 'unauthorized') return httpResponse({ status: 401, body: '{"message":"Bad credentials"}' });
+    if (text.includes('/git/trees/')) {
+      return httpResponse({
+        body: JSON.stringify({
+          sha: 'tree123',
+          truncated: false,
+          tree: [
+            { path: NOTE, type: 'blob' },
+            { path: '.obsidian/app.json', type: 'blob' },
+            { path: IMAGE, type: 'blob' },
+          ],
+        }),
+      });
+    }
+    if (text.includes('app.json')) return httpResponse({ body: '{"attachmentFolderPath":"./assets/Field Notes"}' });
+    if (text.includes('Field%20Notes') && text.includes('image-1710000000000.png')) return httpResponse({ body: PNG });
+    return httpResponse({ status: 404, body: 'missing' });
+  };
+  return { seen, fetchImpl };
+}
+
+test('a repo 404 does not stick, and the same note loads after the token can read the vault', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  let mode = 'denied';
+  const { seen, fetchImpl } = accessFetch(() => mode);
+  const first = await discover(db, fetchImpl);
+  assert.equal(first.reason, 'No access to repo');
+  assert.equal(first.reason.includes(TOKEN), false);
+  assert.equal(await getMeta(db, 'githubVaultIndex'), undefined);
+  assert.equal((await listImages(db)).length, 0);
+  mode = 'ok';
+  const second = await discover(db, fetchImpl);
+  assert.equal(second.status, 'ready');
+  assert.equal(second.path, IMAGE);
+  const saved = await getMeta(db, 'githubVaultIndex');
+  assert.equal(typeof saved.fetchedAt, 'number');
+  assert.equal(saved.treeSha, 'tree123');
+  assert.equal(saved.paths.includes(IMAGE), true);
+  assert.equal(seen.some((url) => url.includes(TOKEN)), false);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('a 401 says to sign in again and does not save a file list', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const { fetchImpl } = accessFetch(() => 'unauthorized');
+  const result = await discover(db, fetchImpl);
+  assert.equal(result.reason, 'Sign in again');
+  assert.equal(result.reason.includes(TOKEN), false);
+  assert.equal(await getMeta(db, 'githubVaultIndex'), undefined);
+  assert.equal((await listImages(db)).length, 0);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('a leftover empty file list is deleted and the image cache stays', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  await setMeta(db, 'githubVaultIndex', {
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    paths: [],
+    attachmentFolderPath: '',
+    attachmentChecked: true,
+  });
+  await rememberImage(db, {
+    repo: 'owner/repo',
+    path: IMAGE,
+    blob: new Blob([PNG], { type: 'image/png' }),
+    type: 'image/png',
+  });
+  assert.equal(await dropStaleVaultIndex(db), true);
+  assert.equal(await getMeta(db, 'githubVaultIndex'), undefined);
+  assert.equal((await listImages(db)).length, 1);
+  const { fetchImpl } = accessFetch(() => 'ok');
+  const result = await discover(db, fetchImpl);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.path, IMAGE);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('a v15 file list without a fetch time is rebuilt instead of trusted', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  await setMeta(db, 'githubVaultIndex', {
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    paths: [NOTE, '.obsidian/app.json'],
+    attachmentFolderPath: FOLDER,
+  });
+  const { fetchImpl, seen } = accessFetch(() => 'ok');
+  const result = await discover(db, fetchImpl);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.path, IMAGE);
+  const saved = await getMeta(db, 'githubVaultIndex');
+  assert.equal(typeof saved.fetchedAt, 'number');
+  assert.equal(saved.paths.includes(IMAGE), true);
+  assert.ok(seen.some((url) => url.includes('/git/trees/')));
+  assert.equal(await dropStaleVaultIndex(db), false);
   db.close();
   await deleteDatabase(name);
 });

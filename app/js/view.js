@@ -31,7 +31,7 @@ import {
 import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
-import { embedImage, forgetImage, loadEmbedBlob, vaultIndexFor } from './images.js';
+import { embedImage, forgetImage, loadEmbedBlob } from './images.js';
 import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
@@ -145,14 +145,11 @@ export function mountApp(doc, db) {
     } catch {
       settings = { token: '', repo: '', branch: '', root: '' };
     }
-    const index = await vaultIndexFor(db, settings, globalThis.fetch.bind(globalThis));
     const result = await loadEmbedBlob(db, {
       link: embed,
       notePath: current && current.path ? current.path : '',
-      paths: index.paths || [],
-      attachmentFolderPath: index.attachmentFolderPath || '',
       repo: settings.repo,
-      branch: index.branch || settings.branch,
+      branch: settings.branch,
       root: settings.root,
       token: settings.token,
       fetchImpl: globalThis.fetch.bind(globalThis),
@@ -246,7 +243,6 @@ export function mountApp(doc, db) {
       settings = { token: '', repo: '', branch: '', root: '' };
     }
     if (ticket !== embedTicket) return;
-    const index = await vaultIndexFor(db, settings, globalThis.fetch.bind(globalThis));
     if (ticket !== embedTicket) return;
     const notePath = current && current.path ? current.path : '';
     for (const node of nodes) {
@@ -257,16 +253,14 @@ export function mountApp(doc, db) {
         result = await loadEmbedBlob(db, {
           link,
           notePath,
-          paths: index.paths || [],
-          attachmentFolderPath: index.attachmentFolderPath || '',
           repo: settings.repo,
-          branch: index.branch || settings.branch,
+          branch: settings.branch,
           root: settings.root,
           token: settings.token,
           fetchImpl: globalThis.fetch.bind(globalThis),
         });
       } catch {
-        showEmbedReason(node, "Couldn't download (offline)");
+        showEmbedReason(node, "Couldn't reach GitHub (offline)");
         continue;
       }
       if (ticket !== embedTicket || !node.isConnected) return;
@@ -304,24 +298,21 @@ export function mountApp(doc, db) {
     } catch {
       settings = { token: '', repo: '', branch: '', root: '' };
     }
-    const index = await vaultIndexFor(db, settings, globalThis.fetch.bind(globalThis));
     if (ticket !== embedTicket || !node.isConnected) return;
     let result;
     try {
       result = await loadEmbedBlob(db, {
         link: node.dataset.embed || '',
         notePath: current && current.path ? current.path : '',
-        paths: index.paths || [],
-        attachmentFolderPath: index.attachmentFolderPath || '',
         repo: settings.repo,
-        branch: index.branch || settings.branch,
+        branch: settings.branch,
         root: settings.root,
         token: settings.token,
         fetchImpl: globalThis.fetch.bind(globalThis),
         fresh: true,
       });
     } catch {
-      showEmbedReason(node, "Couldn't download (offline)");
+      showEmbedReason(node, "Couldn't reach GitHub (offline)");
       return;
     }
     if (ticket !== embedTicket || !node.isConnected) return;

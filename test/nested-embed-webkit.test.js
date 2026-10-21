@@ -32,6 +32,9 @@ const INDEX = {
   paths: ['Field Notes.md', IMAGE_PATH, '.obsidian/app.json'],
   attachmentFolderPath: './assets/Field Notes',
   attachmentChecked: true,
+  fetchedAt: Date.now(),
+  treeSha: 'tree123',
+  truncated: false,
 };
 
 function crc32(buf) {
@@ -119,7 +122,7 @@ function mockGithub(context, sink) {
   return context.route(/api\.github\.com/, async (route) => {
     const url = route.request().url();
     sink.urls.push(url);
-    if (url.includes('/contents/') && url.includes('image-1710000000000.png')) {
+    if (url.includes('/contents/') && url.includes('Field%20Notes') && url.includes('image-1710000000000.png')) {
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'image/png' },
@@ -256,7 +259,7 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v18';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v19';
     });
     await showNote(page);
     await page.waitForFunction(() => {
@@ -378,7 +381,7 @@ test('webkit fetches a bare filename from the attachment folder when the file li
       });
       return;
     }
-    if (url.includes('image-1710000000000.png')) {
+    if (url.includes('Field%20Notes') && url.includes('image-1710000000000.png')) {
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'image/png' },
@@ -395,7 +398,7 @@ test('webkit fetches a bare filename from the attachment folder when the file li
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v18';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v19';
     });
     await page.locator('#source').fill(NOTE);
     await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
@@ -425,8 +428,8 @@ test('webkit fetches a bare filename from the attachment folder when the file li
     });
     const painted = await previewState(page);
     assertPainted(painted, 'unlisted');
-    const imageUrl = seen.urls.find((url) => url.includes('image-1710000000000.png'));
-    assert.match(imageUrl, /\/contents\/assets\/Field%20Notes\/image-1710000000000\.png\?ref=main$/);
+    const imageUrl = seen.urls.find((url) => /\/contents\/assets\/Field%20Notes\/image-1710000000000\.png\?ref=main$/.test(url));
+    assert.ok(imageUrl);
     assert.equal(imageUrl.includes('%2520'), false);
     assert.equal(seen.urls.some((url) => url.includes('gho_')), false);
     assert.ok(seen.urls.some((url) => url.includes('/git/trees/')));
@@ -455,7 +458,7 @@ test('webkit fetches a bare filename from the attachment folder when the file li
   }
 });
 
-test('webkit keeps the task image through a cold v15 to v16 to v18 update', { timeout: 180000 }, async (t) => {
+test('webkit keeps the task image through a cold v15 to v16 to v19 update', { timeout: 180000 }, async (t) => {
   let webkit;
   let devices;
   try {
@@ -507,7 +510,7 @@ test('webkit keeps the task image through a cold v15 to v16 to v18 update', { ti
           headers: { 'content-type': 'application/octet-stream' },
         }));
       }
-      if (url.includes('image-1710000000000.png')) {
+      if (url.includes('Field%20Notes') && url.includes('image-1710000000000.png')) {
         return Promise.resolve(new Response(pngBytes, {
           status: 200,
           headers: { 'content-type': 'image/png' },
@@ -560,13 +563,13 @@ test('webkit keeps the task image through a cold v15 to v16 to v18 update', { ti
     assert.equal(on16.tasks, 3);
     if (on15.natural > 0) assert.ok(on16.natural > 0, 'v16 dropped a painted image');
 
-    await advance(appDir, 'core-sample-shell-v18');
+    await advance(appDir, 'core-sample-shell-v19');
     await page.waitForFunction(() => {
       const img = document.querySelector('#preview img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     }, null, { timeout: 20000 });
     const on17 = await previewState(page);
-    assert.equal(on17.build, 'core-sample-shell-v18');
+    assert.equal(on17.build, 'core-sample-shell-v19');
     assertPainted(on17, 'v18');
 
     const cached = await page.evaluate(async () => {
@@ -594,7 +597,7 @@ test('webkit keeps the task image through a cold v15 to v16 to v18 update', { ti
     if (cached.some((row) => row.blob && row.size > 0)) {
       await page.evaluate(() => localStorage.setItem('core-sample-offline', '1'));
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await ready('core-sample-shell-v18');
+      await ready('core-sample-shell-v19');
       await page.waitForFunction(() => {
         const img = document.querySelector('#preview img.embed-image');
         return Boolean(img && img.complete && img.naturalWidth > 0);

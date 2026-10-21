@@ -60,6 +60,10 @@ export function getMeta(db, key) {
   return run(db, 'meta', 'readonly', (store) => store.get(key)).then((row) => (row ? row.value : undefined));
 }
 
+export function deleteMeta(db, key) {
+  return run(db, 'meta', 'readwrite', (store) => store.delete(key));
+}
+
 export function commitFiles(db, { put = [], remove = [] } = {}) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('files', 'readwrite');
