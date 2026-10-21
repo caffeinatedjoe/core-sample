@@ -969,6 +969,14 @@ export function mountApp(doc, db) {
     formError.textContent = '';
     renderPanel();
   });
+  const exportBackupButton = doc.getElementById('export-backup');
+  if (exportBackupButton) {
+    exportBackupButton.addEventListener('click', () => {
+      exportBackup().catch((error) => {
+        formError.textContent = error && error.message ? error.message : "Couldn't export the backup.";
+      });
+    });
+  }
   backupFile.addEventListener('change', async () => {
     const chosen = backupFile.files && backupFile.files[0];
     backupFile.value = '';

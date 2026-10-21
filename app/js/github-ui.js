@@ -8,6 +8,7 @@ import {
   tokenPollRequest,
 } from './github-device.js';
 import {
+  ACCESS_CHECK_MS,
   cleanBranch,
   cleanClientId,
   cleanRelayUrl,
@@ -26,11 +27,15 @@ import {
   disconnectGithub,
   loadGithubSettings,
   loadPendingFlow,
+  loadStorageFlag,
   saveGithubConfig,
   saveGithubSession,
   saveGithubTarget,
   savePendingFlow,
+  storagePersistenceText,
 } from './github-store.js';
+
+const ACCESS_TTL = 10 * 60 * 1000;
 
 export function mountGithub(doc, db, hooks) {
   const sheet = doc.getElementById('github-sheet');
@@ -54,6 +59,8 @@ export function mountGithub(doc, db, hooks) {
   const disconnectConfirm = doc.getElementById('github-disconnect-confirm');
   const eraseConfirm = doc.getElementById('github-erase-confirm');
   const connectButton = doc.getElementById('github-connect');
+  const signAgain = doc.getElementById('github-sign-in-again');
+  const storageLine = doc.getElementById('github-storage');
   const fileBar = doc.getElementById('github-file-bar');
   const fileStatus = doc.getElementById('github-file-status');
   const view = doc.defaultView || globalThis;
@@ -69,6 +76,11 @@ export function mountGithub(doc, db, hooks) {
   let clientId = '';
   let pendingDownload = null;
   let exportedForReplace = false;
+  let userUnauthorized = false;
+  let lastAccess = null;
+  let checkedAt = 0;
+  let probeFlight = null;
+  let probeGen = 0;
 
   function rememberedConfig() {
     clientId = cleanClientId(clientInput.value);
@@ -94,31 +106,86 @@ export function mountGithub(doc, db, hooks) {
     exportedForReplace = false;
   }
 
-  async function refresh() {
-    const settings = await loadGithubSettings(db);
+  function signedInLine(settings) {
+    if (!settings.token) return '';
+    if (settings.login) return `Signed in as ${settings.login}`;
+    return 'Signed in.';
+  }
+
+  function accessLine(settings) {
+    if (!settings.token) return '';
+    if (lastAccess && lastAccess.state === 'unauthorized') return 'Sign in again';
+    if (!lastAccess || !lastAccess.message) return signedInLine(settings);
+    if (lastAccess.message.startsWith('Signed in')) return lastAccess.message;
+    return `${signedInLine(settings)}. ${lastAccess.message}`;
+  }
+
+  async function paint(settings) {
     clientInput.value = settings.clientId;
     relayInput.value = settings.relay;
     repoInput.value = settings.repo;
     branchInput.value = settings.branch;
     rootInput.value = settings.root;
-    const signedIn = Boolean(settings.token);
     const pending = await loadPendingFlow(db);
     const pendingLive = Boolean(pending && now() < pending.expiresAt);
+    const signedIn = Boolean(settings.token);
     target.hidden = !signedIn;
-    loginText.textContent = settings.login ? `Signed in as ${settings.login}` : (signedIn ? 'Signed in.' : '');
-    if (signedIn) {
-      try {
-        const access = await describeAccess(fetchImpl, settings);
-        if (access) loginText.textContent = access;
-      } catch {
-        loginText.textContent = "Couldn't reach GitHub (offline)";
-      }
-    }
+    loginText.textContent = accessLine(settings);
     connectButton.hidden = signedIn || pendingLive;
-    if (pendingLive) showPending(pending);
+    if (signAgain) signAgain.hidden = !(signedIn && userUnauthorized);
+    if (signedIn) tryAgain.hidden = true;
     const ready = signedIn && Boolean(settings.repo) && Boolean(settings.branch);
     if (fileBar) fileBar.hidden = !ready;
     if (!ready && fileStatus) fileStatus.textContent = '';
+    if (storageLine) storageLine.textContent = storagePersistenceText(await loadStorageFlag(db));
+    return pendingLive;
+  }
+
+  function accessDue(at) {
+    return checkedAt === 0 || at - checkedAt >= ACCESS_TTL;
+  }
+
+  function startProbe(settings) {
+    if (!settings.token) return Promise.resolve(null);
+    if (!accessDue(now())) return probeFlight || Promise.resolve(lastAccess);
+    const gen = ++probeGen;
+    checkedAt = now();
+    const timeoutMs = hooks.accessTimeoutMs || ACCESS_CHECK_MS;
+    const flight = describeAccess(fetchImpl, settings, { timeoutMs }).then(async (access) => {
+      if (gen !== probeGen) return access;
+      lastAccess = access;
+      userUnauthorized = access.state === 'unauthorized';
+      if (access.login) {
+        const current = await loadGithubSettings(db);
+        if (current.token === settings.token && current.login !== access.login) {
+          await saveGithubSession(db, { token: current.token, login: access.login });
+        }
+      }
+      const fresh = await loadGithubSettings(db);
+      if (fresh.token === settings.token) await paint(fresh);
+      return access;
+    }).catch(async () => {
+      if (gen !== probeGen) return lastAccess;
+      lastAccess = { state: 'signed-in', login: '', message: "Couldn't reach GitHub (offline)" };
+      userUnauthorized = false;
+      const fresh = await loadGithubSettings(db);
+      if (fresh.token) await paint(fresh);
+      return lastAccess;
+    });
+    let tracked;
+    tracked = flight.finally(() => {
+      if (probeFlight === tracked) probeFlight = null;
+    });
+    probeFlight = tracked;
+    return tracked;
+  }
+
+  async function refresh() {
+    const pending = await loadPendingFlow(db);
+    if (pending && !(now() < pending.expiresAt)) await clearPendingFlow(db);
+    const settings = await loadGithubSettings(db);
+    await paint(settings);
+    startProbe(settings);
     return settings;
   }
 
@@ -142,6 +209,10 @@ export function mountGithub(doc, db, hooks) {
   }
 
   async function onToken(token) {
+    probeGen += 1;
+    userUnauthorized = false;
+    lastAccess = null;
+    checkedAt = now();
     await saveGithubSession(db, { token, login: '' });
     let login = '';
     try {
@@ -161,10 +232,13 @@ export function mountGithub(doc, db, hooks) {
     setStatus(login ? `Signed in as ${login}.` : 'Signed in.');
   }
 
-  function onFailure(message) {
+  async function onFailure(message) {
     hidePending();
-    tryAgain.hidden = false;
-    connectButton.hidden = false;
+    const settings = await loadGithubSettings(db);
+    const signedIn = Boolean(settings.token);
+    tryAgain.hidden = signedIn;
+    connectButton.hidden = signedIn;
+    if (signAgain) signAgain.hidden = !(signedIn && userUnauthorized);
     setStatus(message || 'GitHub did not sign in.');
   }
 
@@ -231,7 +305,11 @@ export function mountGithub(doc, db, hooks) {
       await signIn.start();
     } catch (error) {
       hidePending();
-      tryAgain.hidden = false;
+      const settings = await loadGithubSettings(db);
+      const signedIn = Boolean(settings.token);
+      tryAgain.hidden = signedIn;
+      connectButton.hidden = signedIn;
+      if (signAgain) signAgain.hidden = !(signedIn && userUnauthorized);
       showError(error);
     } finally {
       starting = false;
@@ -265,7 +343,10 @@ export function mountGithub(doc, db, hooks) {
     await signIn.cancel();
     hidePending();
     tryAgain.hidden = true;
-    connectButton.hidden = false;
+    const settings = await loadGithubSettings(db);
+    const signedIn = Boolean(settings.token);
+    connectButton.hidden = signedIn;
+    if (signAgain) signAgain.hidden = !(signedIn && userUnauthorized);
     setStatus('Sign-in was cancelled.');
   }
 
@@ -514,6 +595,18 @@ export function mountGithub(doc, db, hooks) {
   connectButton.addEventListener('click', () => {
     connect();
   });
+  if (signAgain) {
+    signAgain.addEventListener('click', () => {
+      connect();
+    });
+  }
+  const exportBackupButton = doc.getElementById('github-export-backup');
+  if (exportBackupButton) {
+    exportBackupButton.addEventListener('click', () => {
+      if (!hooks.exportBackup) return;
+      Promise.resolve(hooks.exportBackup()).catch((error) => showError(error));
+    });
+  }
   codeButton.addEventListener('click', () => {
     const code = codeButton.textContent;
     if (!code) return;
@@ -580,7 +673,13 @@ export function mountGithub(doc, db, hooks) {
   if (pushButton) pushButton.addEventListener('click', () => { pushCurrent(); });
   if (pullButton) pullButton.addEventListener('click', () => { pullCurrent(); });
 
-  return { refresh, resume: kick };
+  return {
+    refresh,
+    resume: kick,
+    whenChecked() {
+      return probeFlight || Promise.resolve(lastAccess);
+    },
+  };
 }
 
 function downloadMessage(counts) {

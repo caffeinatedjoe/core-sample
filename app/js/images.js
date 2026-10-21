@@ -214,7 +214,7 @@ export async function vaultIndexFor(db, settings, fetchImpl, { fresh = false, no
   }
   if (!fresh && indexIsUsable(saved, settings, now)) return { ...saved, ok: true, fromCache: true, status: 200, reason: '' };
   if (!settings.token || !settings.repo || !fetchImpl) {
-    return blankIndex(settings, { status: 401, reason: githubStatusReason(401) });
+    return blankIndex(settings, { status: 401, reason: 'Sign in again' });
   }
   return sharedRefresh(db, settings, fetchImpl, now);
 }
@@ -396,7 +396,7 @@ async function loadListedEmbed(db, options) {
     const cached = await cachedReady(db, repo, resolved);
     if (cached) return cached;
   }
-  if (!token || !repo || !fetchImpl) return { status: 'error', name, path: resolved, reason: githubStatusReason(401) };
+  if (!token || !repo || !fetchImpl) return { status: 'error', name, path: resolved, reason: 'Sign in again' };
   return downloadEmbed(db, { repo, path: resolved, branch, root, token, fetchImpl, limit });
 }
 
@@ -464,7 +464,7 @@ async function discoverEmbed(db, options) {
     name,
   } = options;
   const settings = { repo, branch, root, token };
-  if (!token || !repo || !fetchImpl) return { status: 'error', name, reason: githubStatusReason(401) };
+  if (!token || !repo || !fetchImpl) return { status: 'error', name, reason: 'Sign in again' };
   const remembered = fresh ? '' : await rememberedEmbedPath(db, settings, notePath, link);
   let index = await vaultIndexFor(db, settings, fetchImpl, { fresh });
 

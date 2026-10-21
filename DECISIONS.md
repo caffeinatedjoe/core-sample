@@ -58,7 +58,7 @@ Folders are not records. The tree is the set of paths, plus a `folders` meta lis
 
 A trashed note stays in `files` with `trashedAt` set. The text is unchanged. Restore clears `trashedAt`. Empty Trash is a separate confirmed action and is the only one that deletes note records. Old records without `trashedAt` are live notes.
 
-`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`, `seeded`, the GitHub connection keys (`githubToken`, `githubClientId`, `githubRelay`, `githubRepo`, `githubBranch`, `githubRoot`, `githubLogin`), and `githubVaultIndex` (the path list and attachment folder used to resolve images).
+`meta`, keyed by string. Keys: `lastOpened`, `editorMode`, `folders`, `recent`, `expanded`, `seeded`, the GitHub connection keys (`githubToken`, `githubClientId`, `githubRelay`, `githubRepo`, `githubBranch`, `githubRoot`, `githubLogin`), `storagePersistent` (whether `navigator.storage.persist()` was granted), and `githubVaultIndex` (the path list and attachment folder used to resolve images).
 
 `images`, keyed by repository plus path, holds one cached attachment: `blob`, `bytes`, `type`, and `viewedAt`. Version 2 creates this store when it is missing and does not delete `files` or `meta`.
 
@@ -73,7 +73,7 @@ The editor status line is only local: Saving…, Saved on this device, or a save
 
 The open note in memory is the working copy. IndexedDB is updated 400ms after the last keystroke, and immediately on note switch, checklist toggle, `visibilitychange` to hidden, and `pagehide`.
 
-The flush starts the IndexedDB transaction synchronously so iOS can finish it while the page is suspending. A failed write leaves the text on screen and shows an error. Nothing is deleted to recover. `navigator.storage.persist()` is requested at launch. Clearing Safari website data for this app still erases IndexedDB; the welcome note says so.
+The flush starts the IndexedDB transaction synchronously so iOS can finish it while the page is suspending. A failed write leaves the text on screen and shows an error. Nothing is deleted to recover. `navigator.storage.persist()` is requested at launch, and whether it was granted is stored and shown in the GitHub sheet in plain words. Clearing Safari website data for this app still erases IndexedDB; the welcome note says so.
 
 Remote sync will use its own 2–5 second debounce. That clock must never be what saves the local copy.
 
@@ -95,7 +95,7 @@ Image embeds follow Obsidian. `![[img.png]]`, `![[img.png|300]]`, and `![[img.pn
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in the header are the same string, `core-sample-shell-v19` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in the header are the same string, `core-sample-shell-v20` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -103,7 +103,7 @@ Navigation, `index.html`, `sw.js`, and app JS/CSS are network-first. Those fetch
 
 The page registers with `{ updateViaCache: 'none' }`, calls `registration.update()` on launch and when the document becomes visible, and on `controllerchange` flushes the open note and reloads. The first install does not reload from that listener. If navigating to the current URL is rejected, the worker loads the same page once with `?shell=` set to the build id, and the page removes that query with `history.replaceState` so it does not stick. Auto-reload, not a banner: a banner is easy to miss, and the last failure was a status line that did not get the new code onto the phone.
 
-Cross-origin requests and anything that is not the shell are ignored. Note text is never cached. Removing the Home Screen icon deletes that web app's data on iOS, including IndexedDB notes. Re-adding starts empty. Do that only if a couple of cold opens still show an old build in the header.
+Cross-origin requests and anything that is not the shell are ignored. Note text is never cached. After an update, check the build id in the header and reload Core Sample from the home screen. Removing the Home Screen icon deletes that web app's data on iOS, including IndexedDB notes, so do not remove it to pick up a new shell.
 
 ## iPhone layout
 
@@ -117,7 +117,7 @@ The current icon source is `app/icons/source/core-sample-icon-source-v2.jpg`. Th
 
 Stage 3 signs in with GitHub's device flow. The browser cannot call `https://github.com/login/device/code` or `https://github.com/login/oauth/access_token` directly, so `worker/` forwards only those two URLs and only for `https://joecoffey.me`. The Worker has no client secret and does not log the body. `wrangler.toml` has no secrets. Joe deploys it; this repo does not.
 
-The client id and the relay origin are typed into Notes → GitHub. They start empty. The token is written only to IndexedDB. A pending device flow is stored there too (`deviceCode`, `userCode`, `interval`, `expiresAt`) so signing in can resume after iOS suspends or reloads the installed app. The device code is not shown, logged, or put in a URL. The user code is shown on screen. Repo, branch, and notes-root calls go to `api.github.com` with the token in an `Authorization` header, never in the URL.
+The client id and the relay origin are typed into Notes → GitHub. They start empty. The token is written only to IndexedDB. A pending device flow is stored there too (`deviceCode`, `userCode`, `interval`, `expiresAt`) so signing in can resume after iOS suspends or reloads the installed app. An expired leftover flow is cleared without asking to connect again. The device code is not shown, logged, or put in a URL. The user code is shown on screen. Repo, branch, and notes-root calls go to `api.github.com` with the token in an `Authorization` header, never in the URL. Signed-in state comes from the saved token. The GitHub sheet shows that login, and Push and Pull, before the access check returns. The check runs at most once every 10 minutes, with an 8 second timeout, and opening the sheet does not start another one. Only Disconnect, or a 401 from `GET /user`, changes that state. A 401 on any other call, a 403, a 404, a network error, or a timeout leaves the token and the repo settings in place and shows that error. A `/user` 401 keeps them too and shows a Sign in again button. That button starts the device flow without clearing the repo, branch, or root. The new token is saved only when GitHub returns one. Cancel keeps the old token. Connect stays hidden while a token is saved.
 
 OAuth Apps have no contents-only scope. `repo` is the smallest scope that can read and write a private repository. `public_repo` cannot see a private repo. The scope does not add `workflow`, `admin`, or `delete_repo`. The app lists a tree, reads Markdown and attachment bytes, and creates or updates one Markdown file. It does not write attachment files. It does not force-push, and it writes only to the repo and branch saved in Settings.
 

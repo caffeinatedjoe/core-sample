@@ -284,7 +284,6 @@ export function applyPull(local, remote) {
 }
 
 export function githubStatusReason(status, { missingRepo = false } = {}) {
-  if (status === 401) return 'Sign in again';
   if (missingRepo && status === 404) return 'No access to repo';
   if (!status) return "Couldn't reach GitHub (offline)";
   return `Couldn't reach GitHub (HTTP ${status})`;
@@ -407,30 +406,72 @@ export async function lookupRepository(fetchImpl, { repo, token }) {
   return { defaultBranch: cleanBranch(branch) };
 }
 
-// Plain words for the GitHub sheet. The token is never part of the text.
-export async function describeAccess(fetchImpl, { token, repo }) {
-  if (!token) return '';
+export const ACCESS_CHECK_MS = 8000;
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error("Couldn't reach GitHub (timed out)");
+      error.timedOut = true;
+      reject(error);
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function loginName(body) {
+  const login = body && body.login;
+  return typeof login === 'string' && /^[A-Za-z0-9-]+$/.test(login) ? login : '';
+}
+
+// Only a 401 from GET /user means the saved sign-in needs replacing.
+// A 401 on any other call stays a request error and leaves the session alone.
+async function readAccess(fetchImpl, { token, repo }) {
   let user;
   try {
     user = await githubRequest(fetchImpl, 'https://api.github.com/user', { token, secrets: [token] });
   } catch {
-    return githubStatusReason(0);
+    return { state: 'signed-in', login: '', message: githubStatusReason(0) };
   }
-  if (user.status === 401) return githubStatusReason(401);
-  if (!user.ok) return githubStatusReason(user.status);
-  const login = user.body && user.body.login;
-  const who = typeof login === 'string' && /^[A-Za-z0-9-]+$/.test(login) ? `Signed in as ${login}` : 'Signed in.';
-  if (!repo) return who;
+  if (user.status === 401) return { state: 'unauthorized', login: '', message: 'Sign in again' };
+  if (!user.ok) return { state: 'signed-in', login: '', message: githubStatusReason(user.status) };
+  const login = loginName(user.body);
+  const who = login ? `Signed in as ${login}` : 'Signed in.';
+  if (!repo) return { state: 'signed-in', login, message: who };
   let found;
   try {
     found = await githubRequest(fetchImpl, repoUrl(repo), { token, secrets: [token] });
   } catch {
-    return `${who}. ${githubStatusReason(0)}`;
+    return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(0)}` };
   }
-  if (found.status === 401) return githubStatusReason(401);
-  if (found.status === 404) return `${who}. ${githubStatusReason(404, { missingRepo: true })}`;
-  if (!found.ok) return `${who}. ${githubStatusReason(found.status)}`;
-  return who;
+  if (found.status === 404) {
+    return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(404, { missingRepo: true })}` };
+  }
+  if (!found.ok) return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(found.status)}` };
+  return { state: 'signed-in', login, message: who };
+}
+
+// Plain words for the GitHub sheet. The token is never part of the text.
+// `state` is `unauthorized` only when GET /user returns 401.
+export async function describeAccess(fetchImpl, { token, repo } = {}, { timeoutMs = ACCESS_CHECK_MS } = {}) {
+  if (!token) return { state: 'signed-out', login: '', message: '' };
+  try {
+    return await withTimeout(readAccess(fetchImpl, { token, repo }), timeoutMs);
+  } catch (error) {
+    if (error && error.timedOut) {
+      return { state: 'signed-in', login: '', message: "Couldn't reach GitHub (timed out)" };
+    }
+    return { state: 'signed-in', login: '', message: githubStatusReason(0) };
+  }
 }
 
 export async function lookupLogin(fetchImpl, token) {
