@@ -29,8 +29,9 @@ import {
   planTrash,
 } from './organize.js';
 import { fileFromRemote, folderList, planDownload } from './github-api.js';
-import { eraseLocalNotes } from './github-store.js';
+import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
+import { embedImage, loadEmbedBlob, vaultIndexFor } from './images.js';
 
 const SAVE_DELAY = 400;
 
@@ -107,10 +108,132 @@ export function mountApp(doc, db) {
     if (persist) setMeta(db, 'editorMode', mode).catch(() => {});
   }
 
+  let embedTicket = 0;
+  const embedUrls = new Set();
+  const viewer = doc.getElementById('image-viewer');
+  const viewerImg = doc.getElementById('image-viewer-img');
+
+  function revokeEmbed(url) {
+    if (!url || !embedUrls.has(url)) return;
+    if (viewerImg && viewerImg.getAttribute('src') === url && viewer && !viewer.hidden) return;
+    embedUrls.delete(url);
+    URL.revokeObjectURL(url);
+  }
+
+  function revokeEmbeds() {
+    for (const url of [...embedUrls]) revokeEmbed(url);
+  }
+
+  function closeViewer() {
+    if (!viewer || !viewerImg) return;
+    const src = viewerImg.getAttribute('src') || '';
+    viewer.hidden = true;
+    viewerImg.removeAttribute('src');
+    viewerImg.alt = '';
+    if (src.startsWith('blob:') && embedUrls.has(src)) {
+      const stillShown = [...preview.querySelectorAll('.embed-image')].some((img) => img.getAttribute('src') === src);
+      if (!stillShown) revokeEmbed(src);
+    }
+  }
+
+  function openViewer(src, alt) {
+    if (!viewer || !viewerImg || !src) return;
+    if (!/^(blob:|https:|data:image\/)/i.test(src)) return;
+    viewerImg.src = src;
+    viewerImg.alt = alt || '';
+    viewer.hidden = false;
+  }
+
   function paintPreview() {
+    const ticket = ++embedTicket;
+    closeViewer();
+    revokeEmbeds();
     const scroll = preview.scrollTop;
     preview.innerHTML = renderMarkdown(source.value);
     preview.scrollTop = scroll;
+    bindImageErrors(preview);
+    if (mode === 'preview') hydrateEmbeds(ticket);
+  }
+
+  function bindImageErrors(root) {
+    for (const img of root.querySelectorAll('img.embed-image')) {
+      if (img.dataset.embedBound === '1') continue;
+      img.dataset.embedBound = '1';
+      img.addEventListener('error', () => replaceBrokenImage(img));
+      if (img.complete && img.getAttribute('src') && img.naturalWidth === 0) replaceBrokenImage(img);
+    }
+  }
+
+  function replaceBrokenImage(img) {
+    const host = img.closest('.embed');
+    if (!host || !img.isConnected) return;
+    const label = img.getAttribute('alt') || 'image';
+    host.replaceChildren();
+    const fallback = doc.createElement('span');
+    fallback.className = 'embed-fallback';
+    fallback.textContent = label;
+    host.append(fallback);
+  }
+
+  async function hydrateEmbeds(ticket) {
+    const nodes = [...preview.querySelectorAll('[data-embed]')];
+    if (!nodes.length) return;
+    let settings = { token: '', repo: '', branch: '', root: '' };
+    try {
+      settings = await loadGithubSettings(db);
+    } catch {
+      settings = { token: '', repo: '', branch: '', root: '' };
+    }
+    if (ticket !== embedTicket) return;
+    const index = await vaultIndexFor(db, settings, globalThis.fetch.bind(globalThis));
+    if (ticket !== embedTicket) return;
+    const notePath = current && current.path ? current.path : '';
+    for (const node of nodes) {
+      if (ticket !== embedTicket || !node.isConnected) return;
+      const link = node.dataset.embed || '';
+      let result;
+      try {
+        result = await loadEmbedBlob(db, {
+          link,
+          notePath,
+          paths: index.paths || [],
+          attachmentFolderPath: index.attachmentFolderPath || '',
+          repo: settings.repo,
+          branch: index.branch || settings.branch,
+          root: settings.root,
+          token: settings.token,
+          fetchImpl: globalThis.fetch.bind(globalThis),
+        });
+      } catch {
+        continue;
+      }
+      if (ticket !== embedTicket || !node.isConnected || result.status !== 'ready') continue;
+      const made = embedImage(result.blob, {
+        createObjectURL: URL.createObjectURL.bind(URL),
+        createElement: (tag) => doc.createElement(tag),
+        width: node.dataset.width || '',
+        height: node.dataset.height || '',
+        name: result.name,
+        type: result.type,
+      });
+      if (ticket !== embedTicket) {
+        URL.revokeObjectURL(made.url);
+        return;
+      }
+      embedUrls.add(made.url);
+      node.replaceChildren(made.img);
+      bindImageErrors(node);
+    }
+  }
+
+  if (viewer) {
+    viewer.addEventListener('click', (event) => {
+      const closer = event.target && event.target.id === 'image-viewer-close';
+      if (event.target === viewer || closer) closeViewer();
+    });
+    doc.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !viewer.hidden) closeViewer();
+    });
   }
 
   function showNote(note, { heading = '' } = {}) {
@@ -135,6 +258,8 @@ export function mountApp(doc, db) {
     current = null;
     source.value = '';
     title.textContent = '';
+    closeViewer();
+    revokeEmbeds();
     preview.replaceChildren();
   }
 
@@ -834,10 +959,15 @@ export function mountApp(doc, db) {
         current.updatedAt = Date.now();
         title.textContent = noteTitle(current);
       }
-      preview.innerHTML = renderMarkdown(next);
+      paintPreview();
       preview.scrollTop = previewScroll;
       saver.schedule(snapshot);
       saver.flush().catch(() => {});
+      return;
+    }
+
+    if (plan.type === 'image') {
+      openViewer(plan.src, plan.alt);
       return;
     }
 

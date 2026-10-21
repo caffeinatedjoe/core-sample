@@ -1,4 +1,4 @@
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function run(db, storeName, mode, fn) {
   return new Promise((resolve, reject) => {
@@ -27,6 +27,9 @@ export function openDatabase(name = 'core-sample') {
       }
       if (!db.objectStoreNames.contains('meta')) {
         db.createObjectStore('meta', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('images')) {
+        db.createObjectStore('images', { keyPath: 'key' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -76,6 +79,34 @@ export function commitFiles(db, { put = [], remove = [] } = {}) {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error || new Error('Could not save notes'));
     tx.onabort = () => reject(tx.error || new Error('Could not save notes'));
+  });
+}
+
+export function getImage(db, key) {
+  return run(db, 'images', 'readonly', (store) => store.get(key));
+}
+
+export function putImage(db, record) {
+  return run(db, 'images', 'readwrite', (store) => store.put(record));
+}
+
+export function listImages(db) {
+  return run(db, 'images', 'readonly', (store) => store.getAll());
+}
+
+export function deleteImages(db, keys) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('images', 'readwrite');
+    const store = tx.objectStore('images');
+    try {
+      for (const key of keys) store.delete(key);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Could not update the image cache'));
+    tx.onabort = () => reject(tx.error || new Error('Could not update the image cache'));
   });
 }
 
