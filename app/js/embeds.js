@@ -2,6 +2,8 @@
 // then the attachment folder from .obsidian/app.json, then a filename match.
 // Several filename matches use the shortest path.
 
+import { closesFence, parseFenceLine } from './checklist.js';
+
 const RASTER = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 const SVG = new Set(['svg']);
 const UNSUPPORTED = new Set(['heic', 'heif']);
@@ -205,4 +207,97 @@ export function readAttachmentSetting(text) {
   } catch {
     return '';
   }
+}
+
+function readMarkdownDest(text, index) {
+  if (!text.startsWith('![', index)) return null;
+  let cursor = index + 2;
+  let depth = 1;
+  while (cursor < text.length && depth > 0) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === '[') depth += 1;
+    else if (text[cursor] === ']') depth -= 1;
+    if (depth === 0) break;
+    cursor += 1;
+  }
+  if (depth !== 0 || text[cursor + 1] !== '(') return null;
+  let end = cursor + 2;
+  let parens = 1;
+  while (end < text.length && parens > 0) {
+    if (text[end] === '(') parens += 1;
+    else if (text[end] === ')') parens -= 1;
+    if (parens === 0) break;
+    end += 1;
+  }
+  if (parens !== 0) return null;
+  return { dest: text.slice(cursor + 2, end).trim(), next: end + 1 };
+}
+
+function collectLineEmbeds(line, add) {
+  let index = 0;
+  while (index < line.length) {
+    if (line[index] === '`') {
+      const end = line.indexOf('`', index + 1);
+      if (end > index) {
+        index = end + 1;
+        continue;
+      }
+    }
+    if (line.startsWith('![[', index)) {
+      const end = line.indexOf(']]', index + 3);
+      if (end !== -1) {
+        const raw = line.slice(index + 3, end);
+        const spec = parseWikilinkImage(raw);
+        if (spec && spec.kind !== 'unsupported') add(spec.target, raw);
+        index = end + 2;
+        continue;
+      }
+    }
+    if (line.startsWith('![', index)) {
+      const parsed = readMarkdownDest(line, index);
+      if (parsed) {
+        const token = parsed.dest.split(/\s+/)[0] || '';
+        if (!/^[a-z][a-z+.-]*:/i.test(token)) {
+          const link = normalizeVaultPath(decodePath(token));
+          const kind = link ? imageKind(link) : '';
+          if (kind === 'raster' || kind === 'svg') add(link, token);
+        }
+        index = parsed.next;
+        continue;
+      }
+    }
+    index += 1;
+  }
+}
+
+// Image embeds a note actually displays. Fenced code and inline code are
+// skipped, and so are remote URLs and formats the preview cannot paint.
+export function listImageEmbeds(markdown) {
+  const lines = String(markdown ?? '').replace(/\r\n/g, '\n').split('\n');
+  const found = [];
+  const seen = new Set();
+  let fence = null;
+  const add = (link, raw) => {
+    if (!link) return;
+    const key = `${link}\n${raw}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push({ link, raw });
+  };
+  for (const line of lines) {
+    if (fence) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const opened = parseFenceLine(line);
+    if (opened) {
+      fence = opened;
+      continue;
+    }
+    collectLineEmbeds(line, add);
+  }
+  return found;
 }

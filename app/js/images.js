@@ -1,9 +1,12 @@
-import { deleteImages, deleteMeta, getImage, getMeta, listImages, putImage, setMeta } from './db.js';
+import { deleteImages, deleteMeta, getImage, getMeta, listFiles, listImages, putImage, setMeta } from './db.js';
 import {
   basename,
+  decodePath,
   embedCandidates,
   imageKind,
+  listImageEmbeds,
   mimeFor,
+  normalizeVaultPath,
   readAttachmentSetting,
   resolveEmbedPath,
 } from './embeds.js';
@@ -11,23 +14,27 @@ import {
   fetchRawBytes,
   githubRequest,
   githubStatusReason,
-  listVaultFiles,
+  listVaultEntries,
   lookupRepository,
   repoPath,
   treeUrl,
 } from './github-api.js';
+import { loadGithubSettings, recordStoragePersistence } from './github-store.js';
 
-export const IMAGE_CACHE_LIMIT = 32 * 1024 * 1024;
+export const OFFLINE_IMAGE_REASON = 'Not downloaded yet (offline)';
+export const PREFETCH_CONCURRENCY = 3;
 export const INDEX_TTL = 10 * 60 * 1000;
 const INDEX_KEY = 'githubVaultIndex';
 const RESOLVED_KEY = 'githubResolvedEmbeds';
+const PREFETCH_KEY = 'imagePrefetch';
 const treeFlights = new Map();
+let prefetchChain = Promise.resolve();
 
 function cacheKey(repo, path) {
   return `${repo}\n${path}`;
 }
 
-export async function rememberImage(db, { repo = '', path, blob, type, viewedAt = Date.now() }, limit = IMAGE_CACHE_LIMIT) {
+export async function rememberImage(db, { repo = '', path, blob, type, viewedAt = Date.now(), sha = '' } = {}) {
   const record = {
     key: cacheKey(repo, path),
     repo,
@@ -36,23 +43,24 @@ export async function rememberImage(db, { repo = '', path, blob, type, viewedAt 
     bytes: blob.size,
     type: type || blob.type || '',
     viewedAt,
+    sha: typeof sha === 'string' ? sha : '',
   };
   await putImage(db, record);
-  await trimImages(db, limit);
   return record;
 }
 
-async function trimImages(db, limit) {
+// A blob named by a note stays. Only a blob no note still points at is removed.
+export async function pruneUnreferencedImages(db, repo, referencedPaths) {
+  const keep = new Set(referencedPaths || []);
   const rows = await listImages(db);
-  rows.sort((a, b) => b.viewedAt - a.viewedAt || (a.key < b.key ? -1 : 1));
-  let total = 0;
   const drop = [];
   for (const row of rows) {
-    const size = Number(row.bytes) || 0;
-    if (total === 0 || total + size <= limit) total += size;
-    else drop.push(row.key);
+    if (!row || row.repo !== repo) continue;
+    if (keep.has(row.path)) continue;
+    drop.push(row.key);
   }
   if (drop.length) await deleteImages(db, drop);
+  return drop.length;
 }
 
 export async function cachedImage(db, repo, path) {
@@ -78,6 +86,7 @@ function blankIndex(settings, extra = {}) {
     fetchedAt: 0,
     treeSha: '',
     truncated: false,
+    shas: {},
     status: 0,
     reason: githubStatusReason(0),
     fromCache: false,
@@ -155,11 +164,16 @@ export async function refreshVaultIndex(db, settings, fetchImpl, now = Date.now(
       reason: githubStatusReason(listed.status || 0, { missingRepo: true }),
     });
   }
-  let paths = [];
+  let entries = [];
   try {
-    paths = listVaultFiles(listed.body, settings.root, { allowTruncated: true });
+    entries = listVaultEntries(listed.body, settings.root, { allowTruncated: true });
   } catch {
     return blankIndex(settings, { branch, reason: githubStatusReason(0) });
+  }
+  const paths = entries.map((entry) => entry.path);
+  const shas = {};
+  for (const entry of entries) {
+    if (entry.sha) shas[entry.path] = entry.sha;
   }
   const folderRead = await readAttachmentFolder(fetchImpl, settings, branch);
   if (folderRead.status === 401) {
@@ -171,6 +185,7 @@ export async function refreshVaultIndex(db, settings, fetchImpl, now = Date.now(
     branch,
     root: settings.root || '',
     paths,
+    shas,
     attachmentFolderPath: folderRead.folder,
     fetchedAt: now,
     treeSha: listed.body && typeof listed.body.sha === 'string' ? listed.body.sha : '',
@@ -223,6 +238,33 @@ function resolvedLinkKey(notePath, link) {
   return `${notePath}\n${link}`;
 }
 
+function pathLinkKey(path) {
+  return `path\n${path}`;
+}
+
+function offlineNow(options = {}) {
+  if (options.offline === true) return true;
+  const nav = globalThis.navigator;
+  return Boolean(nav && nav.onLine === false);
+}
+
+function isTransportOffline(result) {
+  if (!result || result.status === 'ready') return false;
+  if (result.fileStatus === 0) return true;
+  return result.reason === "Couldn't reach GitHub (offline)";
+}
+
+function present(result, name) {
+  if (!result) return { status: 'missing', name, reason: OFFLINE_IMAGE_REASON };
+  if (!isTransportOffline(result)) return result;
+  return {
+    status: 'missing',
+    name: result.name || name,
+    path: result.path,
+    reason: OFFLINE_IMAGE_REASON,
+  };
+}
+
 async function rememberedEmbedPath(db, settings, notePath, link) {
   const saved = await getMeta(db, RESOLVED_KEY);
   if (!saved || !samePlace(saved, settings)) return '';
@@ -234,7 +276,11 @@ async function rememberEmbedPath(db, settings, notePath, link, path) {
   if (!path) return;
   const saved = await getMeta(db, RESOLVED_KEY);
   const links = saved && samePlace(saved, settings) && saved.links ? { ...saved.links } : {};
-  links[resolvedLinkKey(notePath, link)] = path;
+  const noteKey = resolvedLinkKey(notePath, link);
+  const vaultKey = pathLinkKey(path);
+  if (links[noteKey] === path && links[vaultKey] === path) return;
+  links[noteKey] = path;
+  links[vaultKey] = path;
   try {
     await setMeta(db, RESOLVED_KEY, {
       repo: settings.repo,
@@ -251,9 +297,11 @@ async function forgetEmbedPath(db, settings, notePath, link) {
   const saved = await getMeta(db, RESOLVED_KEY);
   if (!saved || !saved.links) return;
   const key = resolvedLinkKey(notePath, link);
-  if (!saved.links[key]) return;
+  const path = saved.links[key];
+  if (!path) return;
   const links = { ...saved.links };
   delete links[key];
+  if (links[pathLinkKey(path)] === path) delete links[pathLinkKey(path)];
   try {
     await setMeta(db, RESOLVED_KEY, { ...saved, links });
   } catch {
@@ -341,7 +389,7 @@ async function cachedReady(db, repo, path) {
 }
 
 // A file 404 means try another path. 401 and transport failures stop the search.
-async function downloadEmbed(db, { repo, path, branch, root, token, fetchImpl, limit }) {
+async function downloadEmbed(db, { repo, path, branch, root, token, fetchImpl, sha = '' }) {
   const type = mimeFor(path);
   let file;
   try {
@@ -368,7 +416,7 @@ async function downloadEmbed(db, { repo, path, branch, root, token, fetchImpl, l
   if (!payload) return { status: 'error', fileStatus: 200, path, name: basename(path), reason: "Couldn't display" };
   const ready = readyBlob(path, payload, type);
   try {
-    await rememberImage(db, { repo, path, blob: ready.blob, type: ready.type }, limit);
+    await rememberImage(db, { repo, path, blob: ready.blob, type: ready.type, sha });
   } catch {
     // The download can still be shown when IndexedDB rejects the blob.
   }
@@ -386,7 +434,6 @@ async function loadListedEmbed(db, options) {
     root = '',
     token = '',
     fetchImpl,
-    limit = IMAGE_CACHE_LIMIT,
     fresh = false,
     name,
   } = options;
@@ -397,7 +444,7 @@ async function loadListedEmbed(db, options) {
     if (cached) return cached;
   }
   if (!token || !repo || !fetchImpl) return { status: 'error', name, path: resolved, reason: 'Sign in again' };
-  return downloadEmbed(db, { repo, path: resolved, branch, root, token, fetchImpl, limit });
+  return downloadEmbed(db, { repo, path: resolved, branch, root, token, fetchImpl });
 }
 
 async function probeCandidates(db, options, folder, remembered) {
@@ -409,7 +456,6 @@ async function probeCandidates(db, options, folder, remembered) {
     root = '',
     token = '',
     fetchImpl,
-    limit = IMAGE_CACHE_LIMIT,
     fresh = false,
     name,
   } = options;
@@ -435,7 +481,7 @@ async function probeCandidates(db, options, folder, remembered) {
         return cached;
       }
     }
-    const downloaded = await downloadEmbed(db, { repo, path, branch, root, token, fetchImpl, limit });
+    const downloaded = await downloadEmbed(db, { repo, path, branch, root, token, fetchImpl });
     if (downloaded.status === 'ready') {
       await rememberEmbedPath(db, settings, notePath, link, path);
       return downloaded;
@@ -488,7 +534,7 @@ async function discoverEmbed(db, options) {
       root,
       token,
       fetchImpl,
-      limit: options.limit,
+      sha: (index.shas && index.shas[path]) || '',
     });
     if (downloaded.status === 'ready') {
       await rememberEmbedPath(db, settings, notePath, link, path);
@@ -533,17 +579,215 @@ async function discoverEmbed(db, options) {
   return { status: 'missing', name, reason: 'Not found in vault' };
 }
 
-// Reads one image. A cache hit does not call the network. The returned blob
-// is what an <img> may display; callers must not put the request URL in src.
-// Passing `paths` resolves only against that list. Omitting it looks the file
-// up: likely paths, then one shared tree.
+async function linkMap(db, settings) {
+  const saved = await getMeta(db, RESOLVED_KEY);
+  if (!saved || !samePlace(saved, settings) || !saved.links) return {};
+  return saved.links;
+}
+
+// Local only. The map is checked by note plus embed text, and by vault path.
+// A saved file list is used even when it is older than the refresh window.
+async function readLocalEmbed(db, options) {
+  const {
+    link,
+    notePath = '',
+    repo = '',
+    branch = '',
+    root = '',
+    token = '',
+    paths,
+    attachmentFolderPath = '',
+  } = options;
+  const settings = { repo, branch, root, token };
+  const links = await linkMap(db, settings);
+  const candidates = [];
+  const add = (path) => {
+    const normal = typeof path === 'string' ? normalizeVaultPath(path) : '';
+    if (!normal || candidates.includes(normal)) return;
+    candidates.push(normal);
+  };
+  add(links[resolvedLinkKey(notePath, link)]);
+  const written = normalizeVaultPath(decodePath(link));
+  add(links[pathLinkKey(written)]);
+  let folder = attachmentFolderPath || '';
+  let list = Array.isArray(paths) ? paths : null;
+  if (!list) {
+    const index = await getMeta(db, INDEX_KEY);
+    if (index && samePlace(index, settings) && Array.isArray(index.paths)) {
+      list = index.paths;
+      if (!folder) folder = index.attachmentFolderPath || '';
+    }
+  }
+  if (list) add(resolveEmbedPath(link, { notePath, paths: list, attachmentFolderPath: folder }));
+  add(written);
+  for (const path of candidates) {
+    const cached = await cachedReady(db, repo, path);
+    if (!cached) continue;
+    await rememberEmbedPath(db, settings, notePath, link, cached.path || path);
+    return cached;
+  }
+  return null;
+}
+
+// Reads one image. A saved blob is returned before any network request.
+// The returned blob is what an <img> may display; callers must not put the
+// request URL in src. Passing `paths` resolves only against that list.
+// Omitting it looks the file up: the saved map, then likely paths, then one tree.
 export async function loadEmbedBlob(db, options = {}) {
   const name = basename(options.link);
   const kind = imageKind(options.link);
   if (kind === 'unsupported') return { status: 'unsupported', name, reason: 'Unsupported format' };
   if (!kind) return { status: 'missing', name, reason: 'Not found in vault' };
-  if (Array.isArray(options.paths)) return loadListedEmbed(db, { ...options, name });
-  return discoverEmbed(db, { ...options, name });
+  let local = null;
+  try {
+    local = await readLocalEmbed(db, options);
+  } catch {
+    local = null;
+  }
+  if (local && (!options.fresh || offlineNow(options))) return local;
+  if (offlineNow(options)) return { status: 'missing', name, reason: OFFLINE_IMAGE_REASON };
+  let loaded;
+  try {
+    loaded = Array.isArray(options.paths)
+      ? await loadListedEmbed(db, { ...options, name })
+      : await discoverEmbed(db, { ...options, name });
+  } catch {
+    loaded = { status: 'missing', name, reason: OFFLINE_IMAGE_REASON };
+  }
+  if (local && isTransportOffline(loaded)) return local;
+  return present(loaded, name);
+}
+
+async function keepStorage(db, storage) {
+  const target = storage || (globalThis.navigator && globalThis.navigator.storage);
+  if (!target || typeof target.persist !== 'function') return;
+  try {
+    await recordStoragePersistence(db, target);
+  } catch {
+    // A denied persistence request still leaves the blobs we can store.
+  }
+}
+
+async function runPool(items, limit, worker) {
+  if (!items.length) return;
+  let cursor = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  const runners = Array.from({ length: width }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+// Walks every saved note, resolves image embeds, and stores the blobs.
+// A blob whose git sha is already stored is skipped. Failures stay unstored
+// so the next sync tries them again. Referenced blobs are never deleted.
+export async function prefetchEmbeddedImages(db, fetchImpl, {
+  concurrency = PREFETCH_CONCURRENCY,
+  storage,
+} = {}) {
+  await keepStorage(db, storage);
+  const empty = { embedded: 0, stored: 0, skipped: 0, failed: 0, pruned: 0 };
+  const settings = await loadGithubSettings(db);
+  if (!settings.token || !settings.repo || !fetchImpl) return empty;
+  const notes = await listFiles(db);
+  const index = await vaultIndexFor(db, settings, fetchImpl, { fresh: true });
+  const place = {
+    repo: settings.repo,
+    branch: index.branch || settings.branch || '',
+    root: settings.root || '',
+    token: settings.token,
+  };
+  const referenced = new Set();
+  const jobs = [];
+  const seen = new Set();
+  for (const note of notes) {
+    if (!note || typeof note.path !== 'string' || typeof note.content !== 'string') continue;
+    for (const embed of listImageEmbeds(note.content)) {
+      let resolved = '';
+      if (index.ok) {
+        resolved = resolveEmbedPath(embed.link, {
+          notePath: note.path,
+          paths: index.paths,
+          attachmentFolderPath: index.attachmentFolderPath || '',
+        }) || '';
+      }
+      if (!resolved) resolved = await rememberedEmbedPath(db, place, note.path, embed.link);
+      if (!resolved) resolved = await rememberedEmbedPath(db, place, note.path, embed.raw);
+      if (!resolved) continue;
+      referenced.add(resolved);
+      await rememberEmbedPath(db, place, note.path, embed.link, resolved);
+      if (embed.raw && embed.raw !== embed.link) {
+        await rememberEmbedPath(db, place, note.path, embed.raw, resolved);
+      }
+      if (!index.ok || seen.has(resolved)) continue;
+      seen.add(resolved);
+      jobs.push({
+        path: resolved,
+        sha: (index.shas && index.shas[resolved]) || '',
+      });
+    }
+  }
+  let stored = 0;
+  let skipped = 0;
+  let failed = 0;
+  if (index.ok) {
+    await runPool(jobs, concurrency, async (job) => {
+      let existing = null;
+      try {
+        existing = await getImage(db, cacheKey(settings.repo, job.path));
+      } catch {
+        existing = null;
+      }
+      if (existing && existing.blob && (!job.sha || existing.sha === job.sha)) {
+        skipped += 1;
+        return;
+      }
+      const downloaded = await downloadEmbed(db, {
+        repo: settings.repo,
+        path: job.path,
+        branch: index.branch || settings.branch,
+        root: settings.root,
+        token: settings.token,
+        fetchImpl,
+        sha: job.sha,
+      });
+      if (downloaded.status === 'ready') stored += 1;
+      else failed += 1;
+    });
+  } else {
+    failed = jobs.length;
+  }
+  let pruned = 0;
+  if (index.ok && !index.truncated) {
+    try {
+      pruned = await pruneUnreferencedImages(db, settings.repo, referenced);
+    } catch {
+      pruned = 0;
+    }
+  }
+  const result = { embedded: referenced.size, stored, skipped, failed, pruned };
+  try {
+    await setMeta(db, PREFETCH_KEY, { ...result, at: Date.now() });
+  } catch {
+    // The blobs are already stored when this summary cannot be.
+  }
+  return result;
+}
+
+export function startImagePrefetch(db, fetchImpl = globalThis.fetch) {
+  const run = prefetchChain.catch(() => {}).then(async () => {
+    try {
+      return await prefetchEmbeddedImages(db, fetchImpl);
+    } catch {
+      return { embedded: 0, stored: 0, skipped: 0, failed: 0, pruned: 0 };
+    }
+  });
+  prefetchChain = run.then(() => {}, () => {});
+  return run;
 }
 
 export function embedImage(blob, { createObjectURL, createElement, width, height, name, type }) {

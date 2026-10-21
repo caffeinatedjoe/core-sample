@@ -106,7 +106,7 @@ export function githubHeaders(token) {
   };
 }
 
-export function listVaultFiles(treeResponse, root, { allowTruncated = false } = {}) {
+export function listVaultEntries(treeResponse, root, { allowTruncated = false } = {}) {
   if (!treeResponse || !Array.isArray(treeResponse.tree)) {
     throw new Error('GitHub did not list that branch.');
   }
@@ -114,7 +114,7 @@ export function listVaultFiles(treeResponse, root, { allowTruncated = false } = 
     throw new Error('That repository listing was cut off.');
   }
   const folder = cleanRoot(root);
-  const paths = [];
+  const entries = [];
   for (const item of treeResponse.tree) {
     if (!item || item.type !== 'blob' || typeof item.path !== 'string') continue;
     let local = item.path;
@@ -124,10 +124,17 @@ export function listVaultFiles(treeResponse, root, { allowTruncated = false } = 
       local = item.path.slice(prefix.length);
     }
     if (!local || local.split('/').some((part) => !part || part === '.' || part === '..')) continue;
-    paths.push(local);
+    entries.push({
+      path: local,
+      sha: typeof item.sha === 'string' ? item.sha : '',
+    });
   }
-  paths.sort((a, b) => a.localeCompare(b));
-  return paths;
+  entries.sort((a, b) => a.path.localeCompare(b.path));
+  return entries;
+}
+
+export function listVaultFiles(treeResponse, root, options) {
+  return listVaultEntries(treeResponse, root, options).map((entry) => entry.path);
 }
 
 export async function fetchRawBytes(fetchImpl, { repo, path, branch, token }) {
