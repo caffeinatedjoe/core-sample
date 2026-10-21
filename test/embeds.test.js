@@ -57,6 +57,24 @@ test('a percent-encoded path and the attachment folder are honored', () => {
   );
 });
 
+test('a root note resolves an embed into an attachment folder whose name has spaces', () => {
+  const setting = readAttachmentSetting('{"attachmentFolderPath":"./assets/Field Notes"}');
+  assert.equal(setting, './assets/Field Notes');
+  assert.equal(attachmentFolderFor('Field Notes.md', setting), 'assets/Field Notes');
+  assert.equal(
+    resolveEmbedPath('image-1710000000000.png', {
+      notePath: 'Field Notes.md',
+      paths: [
+        'Field Notes.md',
+        'assets/Field Notes/image-1710000000000.png',
+        '.obsidian/app.json',
+      ],
+      attachmentFolderPath: setting,
+    }),
+    'assets/Field Notes/image-1710000000000.png',
+  );
+});
+
 test('wikilink size syntax and markdown images do not leave a broken source', () => {
   const sized = renderMarkdown('![[img.png|300]]\n\n![[img.png|300x200]]\n\n![[sub/folder/img.png]]\n');
   assert.match(sized, /data-embed="img.png" data-width="300"/);

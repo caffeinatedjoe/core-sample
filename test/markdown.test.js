@@ -313,6 +313,27 @@ test('nests tasks under tasks, bullets, and numbers with spaces, tabs, and a mix
   assert.equal(mixed.includes('[x]'), false);
 });
 
+test('a two-tab embed under a nested task stays an inline image', () => {
+  const html = renderMarkdown(fixture(`
+- [x] parent task
+<TAB>- [x] nested task
+<TAB><TAB>![[image-1710000000000.png]]
+<TAB>- [x] sibling task
+`));
+  assert.equal(html.includes('<pre'), false);
+  assert.equal(html.includes('<code'), false);
+  assert.equal(html.includes('![['), false);
+  assert.equal((html.match(/data-task-index="/g) || []).length, 3);
+  const nestedAt = html.indexOf('data-task-index="1"');
+  const siblingAt = html.indexOf('data-task-index="2"');
+  assert.ok(nestedAt !== -1 && siblingAt > nestedAt);
+  const nested = html.slice(nestedAt, siblingAt);
+  assert.match(nested, /class="item-body"[\s\S]*<span class="embed" data-embed="image-1710000000000.png">/);
+  assert.match(nested, /class="embed-fallback">image-1710000000000\.png</);
+  assert.equal(nested.includes('<pre'), false);
+  assert.equal(nested.includes('item-marker'), false);
+});
+
 test('a task has no bullet, an empty box still renders, and a heading stays inside the item', () => {
   const tasks = renderMarkdown('- [ ] only\n\t- [x] child\n');
   assert.equal(tasks.includes('item-marker'), false);

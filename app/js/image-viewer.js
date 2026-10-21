@@ -63,7 +63,10 @@ export function createImageViewer(doc, root, { onClose } = {}) {
   const pointers = new Map();
   const mounted = new Map();
   const loading = new Set();
+  const ownedUrls = new Set();
   let samples = [];
+  let blocking = false;
+  let srcSerial = 0;
 
   function reduced() {
     return Boolean(view.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
@@ -112,6 +115,72 @@ export function createImageViewer(doc, root, { onClose } = {}) {
     view.scrollTo(savedWindow.x, savedWindow.y);
     doc.documentElement.classList.remove('viewer-scroll-lock');
     scrollEl = null;
+  }
+
+  function blockGesture(event) {
+    if (open) event.preventDefault();
+  }
+
+  // These listeners are non-passive because they cancel a pinch. They exist
+  // only while the viewer is open. Leaving them on the document makes iOS
+  // treat the preview scroller as non-passive and skip painting its images.
+  function armBlocking() {
+    if (blocking) return;
+    blocking = true;
+    doc.addEventListener('touchmove', blockGesture, { passive: false });
+    for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
+      doc.addEventListener(name, blockGesture, { passive: false });
+    }
+  }
+
+  function disarmBlocking() {
+    if (!blocking) return;
+    blocking = false;
+    doc.removeEventListener('touchmove', blockGesture);
+    for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
+      doc.removeEventListener(name, blockGesture);
+    }
+  }
+
+  function releaseOwned() {
+    for (const url of ownedUrls) {
+      const used = [...doc.querySelectorAll('img')].some((img) => img.getAttribute('src') === url);
+      if (!used) URL.revokeObjectURL(url);
+    }
+    ownedUrls.clear();
+  }
+
+  function useSrc(img, src, blob) {
+    const key = src || (blob instanceof Blob ? `bytes:${blob.size}:${blob.type || ''}` : '');
+    if (!key || img.dataset.sourceSrc === key) return;
+    const token = String(++srcSerial);
+    img.dataset.sourceSrc = key;
+    img.dataset.srcToken = token;
+    const apply = (url) => {
+      if (!img.isConnected || img.dataset.srcToken !== token) {
+        if (ownedUrls.has(url)) {
+          ownedUrls.delete(url);
+          URL.revokeObjectURL(url);
+        }
+        return;
+      }
+      img.src = url;
+    };
+    if (blob instanceof Blob) {
+      // Safari drops a blob URL that is assigned before the element is in the
+      // document, and sharing that URL with the preview blanks the inline image.
+      // Copy the bytes, then point this element at the copy.
+      blob.arrayBuffer().then((bytes) => {
+        const copy = new Blob([bytes], { type: blob.type || 'application/octet-stream' });
+        const url = URL.createObjectURL(copy);
+        ownedUrls.add(url);
+        apply(url);
+      }).catch(() => {
+        if (src && !src.startsWith('blob:')) apply(src);
+      });
+      return;
+    }
+    apply(src);
   }
 
   function setBackdrop(value) {
@@ -180,11 +249,11 @@ export function createImageViewer(doc, root, { onClose } = {}) {
     img.alt = slide.alt || '';
     img.draggable = false;
     img.addEventListener('load', () => rememberSize(slide, img, slot));
-    if (slide.src) img.src = slide.src;
     el.append(img);
     stage.append(el);
     mounted.set(slot, el);
-    if (img.complete) rememberSize(slide, img, slot);
+    if (slide.src || slide.blob) useSrc(img, slide.src, slide.blob);
+    if (img.complete && img.getAttribute('src')) rememberSize(slide, img, slot);
     return el;
   }
 
@@ -200,7 +269,7 @@ export function createImageViewer(doc, root, { onClose } = {}) {
       const el = mounted.get(slot) || mount(slot);
       const img = el.querySelector('img');
       const slide = slides[slot];
-      if (slide.src && img.getAttribute('src') !== slide.src) img.src = slide.src;
+      if (slide.src || slide.blob) useSrc(img, slide.src, slide.blob);
       img.alt = slide.alt || '';
     }
     layout();
@@ -309,12 +378,15 @@ export function createImageViewer(doc, root, { onClose } = {}) {
     open = false;
     gesture = null;
     pointers.clear();
+    disarmBlocking();
     root.dataset.state = 'closed';
     root.hidden = true;
+    root.removeAttribute('aria-modal');
     root.style.opacity = '';
     setBackdrop(1);
     showChrome();
     clearSlides();
+    releaseOwned();
     unlock();
     const thumb = restoreFocus ? returnFocus : null;
     returnFocus = null;
@@ -647,10 +719,6 @@ export function createImageViewer(doc, root, { onClose } = {}) {
     if (gesture?.type === 'drag') finishDrag(point);
   }
 
-  function blockGesture(event) {
-    if (open) event.preventDefault();
-  }
-
   stage.addEventListener('pointerdown', onPointerDown);
   stage.addEventListener('pointermove', onPointerMove);
   stage.addEventListener('pointerup', onPointerUp);
@@ -676,12 +744,6 @@ export function createImageViewer(doc, root, { onClose } = {}) {
     pointers.clear();
     applyPinchFrom(points);
   }, { passive: false });
-  doc.addEventListener('touchmove', (event) => {
-    if (open) event.preventDefault();
-  }, { passive: false });
-  for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
-    doc.addEventListener(name, blockGesture, { passive: false });
-  }
   root.addEventListener('contextmenu', (event) => {
     if (open) event.preventDefault();
   });
@@ -790,6 +852,8 @@ export function createImageViewer(doc, root, { onClose } = {}) {
     restoreFocus = true;
     lock(scroller);
     root.hidden = false;
+    root.setAttribute('aria-modal', 'true');
+    armBlocking();
     root.style.opacity = '1';
     showChrome();
     open = true;

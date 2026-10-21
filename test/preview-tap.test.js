@@ -56,6 +56,20 @@ test('an image tap is a viewer, not a navigation', () => {
   });
 });
 
+test('an image continued under a task opens the viewer', () => {
+  const item = element('li', { className: 'task' });
+  const line = element('div', { className: 'task-line', parent: item });
+  element('button', { dataset: { taskIndex: '1' }, parent: line });
+  const body = element('div', { className: 'item-body', parent: item });
+  const img = element('img', {
+    className: 'embed-image',
+    attrs: { src: 'blob:preview', alt: 'image-1710000000000.png' },
+    parent: body,
+  });
+  assert.equal(planPreviewClick(img).type, 'image');
+  assert.equal(planPreviewClick(img).src, 'blob:preview');
+});
+
 test('a checklist tap is still a toggle', () => {
   const box = element('button', { dataset: { taskIndex: '0' } });
   assert.deepEqual(planPreviewClick(box), {
