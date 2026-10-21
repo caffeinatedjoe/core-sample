@@ -9,9 +9,11 @@ import {
   disconnectGithub,
   eraseLocalNotes,
   loadGithubSettings,
+  loadPendingFlow,
   saveGithubConfig,
   saveGithubSession,
   saveGithubTarget,
+  savePendingFlow,
 } from '../app/js/github-store.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
@@ -23,6 +25,12 @@ test('disconnect removes the token and repo settings and keeps notes and the cli
   await saveGithubConfig(db, { clientId: 'Iv1.public', relay: 'https://relay.example' });
   await saveGithubSession(db, { token: TOKEN, login: 'octocat' });
   await saveGithubTarget(db, { repo: 'owner/repo', branch: 'main', root: '' });
+  await savePendingFlow(db, {
+    deviceCode: 'dc_supersecretvalue',
+    userCode: 'ABCD-1234',
+    interval: 5,
+    expiresAt: Date.now() + 60_000,
+  });
 
   await disconnectGithub(db);
   const settings = await loadGithubSettings(db);
@@ -33,6 +41,7 @@ test('disconnect removes the token and repo settings and keeps notes and the cli
   assert.equal(settings.login, '');
   assert.equal(settings.clientId, 'Iv1.public');
   assert.equal(settings.relay, 'https://relay.example');
+  assert.equal(await loadPendingFlow(db), null);
   const files = await listFiles(db);
   assert.equal(files.length, 1);
   assert.equal(files[0].content, 'keep me');

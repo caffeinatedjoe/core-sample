@@ -93,11 +93,18 @@
             <button type="button" id="github-connect">Connect</button>
           </div>
           <div id="github-device" hidden>
+            <p id="github-signin-state" class="github-note"></p>
             <button type="button" id="github-user-code" class="user-code"></button>
-            <a id="github-verify" href="https://github.com/login/device">Open github.com/login/device</a>
-            <button type="button" id="github-cancel">Cancel</button>
+            <button type="button" id="github-open-github">Copy code &amp; open GitHub</button>
+            <p class="github-note">You’ll come back to Core Sample after GitHub.</p>
+            <a id="github-verify" href="https://github.com/login/device" target="_blank" rel="noopener">Open github.com/login/device</a>
+            <div class="github-actions">
+              <button type="button" id="github-check-now">Check now</button>
+              <button type="button" id="github-cancel">Cancel</button>
+            </div>
           </div>
           <p id="github-status" class="github-note" role="status"></p>
+          <button type="button" id="github-try-again" hidden>Try again</button>
           <div id="github-target" hidden>
             <p id="github-login" class="github-note"></p>
             <label>Repository

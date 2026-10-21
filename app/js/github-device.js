@@ -111,3 +111,155 @@ export async function signInWithDevice({
     shouldStop,
   });
 }
+
+export const DEVICE_PAGE = 'https://github.com/login/device';
+
+export function pendingFlow(start, now = Date.now()) {
+  return {
+    deviceCode: start.deviceCode,
+    userCode: start.userCode,
+    interval: start.interval,
+    expiresAt: now + start.expiresIn * 1000,
+  };
+}
+
+// One poll loop for a pending device flow. Resume and Check now share it.
+export function createDeviceSignIn({
+  loadPending,
+  savePending,
+  clearPending,
+  postToken,
+  sleep,
+  now = () => Date.now(),
+  onPending,
+  onToken,
+  onFailure,
+}) {
+  let running = null;
+  let stop = false;
+  let wake = null;
+  let pollNow = false;
+
+  function checkNow() {
+    if (!running) return begin(true);
+    if (wake) {
+      const fn = wake;
+      wake = null;
+      fn();
+    } else {
+      pollNow = true;
+    }
+    return running;
+  }
+
+  function wait(ms) {
+    if (pollNow) {
+      pollNow = false;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        wake = null;
+        resolve();
+      };
+      wake = finish;
+      Promise.resolve(sleep(ms)).then(finish, finish);
+    });
+  }
+
+  async function loop(flow, immediate) {
+    let interval = flow.interval;
+    let skip = immediate;
+    while (now() < flow.expiresAt) {
+      if (stop) return { done: true, cancelled: true };
+      if (!skip) await wait(interval * 1000);
+      skip = false;
+      if (stop) return { done: true, cancelled: true };
+      if (now() >= flow.expiresAt) break;
+      let body;
+      try {
+        body = await postToken(flow.deviceCode);
+      } catch {
+        return { done: true, failure: 'The sign-in request failed.' };
+      }
+      const step = interpretPoll(body, interval);
+      if (step.token) {
+        if (stop) return { done: true, cancelled: true };
+        return step;
+      }
+      if (stop) return { done: true, cancelled: true };
+      if (step.done) return step;
+      if (step.wait !== interval) {
+        interval = step.wait;
+        flow = { ...flow, interval };
+        await savePending(flow);
+      }
+    }
+    return { done: true, failure: 'The code expired. Start again.' };
+  }
+
+  async function settle(result) {
+    if (!result || result.cancelled || result.idle) return result;
+    try {
+      if (result.token) {
+        if (onToken) await onToken(result.token);
+      } else if (onFailure) {
+        await onFailure(result.failure || 'GitHub did not sign in.');
+      }
+    } finally {
+      await clearPending();
+    }
+    return result;
+  }
+
+  function begin(immediate) {
+    if (running) return running;
+    running = (async () => {
+      try {
+        const flow = await loadPending();
+        if (!flow) return { done: true, idle: true };
+        if (!(now() < flow.expiresAt)) {
+          await clearPending();
+          if (onFailure) await onFailure('The code expired. Start again.');
+          return { done: true, failure: 'The code expired. Start again.' };
+        }
+        if (onPending) onPending(flow);
+        return await settle(await loop(flow, immediate));
+      } finally {
+        running = null;
+        stop = false;
+        wake = null;
+      }
+    })();
+    return running;
+  }
+
+  return {
+    start() {
+      return begin(false);
+    },
+    resume() {
+      return begin(true);
+    },
+    checkNow,
+    async cancel() {
+      stop = true;
+      if (wake) {
+        const fn = wake;
+        wake = null;
+        fn();
+      }
+      const job = running;
+      if (job) await job;
+      stop = false;
+      await clearPending();
+      return { done: true, cancelled: true };
+    },
+    get active() {
+      return Boolean(running);
+    },
+  };
+}
