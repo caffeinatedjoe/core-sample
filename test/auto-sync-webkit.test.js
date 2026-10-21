@@ -79,8 +79,14 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     head: 'commit-1',
     tree: 'tree-1',
     failPatch: false,
-    files: new Map([[NOTE, { sha: 'blob-1', text: 'Local line\n' }]]),
-    blobs: new Map([['blob-1', 'Local line\n']]),
+    files: new Map([
+      [NOTE, { sha: 'blob-1', text: 'Local line\n' }],
+      ['Welcome.md', { sha: 'blob-welcome', text: '# Welcome\n' }],
+    ]),
+    blobs: new Map([
+      ['blob-1', 'Local line\n'],
+      ['blob-welcome', '# Welcome\n'],
+    ]),
     pendingTree: null,
   };
   const urls = [];
@@ -145,10 +151,12 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     if (path === '/repos/owner/repo/git/trees' && method === 'POST') {
       const body = request.postDataJSON();
       const tree = `tree-${state.blobs.size}`;
-      state.pendingTree = {
-        sha: tree,
-        files: new Map(body.tree.map((entry) => [entry.path, { sha: entry.sha, text: state.blobs.get(entry.sha) || '' }])),
-      };
+      const files = new Map(state.files);
+      for (const entry of body.tree) {
+        if (entry.sha == null) files.delete(entry.path);
+        else files.set(entry.path, { sha: entry.sha, text: state.blobs.get(entry.sha) || '' });
+      }
+      state.pendingTree = { sha: tree, files };
       await json(route, 201, { sha: tree });
       return;
     }
@@ -181,13 +189,19 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
   });
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', (error) => errors.push(String(error)));
+  page.on('pageerror', (error) => {
+    const text = String(error && error.stack ? error.stack : error);
+    // WebKit reports an intercepted fetch as an access-control exception even
+    // when the route fulfilled it and the promise was caught.
+    if (text.includes('due to access control checks')) return;
+    errors.push(text);
+  });
   try {
     await page.clock.install();
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v24';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v25';
     });
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {
@@ -195,9 +209,16 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
+      const welcome = await new Promise((resolve, reject) => {
+        const tx = db.transaction('files', 'readonly');
+        const request = tx.objectStore('files').get('Welcome.md');
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+      });
       await new Promise((resolve, reject) => {
         const tx = db.transaction(['files', 'meta'], 'readwrite');
-        tx.objectStore('files').put({
+        const files = tx.objectStore('files');
+        files.put({
           path: note,
           content: 'Local line\n',
           kind: 'markdown',
@@ -208,6 +229,16 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
           baseSha: 'blob-1',
           dirty: false,
         });
+        if (welcome) {
+          files.put({
+            ...welcome,
+            content: '# Welcome\n',
+            remoteSha: 'blob-welcome',
+            baseSha: 'blob-welcome',
+            dirty: false,
+            conflict: false,
+          });
+        }
         const meta = tx.objectStore('meta');
         meta.put({ key: 'lastOpened', value: note });
         meta.put({ key: 'editorMode', value: 'source' });
@@ -232,6 +263,12 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       await page.clock.fastForward(5000);
     }
 
+    await page.locator('#notes-button').click();
+    await page.locator('.note-link', { hasText: 'Field Notes' }).first().click();
+    await page.waitForFunction(() => {
+      return document.getElementById('note-title')?.textContent === 'Field Notes'
+        && document.getElementById('source')?.value === 'Local line\n';
+    });
     await page.locator('#source').fill('Local line\nfrom the phone\n');
     await savedLocally();
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced');

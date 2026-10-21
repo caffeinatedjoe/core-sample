@@ -119,7 +119,8 @@ function gitServer() {
       const tree = `tree-${state.blobs.size}`;
       const files = new Map(state.files);
       for (const entry of body.tree) {
-        files.set(entry.path, { sha: entry.sha, text: state.blobs.get(entry.sha) || '' });
+        if (entry.sha == null) files.delete(entry.path);
+        else files.set(entry.path, { sha: entry.sha, text: state.blobs.get(entry.sha) || '' });
       }
       state.pending = { tree, files };
       return json(201, { sha: tree });
@@ -136,7 +137,7 @@ function gitServer() {
       if (state.patchStatus) return json(state.patchStatus, { message: state.patchStatus === 404 ? 'Not Found' : 'rejected' });
       if (state.notForward) {
         const mode = state.notForward;
-        state.notForward = null;
+        if (!state.stickNotForward) state.notForward = null;
         state.pending = null;
         state.head = 'commit-moved';
         if (mode === 'conflict') {
@@ -191,7 +192,7 @@ async function harness(extra = {}) {
     random: () => 0,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
-    offline: () => Boolean(extra.offline),
+    offline: () => Boolean(extra.isOffline ? extra.isOffline() : extra.offline),
     onStatus(text) {
       history.push(text);
     },
@@ -603,5 +604,219 @@ test('offline keeps the queue and does not call GitHub', async () => {
     assert.equal((await listOps(box.db)).length, 1);
   } finally {
     await box.close();
+  }
+});
+
+test('a delete is one commit with a null blob sha, and it survives a relaunch', async () => {
+  const box = await harness();
+  const name = box.db.name;
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1', trashedAt: 9 }));
+    await box.sync.noteTrashed({ file: { path: 'Field Notes.md' }, baseSha: 'blob-1' });
+    box.sync.stop();
+    box.db.close();
+    const db = await openDatabase(name);
+    const clock = timers();
+    const sync = createAutoSync({
+      db,
+      fetchImpl: box.git.fetchImpl,
+      now: () => 1_700_000_000_000,
+      random: () => 0,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+    });
+    const result = await sync.runNow();
+    sync.stop();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const tree = box.git.log.find((item) => item.method === 'POST' && item.url.endsWith('/git/trees'));
+    assert.equal(tree.body.tree.some((entry) => entry.path === 'Field Notes.md' && entry.sha === null), true);
+    assert.equal(box.git.state.files.has('Field Notes.md'), false);
+    const patches = box.git.log.filter((item) => item.method === 'PATCH');
+    assert.equal(patches.length, 1);
+    assert.equal(new URL(patches[0].url).pathname, '/repos/owner/repo/git/refs/heads/main');
+    assert.equal(patches[0].body.force, false);
+    assert.equal((await listOps(db)).length, 0);
+    db.close();
+  } finally {
+    await deleteDatabase(name);
+  }
+});
+
+test('a delete is not sent when the remote note changed or the note was never synced', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Field Notes.md', 'phone\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1', trashedAt: 9 }));
+    box.git.state.files.set('Field Notes.md', { sha: 'blob-9', text: 'theirs\n' });
+    box.git.state.blobs.set('blob-9', 'theirs\n');
+    await box.sync.noteTrashed({ file: { path: 'Field Notes.md' }, baseSha: 'blob-1' });
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.conflict);
+    assert.equal(box.git.state.files.has('Field Notes.md'), true);
+    assert.equal(box.git.log.some((item) => item.method === 'PATCH'), false);
+    const local = await getFile(box.db, 'Field Notes.md');
+    assert.equal(local.content, 'phone\n');
+    assert.equal(local.trashedAt, null);
+    assert.equal(local.conflictReason, 'delete');
+    const tree = box.git.log.find((item) => item.method === 'POST' && item.url.endsWith('/git/trees'));
+    assert.equal(tree, undefined);
+
+    await box.sync.noteTrashed({ file: { path: 'Fresh.md' }, baseSha: '' });
+    assert.equal((await listOps(box.db)).some((op) => op.kind === 'delete' && op.path === 'Fresh.md'), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a rename deletes the old path in the same commit as the new note', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Logs.md', 'See [[Field Notes]]\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    box.git.state.files.set('Logs.md', { sha: 'blob-1', text: 'See [[Field Notes]]\n' });
+    box.git.state.files.delete('Field Notes.md');
+    await putFile(box.db, note('Journal.md', 'See [[Journal]]\n', { dirty: true }));
+    await box.sync.noteRenamed({
+      from: 'Logs.md',
+      to: 'Journal.md',
+      baseSha: 'blob-1',
+      file: note('Journal.md', 'See [[Journal]]\n', { dirty: true }),
+    });
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const tree = box.git.log.find((item) => item.method === 'POST' && item.url.endsWith('/git/trees'));
+    assert.equal(tree.body.tree.some((entry) => entry.path === 'Logs.md' && entry.sha === null), true);
+    assert.equal(tree.body.tree.some((entry) => entry.path === 'Journal.md' && entry.sha), true);
+    assert.equal(box.git.state.files.has('Logs.md'), false);
+    assert.equal(box.git.state.files.get('Journal.md').text, 'See [[Journal]]\n');
+    const commit = box.git.log.find((item) => item.method === 'POST' && item.url.endsWith('/git/commits'));
+    assert.equal(commit.body.parents[0], 'commit-1');
+    assert.equal(commit.body.message.includes('gho_'), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a rename does not delete the old path when GitHub changed it', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Journal.md', 'phone\n', { dirty: true }));
+    box.git.state.files.set('Field Notes.md', { sha: 'blob-9', text: 'remote edit\n' });
+    box.git.state.blobs.set('blob-9', 'remote edit\n');
+    await box.sync.noteRenamed({
+      from: 'Field Notes.md',
+      to: 'Journal.md',
+      baseSha: 'blob-1',
+      file: note('Journal.md', 'phone\n', { dirty: true }),
+    });
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.conflict);
+    assert.equal(box.git.state.files.get('Field Notes.md').text, 'remote edit\n');
+    assert.equal(box.git.log.some((item) => item.body && item.body.tree && item.body.tree.some((entry) => entry.sha === null)), false);
+    const oldLocal = await getFile(box.db, 'Field Notes.md');
+    assert.equal(oldLocal.content, 'remote edit\n');
+    assert.equal(oldLocal.dirty, false);
+    const renamed = await getFile(box.db, 'Journal.md');
+    assert.equal(renamed.content, 'phone\n');
+    assert.equal(renamed.conflictReason, 'rename');
+  } finally {
+    await box.close();
+  }
+});
+
+test('a new note and a clean never-synced note upload, and a clean GitHub delete is removed locally', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Welcome.md', '# Welcome\n'));
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const created = await box.sync.runNow();
+    assert.equal(created.status, SYNC_STATUS.synced);
+    assert.equal(box.git.state.files.get('Welcome.md').text, '# Welcome\n');
+    const welcome = await getFile(box.db, 'Welcome.md');
+    assert.equal(welcome.dirty, false);
+    assert.ok(welcome.baseSha);
+
+    box.git.state.files.delete('Field Notes.md');
+    box.git.state.head = 'commit-deleted';
+    const removed = await box.sync.runNow();
+    assert.equal(removed.status, SYNC_STATUS.synced);
+    assert.equal(await getFile(box.db, 'Field Notes.md'), undefined);
+
+    await putFile(box.db, note('Field Notes.md', 'still editing\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const conflict = await box.sync.runNow();
+    assert.equal(conflict.status, SYNC_STATUS.conflict);
+    const kept = await getFile(box.db, 'Field Notes.md');
+    assert.equal(kept.content, 'still editing\n');
+    assert.equal(kept.conflictReason, 'deleted');
+  } finally {
+    await box.close();
+  }
+});
+
+test('non-overlapping edits auto-merge into one push', async () => {
+  const box = await harness();
+  try {
+    box.git.state.blobs.set('blob-1', 'a\nb\n');
+    box.git.state.files.set('Field Notes.md', { sha: 'blob-9', text: 'a\nB\n' });
+    box.git.state.blobs.set('blob-9', 'a\nB\n');
+    await putFile(box.db, note('Field Notes.md', 'A\nb\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const saved = await getFile(box.db, 'Field Notes.md');
+    assert.equal(saved.content, 'A\nB\n');
+    assert.equal(saved.conflict, false);
+    assert.equal(box.git.state.files.get('Field Notes.md').text, 'A\nB\n');
+  } finally {
+    await box.close();
+  }
+});
+
+test('a ref update that keeps failing becomes a conflict after three retries', async () => {
+  const box = await harness();
+  try {
+    box.git.state.notForward = 'recommit';
+    box.git.state.stickNotForward = true;
+    await putFile(box.db, note('Field Notes.md', 'from the phone\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.conflict);
+    const patches = box.git.log.filter((item) => item.method === 'PATCH');
+    assert.equal(patches.length, 4);
+    assert.equal(patches.every((item) => item.body.force === false), true);
+    const saved = await getFile(box.db, 'Field Notes.md');
+    assert.equal(saved.content, 'from the phone\n');
+    assert.equal(saved.conflictReason, 'stale');
+  } finally {
+    await box.close();
+  }
+});
+
+test('an offline delete stays queued until the phone is online again', async () => {
+  let offline = true;
+  const box = await harness({ isOffline: () => offline });
+  const name = box.db.name;
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1', trashedAt: 4 }));
+    await box.sync.noteTrashed({ file: { path: 'Field Notes.md' }, baseSha: 'blob-1' });
+    const queued = await box.sync.runNow();
+    assert.equal(queued.status, SYNC_STATUS.offline);
+    assert.equal(box.git.log.length, 0);
+    box.sync.stop();
+    box.db.close();
+    offline = false;
+    const db = await openDatabase(name);
+    const clock = timers();
+    const sync = createAutoSync({
+      db,
+      fetchImpl: box.git.fetchImpl,
+      now: () => 1_700_000_000_000,
+      random: () => 0,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+    });
+    const result = await sync.runNow();
+    sync.stop();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    assert.equal(box.git.state.files.has('Field Notes.md'), false);
+    db.close();
+  } finally {
+    await deleteDatabase(name);
   }
 });

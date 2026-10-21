@@ -1,6 +1,6 @@
 import { renderMarkdown } from './markdown.js';
 import { toggleChecklist } from './checklist.js';
-import { commitFiles, putFile, setMeta } from './db.js';
+import { commitFiles, deleteOps, listOps, putFile, putOp, setMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -33,6 +33,7 @@ import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
 import { createAutoSync } from './github-sync.js';
+import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
@@ -96,6 +97,12 @@ export function mountApp(doc, db) {
       dirty: current.dirty === true,
       conflict: current.conflict === true,
       conflictCopy: current.conflictCopy === true,
+      conflictAt: current.conflictAt || null,
+      conflictReason: current.conflictReason || '',
+      conflictRemote: typeof current.conflictRemote === 'string' ? current.conflictRemote : '',
+      conflictRemoteSha: current.conflictRemoteSha || '',
+      conflictBase: typeof current.conflictBase === 'string' ? current.conflictBase : '',
+      backup: current.backup === true,
     };
   }
 
@@ -421,6 +428,7 @@ export function mountApp(doc, db) {
   }
 
   async function persistPlan(result) {
+    const previous = files.slice();
     await commitFiles(db, { put: result.put || [], remove: result.remove || [] });
     files = result.files;
     if (result.folders) {
@@ -433,6 +441,33 @@ export function mountApp(doc, db) {
     }
     syncOpen(result.pathMap);
     renderList();
+    await notifyOrganize(previous, result);
+  }
+
+  async function notifyOrganize(previous, result) {
+    if (!sync) return;
+    const map = result.pathMap || {};
+    const destinations = new Set(Object.values(map).filter((path) => path));
+    for (const [from, to] of Object.entries(map)) {
+      if (!to || to === from) continue;
+      const prior = previous.find((file) => file.path === from);
+      const next = (result.files || []).find((file) => file.path === to);
+      if (!prior || prior.kind !== 'markdown' || !next) continue;
+      const base = typeof prior.baseSha === 'string' && prior.baseSha ? prior.baseSha : (prior.remoteSha || '');
+      await sync.noteRenamed({ from, to, baseSha: base, file: next });
+    }
+    for (const file of result.put || []) {
+      if (!file || file.kind !== 'markdown' || destinations.has(file.path)) continue;
+      const prior = previous.find((item) => item.path === file.path);
+      if (file.trashedAt && !prior?.trashedAt) {
+        const base = (prior && (prior.baseSha || prior.remoteSha)) || '';
+        await sync.noteTrashed({ file, baseSha: typeof base === 'string' ? base : '' });
+      } else if (prior?.trashedAt && !file.trashedAt) {
+        await sync.noteRestored(file);
+      } else if (file.dirty && !file.trashedAt) {
+        await sync.noteEdited(file);
+      }
+    }
   }
 
   async function openPath(path, { heading = '' } = {}) {
@@ -1228,16 +1263,102 @@ export function mountApp(doc, db) {
     renderList();
   }
 
+  function applyRemoved(paths) {
+    const gone = new Set(paths || []);
+    files = files.filter((file) => !gone.has(file.path));
+    recent = recent.filter((path) => !gone.has(path));
+    setMeta(db, 'recent', recent).catch(() => {});
+    if (current && gone.has(current.path)) {
+      current = null;
+      syncOpen();
+    }
+    renderList();
+  }
+
+  async function applyConflictPlan(plan) {
+    const beforeFiles = files.map((file) => ({ ...file }));
+    const beforeOps = await listOps(db);
+    await commitFiles(db, { put: plan.put || [], remove: plan.remove || [] });
+    const removed = new Set(plan.remove || []);
+    files = files.filter((file) => !removed.has(file.path));
+    for (const file of plan.put || []) {
+      const index = files.findIndex((item) => item.path === file.path);
+      if (index >= 0) files[index] = file;
+      else files.push(file);
+    }
+    recent = recent.filter((path) => !removed.has(path));
+    const quiet = new Set(plan.remove || []);
+    for (const file of plan.put || []) {
+      if (!file.dirty || file.backup || file.conflictCopy) quiet.add(file.path);
+    }
+    if (quiet.size) await deleteOps(db, [...quiet]);
+    for (const file of plan.put || []) {
+      if (file.dirty && !file.backup && !file.conflictCopy && !file.trashedAt) await sync.noteEdited(file);
+    }
+    if (current && (removed.has(current.path) || (plan.put || []).some((file) => file.path === current.path))) {
+      const next = files.find((file) => file.path === (current && current.path) && !file.trashedAt);
+      if (next) showNote(next);
+      else syncOpen();
+    }
+    renderList();
+    const queued = (plan.put || []).some((file) => file.dirty && !file.backup && !file.conflictCopy && !file.trashedAt);
+    if (!queued && !browserOffline()) await sync.runNow('resolve');
+    else await sync.refreshStatus();
+    return {
+      async undo() {
+        const created = (plan.put || []).map((file) => file.path).filter((notePath) => !beforeFiles.some((file) => file.path === notePath));
+        const restore = beforeFiles.filter((file) => created.includes(file.path) || (plan.put || []).some((item) => item.path === file.path) || (plan.remove || []).includes(file.path));
+        await commitFiles(db, { put: restore, remove: created });
+        const nowOps = await listOps(db);
+        if (nowOps.length) await deleteOps(db, nowOps.map((op) => op.id));
+        for (const op of beforeOps) await putOp(db, op);
+        files = beforeFiles.map((file) => ({ ...file }));
+        if (current) {
+          const next = files.find((file) => file.path === current.path && !file.trashedAt);
+          if (next) showNote(next);
+          else syncOpen();
+        }
+        renderList();
+        await sync.refreshStatus();
+      },
+    };
+  }
+
+  async function dismissConflictCopy(notePath) {
+    const file = files.find((item) => item.path === notePath);
+    if (!file) return;
+    const next = { ...file, trashedAt: Date.now() };
+    await putFile(db, next);
+    const index = files.findIndex((item) => item.path === notePath);
+    if (index >= 0) files[index] = next;
+    renderList();
+  }
+
   sync = createAutoSync({
     db,
     fetchImpl: globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined,
     offline: () => browserOffline(),
     beforeSync: () => saver.flush(),
     onStatus(text) {
-      if (syncStatus) syncStatus.textContent = text;
+      if (!syncStatus) return;
+      syncStatus.textContent = text;
+      const open = text === 'Conflict';
+      syncStatus.setAttribute('aria-disabled', open ? 'false' : 'true');
+      syncStatus.classList?.toggle?.('sync-status-conflict', open);
     },
     onApplied: applySyncedFiles,
+    onRemoved: applyRemoved,
     onPulled: () => startImagePrefetch(db),
+  });
+
+  const conflictScreen = mountConflictScreen(doc, {
+    files: () => files,
+    apply: applyConflictPlan,
+    dismiss: dismissConflictCopy,
+  });
+  syncStatus?.addEventListener('click', () => {
+    if (syncStatus.getAttribute('aria-disabled') === 'true') return;
+    conflictScreen.open();
   });
 
   const github = mountGithub(doc, db, {

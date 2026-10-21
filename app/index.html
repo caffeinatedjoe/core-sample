@@ -32,7 +32,7 @@
         <button type="button" id="notes-button" class="text-button">Notes</button>
         <div class="status-stack">
           <p id="save-status" class="save-status" role="status">Saved on this device</p>
-          <p id="sync-status" class="sync-status" role="status"></p>
+          <button type="button" id="sync-status" class="sync-status" aria-live="polite" aria-disabled="true"></button>
         </div>
       </div>
       <div class="title-row">
@@ -85,7 +85,7 @@
           <button type="button" id="github-close" class="sheet-done">Done</button>
         </header>
         <div class="github-body">
-          <p class="github-lead">Sign in with a device code. The token stays on this phone. A note is sent only when you push it.</p>
+          <p class="github-lead">Sign in with a device code. The token stays on this phone. Saved notes sync with the branch after a short pause.</p>
           <p id="github-storage" class="github-note"></p>
           <button type="button" id="github-export-backup">Export backup</button>
           <label>Client id
@@ -148,6 +148,23 @@
           </div>
         </div>
       </div>
+    </div>
+    <div id="conflict-sheet" class="sheet conflict-sheet" hidden>
+      <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="conflict-heading">
+        <header class="sheet-head">
+          <button type="button" id="conflict-back" class="sheet-done">Back</button>
+          <h2 id="conflict-heading">Conflicts</h2>
+          <button type="button" id="conflict-close" class="sheet-done">Done</button>
+        </header>
+        <div id="conflict-list-view" class="conflict-scroll"></div>
+        <div id="conflict-step-bar" class="conflict-bar" hidden></div>
+        <div id="conflict-resolve-view" class="conflict-scroll" hidden></div>
+        <div id="conflict-resolve-bar" class="conflict-resolve-bar" hidden></div>
+      </div>
+    </div>
+    <div id="undo-toast" class="undo-toast" hidden>
+      <p id="undo-toast-text"></p>
+      <button type="button" id="undo-toast-action">Undo</button>
     </div>
     <p id="boot-error" class="boot-error" hidden></p>
     <div id="image-viewer" class="image-viewer" hidden role="dialog" aria-label="Photo">
