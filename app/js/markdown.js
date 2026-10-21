@@ -219,18 +219,50 @@ function splitCells(line) {
   return value.split('|').map((cell) => cell.trim());
 }
 
-function parseBullet(line) {
-  if (parseTask(line)) return null;
-  const match = /^( {0,3})([-*+])\s+(.*)$/.exec(line);
-  if (!match) return null;
-  if (isHr(line)) return null;
-  return { indent: match[1].length, text: match[3] };
+// A tab is one Obsidian indent (four columns). Two spaces is a shallower
+// step, so 2 spaces, 4 spaces, and a tab each nest on their own.
+function indentWidth(indent) {
+  let width = 0;
+  for (const ch of indent) {
+    if (ch === '\t') width += 4 - (width % 4);
+    else width += 1;
+  }
+  return width;
 }
 
-function parseOrdered(line) {
-  const match = /^( {0,3})(\d{1,9})[.)]\s+(.*)$/.exec(line);
-  if (!match) return null;
-  return { indent: match[1].length, text: match[3] };
+function leading(line) {
+  const indent = /^[ \t]*/.exec(line)[0];
+  return { indent, width: indentWidth(indent), rest: line.slice(indent.length) };
+}
+
+function parseItem(line) {
+  if (isHr(line)) return null;
+  const task = parseTask(line);
+  if (task) {
+    return {
+      kind: 'task',
+      width: indentWidth(task.indent),
+      checked: task.checked,
+      text: task.text,
+      flow: [],
+    };
+  }
+  const lead = leading(line);
+  let match = /^([-*+])[ \t]+(.*)$/.exec(lead.rest);
+  if (match) {
+    return { kind: 'bullet', width: lead.width, text: match[2], flow: [] };
+  }
+  match = /^(\d{1,9})[.)][ \t]+(.*)$/.exec(lead.rest);
+  if (match) {
+    return {
+      kind: 'ordered',
+      width: lead.width,
+      number: Number(match[1]),
+      text: match[2],
+      flow: [],
+    };
+  }
+  return null;
 }
 
 function startsBlock(line) {
@@ -239,9 +271,17 @@ function startsBlock(line) {
     || parseHeading(line)
     || isHr(line)
     || isQuote(line)
-    || parseTask(line)
-    || parseBullet(line)
-    || parseOrdered(line)
+    || parseItem(line)
+    || isTableRow(line),
+  );
+}
+
+function stopsList(line) {
+  return Boolean(
+    parseFenceLine(line)
+    || parseHeading(line)
+    || isHr(line)
+    || isQuote(line)
     || isTableRow(line),
   );
 }
@@ -289,12 +329,131 @@ function scanWikilinks(text, found) {
   }
 }
 
-function renderTask(task, taskIndex) {
-  const pressed = task.checked ? 'true' : 'false';
-  const label = task.checked ? 'Mark not done' : 'Mark done';
-  const done = task.checked ? ' is-done' : '';
-  const mark = task.checked ? CHECK : '';
-  return `<li class="task" style="--indent:${task.indent.length}"><button type="button" class="task-toggle" data-task-index="${taskIndex}" aria-pressed="${pressed}" aria-label="${label}"><span class="task-box" aria-hidden="true">${mark}</span></button><span class="task-text${done}">${renderInline(task.text)}</span></li>`;
+function addChild(parent, child) {
+  const last = parent.flow[parent.flow.length - 1];
+  if (last && last.type === 'list') last.items.push(child);
+  else parent.flow.push({ type: 'list', items: [child] });
+}
+
+function addParagraph(parent, text) {
+  const last = parent.flow[parent.flow.length - 1];
+  if (last && last.type === 'p') last.lines.push(text);
+  else parent.flow.push({ type: 'p', lines: [text] });
+}
+
+// One list continues across blank lines. A shallower item is a sibling of
+// an earlier deeper one, not a reason to start over. Indented text that is
+// not itself an item belongs to the nearest shallower item.
+function readList(lines, start) {
+  const roots = [];
+  const stack = [];
+  let index = start;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (isBlank(line)) {
+      let look = index + 1;
+      while (look < lines.length && isBlank(lines[look])) look += 1;
+      if (look < lines.length && parseItem(lines[look])) {
+        index = look;
+        continue;
+      }
+      break;
+    }
+    if (stopsList(line)) break;
+    const item = parseItem(line);
+    if (item) {
+      while (stack.length && stack[stack.length - 1].width >= item.width) stack.pop();
+      if (stack.length === 0) roots.push(item);
+      else addChild(stack[stack.length - 1], item);
+      stack.push(item);
+      index += 1;
+      continue;
+    }
+    const lead = leading(line);
+    let owner = null;
+    for (let depth = stack.length - 1; depth >= 0; depth -= 1) {
+      if (stack[depth].width < lead.width) {
+        owner = stack[depth];
+        break;
+      }
+    }
+    if (!owner) break;
+    while (stack.length && stack[stack.length - 1] !== owner) stack.pop();
+    addParagraph(owner, lead.rest);
+    index += 1;
+  }
+
+  return { items: roots, next: index };
+}
+
+function renderItemContent(item, usedIds) {
+  const heading = parseHeading(item.text);
+  if (heading) {
+    const id = headingId(heading.text, usedIds);
+    return `<h${heading.level} id="${escapeHtml(id)}" data-heading="${escapeHtml(heading.text)}">${renderInline(heading.text)}</h${heading.level}>`;
+  }
+  if (item.kind === 'task') {
+    const done = item.checked ? ' is-done' : '';
+    return `<span class="task-text${done}">${renderInline(item.text)}</span>`;
+  }
+  return `<span class="item-text">${renderInline(item.text)}</span>`;
+}
+
+function renderItem(item, tasks, parentWidth, usedIds) {
+  const cols = Math.max(0, item.width - parentWidth);
+  const content = renderItemContent(item, usedIds);
+  let line;
+  if (item.kind === 'task') {
+    const pressed = item.checked ? 'true' : 'false';
+    const label = item.checked ? 'Mark not done' : 'Mark done';
+    const mark = item.checked ? CHECK : '';
+    const index = tasks.n;
+    tasks.n += 1;
+    line = `<div class="task-line"><button type="button" class="task-toggle" data-task-index="${index}" aria-pressed="${pressed}" aria-label="${label}"><span class="task-box" aria-hidden="true">${mark}</span></button>${content}</div>`;
+  } else if (item.kind === 'ordered') {
+    line = `<div class="bullet-line"><span class="item-marker item-number">${item.number}.</span>${content}</div>`;
+  } else {
+    line = `<div class="bullet-line"><span class="item-marker" aria-hidden="true"></span>${content}</div>`;
+  }
+  const flow = renderFlow(item.flow, tasks, item.width, usedIds);
+  const body = flow ? `<div class="item-body">${flow}</div>` : '';
+  const cls = item.kind === 'task' ? 'task' : item.kind === 'ordered' ? 'ordered' : 'bullet';
+  const value = item.kind === 'ordered' ? ` value="${item.number}"` : '';
+  return `<li class="${cls}"${value} style="--cols:${cols}">${line}${body}</li>`;
+}
+
+function renderItems(items, tasks, parentWidth, usedIds) {
+  let html = '';
+  let group = [];
+  let kind = null;
+  const flush = () => {
+    if (!group.length) return;
+    const tag = kind === 'ordered' ? 'ol' : 'ul';
+    const start = kind === 'ordered' && group[0].number !== 1 ? ` start="${group[0].number}"` : '';
+    html += `<${tag} class="md-list"${start}>${group.map((item) => renderItem(item, tasks, parentWidth, usedIds)).join('')}</${tag}>`;
+    group = [];
+  };
+  for (const item of items) {
+    const next = item.kind === 'ordered' ? 'ordered' : 'bullet';
+    if (kind && next !== kind) flush();
+    kind = next;
+    group.push(item);
+  }
+  flush();
+  return html;
+}
+
+function renderFlow(flow, tasks, parentWidth, usedIds) {
+  let html = '';
+  for (const part of flow) {
+    if (part.type === 'p') {
+      html += `<p>${part.lines.map((line) => renderInline(line)).join('<br>')}</p>`;
+    } else {
+      html += renderItems(part.items, tasks, parentWidth, usedIds);
+    }
+  }
+  return html;
 }
 
 export function renderMarkdown(markdown) {
@@ -362,37 +521,10 @@ export function renderMarkdown(markdown) {
       continue;
     }
 
-    if (parseTask(line) || parseBullet(line)) {
-      const items = [];
-      while (index < lines.length) {
-        const task = parseTask(lines[index]);
-        if (task) {
-          items.push(renderTask(task, tasks.n));
-          tasks.n += 1;
-          index += 1;
-          continue;
-        }
-        const bullet = parseBullet(lines[index]);
-        if (bullet) {
-          items.push(`<li style="--indent:${bullet.indent}">${renderInline(bullet.text)}</li>`);
-          index += 1;
-          continue;
-        }
-        break;
-      }
-      html.push(`<ul>${items.join('')}</ul>`);
-      continue;
-    }
-
-    if (parseOrdered(line)) {
-      const items = [];
-      while (index < lines.length) {
-        const item = parseOrdered(lines[index]);
-        if (!item) break;
-        items.push(`<li>${renderInline(item.text)}</li>`);
-        index += 1;
-      }
-      html.push(`<ol>${items.join('')}</ol>`);
+    if (parseItem(line)) {
+      const list = readList(lines, index);
+      html.push(renderItems(list.items, tasks, 0, usedIds));
+      index = list.next;
       continue;
     }
 
