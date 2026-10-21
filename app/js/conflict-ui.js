@@ -78,9 +78,15 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     if (!sheet.hidden) paintList();
   });
 
+  function resolveBar() {
+    return doc.getElementById('conflict-resolve-bar');
+  }
+
   function paintList() {
     listView.hidden = false;
     resolveView.hidden = true;
+    const bar = resolveBar();
+    if (bar) bar.hidden = true;
     heading.textContent = 'Conflicts';
     listView.replaceChildren();
     const items = listConflicts(files());
@@ -151,7 +157,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     const next = resolveView.querySelector('#conflict-next');
     if (prev) prev.disabled = focusAt <= 0;
     if (next) next.disabled = focusAt >= conflicts.length - 1;
-    const resolve = resolveView.querySelector('#conflict-resolve-button');
+    const resolve = doc.getElementById('conflict-resolve-button');
     if (resolve) {
       const ready = choice === 'phone' || choice === 'github' || choice === 'separate' || left === 0;
       resolve.disabled = !ready;
@@ -189,6 +195,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
 
     const whole = el(doc, 'div', 'conflict-whole');
     whole.append(el(doc, 'p', 'conflict-section-label', 'Whole note'));
+    const actions = el(doc, 'div', 'conflict-whole-actions');
     const phone = button(doc, 'conflict-choice', 'Keep phone');
     phone.id = 'keep-phone';
     phone.setAttribute('aria-pressed', choice === 'phone' ? 'true' : 'false');
@@ -201,7 +208,8 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     phone.addEventListener('click', () => chooseWhole('phone'));
     github.addEventListener('click', () => chooseWhole('github'));
     both.addEventListener('click', () => chooseWhole('separate'));
-    whole.append(phone, github, both);
+    actions.append(phone, github, both);
+    whole.append(actions);
     resolveView.append(whole);
 
     const phoneWhen = formatWhen(file.updatedAt);
@@ -213,7 +221,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
         toggle.setAttribute('aria-expanded', 'false');
         const body = el(doc, 'pre', 'diff-block');
         body.hidden = true;
-        for (const line of hunk.lines) body.append(el(doc, 'span', 'diff-line', line), doc.createTextNode('\n'));
+        for (const line of hunk.lines) body.append(el(doc, 'span', 'diff-line', line));
         toggle.addEventListener('click', () => {
           const open = toggle.getAttribute('aria-expanded') === 'true';
           toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
@@ -274,7 +282,13 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     const resolve = button(doc, 'conflict-primary', 'Resolve');
     resolve.id = 'conflict-resolve-button';
     resolve.addEventListener('click', () => confirm());
-    resolveView.append(resolve);
+    const actionBar = resolveBar();
+    if (actionBar) {
+      actionBar.replaceChildren(resolve);
+      actionBar.hidden = false;
+    } else {
+      resolveView.append(resolve);
+    }
     refreshChrome();
     const conflicts = [...resolveView.querySelectorAll('.hunk-conflict')];
     if (conflicts[focusAt]) conflicts[focusAt].scrollIntoView({ block: 'nearest' });
@@ -293,7 +307,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
         line.append(el(doc, 'span', 'diff-word', mark.word));
       }
       line.append(doc.createTextNode(mark.text || ' '));
-      body.append(line, doc.createTextNode('\n'));
+      body.append(line);
     }
     side.append(head, body);
     return side;

@@ -63,7 +63,19 @@ test('side marks name additions and removals', () => {
 
 test('the conflict list names legacy notes and sibling copies', () => {
   const when = Date.parse('2026-10-21T19:18:00Z');
-  assert.equal(formatWhen(when), 'Oct 21, 2026, 7:18 PM UTC');
+  const whenDate = new Date(when);
+  const hour24 = whenDate.getHours();
+  const hour = hour24 % 12 || 12;
+  const minute = String(whenDate.getMinutes()).padStart(2, '0');
+  assert.equal(formatWhen(when, when), `Today ${hour}:${minute} ${hour24 < 12 ? 'AM' : 'PM'}`);
+  const yesterday = new Date(whenDate.getFullYear(), whenDate.getMonth(), whenDate.getDate() - 1, 15, 4, 0, 0);
+  const yesterdayHour = yesterday.getHours();
+  assert.equal(
+    formatWhen(yesterday.getTime(), when),
+    `Yesterday ${yesterdayHour % 12 || 12}:${String(yesterday.getMinutes()).padStart(2, '0')} ${yesterdayHour < 12 ? 'AM' : 'PM'}`,
+  );
+  const older = new Date(whenDate.getFullYear() - 1, 0, 5, 9, 5, 0, 0);
+  assert.equal(formatWhen(older.getTime(), when), `Jan 5, ${older.getFullYear()}, 9:05 AM`);
   assert.equal(reasonText('both'), 'Edited on this phone and on GitHub');
   const items = listConflicts([
     {

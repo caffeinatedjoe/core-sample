@@ -977,6 +977,11 @@ button.sync-status {
   min-height: 0;
   overflow: auto;
   padding: 0.75rem 1rem calc(var(--safe-bottom) + 1rem);
+  scroll-padding-bottom: calc(2.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+#conflict-resolve-view {
+  padding-bottom: calc(2.75rem + 0.75rem + env(safe-area-inset-bottom, 0px));
 }
 
 .conflict-list,
@@ -1059,14 +1064,34 @@ button.sync-status {
   flex: none;
 }
 
-.conflict-whole,
-.hunk-choices,
+.conflict-whole {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.conflict-whole-actions,
+.hunk-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
 .hunk-order,
 .conflict-nav {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin: 0.75rem 0;
+  margin: 0.5rem 0 0;
+}
+
+.conflict-whole-actions .conflict-choice,
+.hunk-choices .hunk-choice {
+  width: 100%;
+  min-width: 0;
 }
 
 .conflict-choice[aria-pressed="true"],
@@ -1075,6 +1100,15 @@ button.sync-status {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: var(--accent);
+  box-shadow: inset 0 0 0 0.125rem var(--bg);
+}
+
+.conflict-choice[aria-pressed="true"]::before,
+.hunk-choice[aria-pressed="true"]::before,
+.order-choice[aria-pressed="true"]::before {
+  content: "✓";
+  margin-right: 0.35rem;
+  font-weight: 700;
 }
 
 .conflict-bar {
@@ -1099,12 +1133,21 @@ button.sync-status {
 }
 
 .hunk {
-  margin: 0.75rem 0 1rem;
-  padding-top: 0.25rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.hunk-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--bg);
 }
 
 .conflict-side {
-  margin-bottom: 0.6rem;
+  margin: 0;
 }
 
 .conflict-side-head {
@@ -1127,13 +1170,23 @@ button.sync-status {
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.95rem;
-  line-height: 1.45;
+  line-height: 1.35;
+}
+
+.diff-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  white-space: normal;
 }
 
 .diff-line {
   display: block;
-  padding: 0.1rem 0.4rem;
+  margin: 0;
+  padding: 0.05rem 0.4rem;
   border-radius: 0.25rem;
+  white-space: pre-wrap;
+  line-height: 1.35;
 }
 
 .diff-mark,
@@ -1188,12 +1241,17 @@ button.sync-status {
   background: var(--soft);
 }
 
+.conflict-resolve-bar {
+  flex: none;
+  padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
 .conflict-primary {
   display: block;
   width: 100%;
-  position: sticky;
-  bottom: 0;
-  margin-top: 0.75rem;
+  margin: 0;
   border: 0;
   border-radius: 0.75rem;
   background: var(--accent);

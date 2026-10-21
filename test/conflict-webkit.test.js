@@ -64,7 +64,12 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
   const server = await serve();
   const { port } = server.address();
   const browser = await webkit.launch();
-  const context = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block', colorScheme: 'light' });
+  const context = await browser.newContext({
+    ...devices['iPhone 13'],
+    serviceWorkers: 'block',
+    colorScheme: 'light',
+    timezoneId: 'America/Los_Angeles',
+  });
   const state = {
     head: 'commit-1',
     tree: 'tree-1',
@@ -135,8 +140,22 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
     errors.push(text);
   });
   const shot = (name) => page.screenshot({ path: join(shots, name) });
+  async function assertChoicesHittable() {
+    const count = await page.locator('.hunk-choice').count();
+    assert.equal(count >= 3, true);
+    for (let i = 0; i < count; i += 1) {
+      const choice = page.locator('.hunk-choice').nth(i);
+      await choice.scrollIntoViewIfNeeded();
+      const hit = await choice.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return target === node;
+      });
+      assert.equal(hit, true);
+    }
+  }
   try {
-    await page.clock.install();
+    await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v25');
     await page.evaluate(async ({ note }) => {
@@ -190,6 +209,10 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
     await page.locator('.conflict-open').click();
     await page.waitForSelector('#conflict-resolve-button');
     assert.equal(await page.locator('#conflict-resolve-button').isDisabled(), true);
+    const opened = await page.locator('#conflict-resolve-view').innerText();
+    assert.equal(opened.includes('Today 12:10 PM'), true);
+    assert.equal(opened.includes('Today 12:18 PM'), true);
+    await assertChoicesHittable();
     await shot('resolve-light.png');
     await page.emulateMedia({ colorScheme: 'dark' });
     await shot('resolve-dark.png');
@@ -220,6 +243,7 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
       document.documentElement.style.fontSize = '28px';
     });
     await page.locator('.conflict-open').click();
+    await assertChoicesHittable();
     const target = await page.locator('.hunk-choice').first().evaluate((node) => node.getBoundingClientRect().height);
     const resolveHeight = await page.locator('#conflict-resolve-button').evaluate((node) => node.getBoundingClientRect().height);
     assert.equal(target >= 44, true);

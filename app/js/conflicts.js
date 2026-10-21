@@ -305,17 +305,30 @@ export function decideAll(hunks, decision, order = 'phone-first') {
   });
 }
 
-export function formatWhen(ms) {
+function dayKey(date) {
+  return date.getFullYear() * 10000 + date.getMonth() * 100 + date.getDate();
+}
+
+function clockLabel(date) {
+  const hour24 = date.getHours();
+  const hour = hour24 % 12 || 12;
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${hour}:${minute} ${hour24 < 12 ? 'AM' : 'PM'}`;
+}
+
+export function formatWhen(ms, now = Date.now()) {
   const time = Number(ms);
   if (!time || Number.isNaN(time)) return '';
   const date = new Date(time);
-  if (Number.isNaN(date.getTime())) return '';
+  const today = new Date(now);
+  if (Number.isNaN(date.getTime()) || Number.isNaN(today.getTime())) return '';
+  const clock = clockLabel(date);
+  if (dayKey(date) === dayKey(today)) return `Today ${clock}`;
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  if (dayKey(date) === dayKey(yesterday)) return `Yesterday ${clock}`;
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const hour24 = date.getUTCHours();
-  const hour = hour24 % 12 || 12;
-  const minute = String(date.getUTCMinutes()).padStart(2, '0');
-  const suffix = hour24 < 12 ? 'AM' : 'PM';
-  return `${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}, ${hour}:${minute} ${suffix} UTC`;
+  const year = date.getFullYear() === today.getFullYear() ? '' : `, ${date.getFullYear()}`;
+  return `${months[date.getMonth()]} ${date.getDate()}${year}, ${clock}`;
 }
 
 function stemOf(path) {

@@ -18,7 +18,7 @@ Taken: a separate note only when someone taps "Keep both as separate notes." Old
 
 **Working Copy on iOS.** A phone is too narrow for columns. The diff is stacked, the targets are large, and resolving is one commit you can still edit. Ours and theirs are named in words.
 
-Taken: "On this phone" and "On GitHub" as the only side names, each with the time that side last changed on this phone's clock. GitHub's time is when this phone read that version ("As of …"), not a guessed commit date. The app does not call the commits API for blame; a failed extra request must not block resolving. Targets are at least 44pt, type is `rem` on the system font, and additions and deletions use a `+` / `−` plus the words Added and Removed. The colors are tested for contrast in light and dark. The merged text has a preview before Resolve. Undo keeps a local backup of the discarded side and a toast.
+Taken: "On this phone" and "On GitHub" as the only side names, each with the time that side last changed on this phone's clock. The clock is the device's local zone, with a relative day when it is today or yesterday ("Today 12:10 PM"). GitHub's time is when this phone read that version ("As of …"), not a guessed commit date. The app does not call the commits API for blame; a failed extra request must not block resolving. Targets are at least 44pt, type is `rem` on the system font, and additions and deletions use a `+` / `−` plus the words Added and Removed. The colors are tested for contrast in light and dark. The merged text has a preview before Resolve. Undo keeps a local backup of the discarded side and a toast.
 
 ## Offline
 
