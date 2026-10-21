@@ -1,6 +1,6 @@
 # Core Sample
 
-An iPhone-first, local-first Markdown notes app. Notes are stored in IndexedDB, and the installed app can open with no network. GitHub sign-in, download, and one-note push and pull are manual. Nothing is sent until you push a note.
+An iPhone-first, local-first Markdown notes app. Notes are stored in IndexedDB, and the installed app can open with no network. GitHub sign-in and download are manual. After a repo and branch are saved, edits sync on their own.
 
 The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/core-sample/).
 

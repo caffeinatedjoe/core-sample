@@ -130,7 +130,7 @@ test('no migration, upgrade, or service worker path deletes the meta store or th
   const db = read('app/js/db.js');
   const sw = read('app/sw.js');
   const main = read('app/js/main.js');
-  assert.match(db, /const DB_VERSION = 2/);
+  assert.match(db, /const DB_VERSION = 3/);
   assert.equal(db.includes('deleteObjectStore'), false);
   assert.equal(sw.includes('indexedDB'), false);
   assert.equal(sw.includes('githubToken'), false);

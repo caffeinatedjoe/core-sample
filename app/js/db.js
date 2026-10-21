@@ -1,4 +1,4 @@
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function run(db, storeName, mode, fn) {
   return new Promise((resolve, reject) => {
@@ -30,6 +30,9 @@ export function openDatabase(name = 'core-sample') {
       }
       if (!db.objectStoreNames.contains('images')) {
         db.createObjectStore('images', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('ops')) {
+        db.createObjectStore('ops', { keyPath: 'id' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -96,6 +99,33 @@ export function putImage(db, record) {
 
 export function listImages(db) {
   return run(db, 'images', 'readonly', (store) => store.getAll());
+}
+
+export function putOp(db, op) {
+  if (!op || typeof op.id !== 'string' || !op.id) {
+    return Promise.reject(new Error('A sync operation needs an id.'));
+  }
+  return run(db, 'ops', 'readwrite', (store) => store.put(op));
+}
+
+export function listOps(db) {
+  return run(db, 'ops', 'readonly', (store) => store.getAll());
+}
+
+export function deleteOps(db, ids) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('ops', 'readwrite');
+    const store = tx.objectStore('ops');
+    try {
+      for (const id of ids) store.delete(id);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Could not update the sync queue'));
+    tx.onabort = () => reject(tx.error || new Error('Could not update the sync queue'));
+  });
 }
 
 export function deleteImages(db, keys) {
