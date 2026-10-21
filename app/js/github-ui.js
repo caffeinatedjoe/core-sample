@@ -22,6 +22,7 @@ import {
   pushFile,
   relayPost,
 } from './github-api.js';
+import { startImagePrefetch } from './images.js';
 import {
   clearPendingFlow,
   disconnectGithub,
@@ -230,6 +231,7 @@ export function mountGithub(doc, db, hooks) {
     if (repoInput.scrollIntoView) repoInput.scrollIntoView({ block: 'center' });
     repoInput.focus();
     setStatus(login ? `Signed in as ${login}.` : 'Signed in.');
+    startImagePrefetch(db, fetchImpl);
   }
 
   async function onFailure(message) {
@@ -569,6 +571,7 @@ export function mountGithub(doc, db, hooks) {
       fileStatus.textContent = typedDuring
         ? 'This note has local changes. It was not replaced.'
         : outcome.message;
+      startImagePrefetch(db, fetchImpl);
     } catch (error) {
       fileStatus.textContent = redact(error && error.message ? error.message : 'The copy on this device was kept.', [settings.token]);
     } finally {

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   attachmentFolderFor,
   embedCandidates,
+  listImageEmbeds,
   parseWikilinkImage,
   readAttachmentSetting,
   resolveEmbedPath,
@@ -145,6 +146,23 @@ test('wikilink size syntax and markdown images do not leave a broken source', ()
   assert.match(missing, /embed-fallback">nope\.jpg</);
   assert.match(missing, /embed-fallback">scan\.heic</);
   assert.equal(missing.includes('data-embed="scan.heic"'), false);
+});
+
+test('both image embed forms are collected and code is not', () => {
+  const found = listImageEmbeds([
+    '![[image-1710000000000.png|300]]',
+    '![diagram](figures/diagram.svg)',
+    '![remote](https://example.com/a.png)',
+    '`![[coded.png]]`',
+    '```',
+    '![[hidden.png]]',
+    '```',
+    '![[scan.heic]]',
+  ].join('\n'));
+  assert.deepEqual(found, [
+    { link: 'image-1710000000000.png', raw: 'image-1710000000000.png|300' },
+    { link: 'figures/diagram.svg', raw: 'figures/diagram.svg' },
+  ]);
 });
 
 test('a token and a javascript url never appear in an embed src', () => {

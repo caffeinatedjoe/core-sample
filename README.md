@@ -15,7 +15,7 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 
 ## GitHub
 
-Notes → GitHub stores a client id and a relay URL on this phone. Both start empty. The steps to create the Cloudflare Worker and the GitHub OAuth app are in [worker/README.md](worker/README.md) and [DECISIONS.md](DECISIONS.md). The token stays in IndexedDB. Repository calls go to `api.github.com`. Disconnect leaves notes on the phone. Automatic sync is not built.
+Notes → GitHub stores a client id and a relay URL on this phone. Both start empty. The steps to create the Cloudflare Worker and the GitHub OAuth app are in [worker/README.md](worker/README.md) and [DECISIONS.md](DECISIONS.md). The token stays in IndexedDB. Repository calls go to `api.github.com`. Disconnect leaves notes on the phone. Automatic sync is not built. Sign-in, download, and pull also save the images embedded in those notes onto this phone. A saved image opens with no network.
 
 ## Develop
 

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { deleteDatabase, openDatabase, putFile, setMeta } from '../app/js/db.js';
 import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
+import { rememberImage } from '../app/js/images.js';
 import { makeFile } from '../app/js/notes.js';
 import { mountApp } from '../app/js/view.js';
 
@@ -174,11 +175,12 @@ function githubFetch(mode) {
   return { urls, fetchImpl };
 }
 
-async function openPreview(db, fetchImpl) {
+async function openPreview(db, fetchImpl, { offline = false } = {}) {
   const previous = globalThis.fetch;
   globalThis.fetch = fetchImpl;
   globalThis.window = { addEventListener() {} };
   const { doc, nodes } = page();
+  doc.defaultView.navigator.onLine = !offline;
   const app = mountApp(doc, db);
   await app.start();
   const text = await until(() => chipText(nodes.preview));
@@ -203,7 +205,7 @@ test('the preview chip names a sign-in, access, or reach failure', async () => {
   const cases = [
     ['401', "Couldn't reach GitHub (HTTP 401)"],
     ['404', 'No access to repo'],
-    ['offline', "Couldn't reach GitHub (offline)"],
+    ['offline', 'Not downloaded yet (offline)'],
     ['missing', 'Not found in vault'],
   ];
   for (const [mode, reason] of cases) {
@@ -254,5 +256,84 @@ test('the preview chip names a sign-in, access, or reach failure', async () => {
   } finally {
     db.close();
     await deleteDatabase(name);
+  }
+});
+
+test('a saved image has no chip offline, and a true miss does not ask for sign-in', async () => {
+  const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const image = 'assets/Field Notes/image-1710000000000.png';
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const github = githubFetch('offline');
+  github.fetchImpl.urls = github.urls;
+  try {
+    await seeded(db);
+    await rememberImage(db, {
+      repo: 'owner/repo',
+      path: image,
+      blob: new Blob([png], { type: 'image/png' }),
+      type: 'image/png',
+      sha: 'sha-field',
+    });
+    await setMeta(db, 'githubResolvedEmbeds', {
+      repo: 'owner/repo',
+      branch: 'main',
+      root: '',
+      links: {
+        [`${NOTE}\n${LINK}`]: image,
+        [`path\n${image}`]: image,
+      },
+    });
+    await setMeta(db, 'githubVaultIndex', {
+      repo: 'owner/repo',
+      branch: 'main',
+      root: '',
+      paths: [NOTE],
+      attachmentFolderPath: '',
+      fetchedAt: 1,
+      treeSha: 'stale',
+      truncated: false,
+      shas: {},
+    });
+    const shown = await openPreview(db, github.fetchImpl);
+    try {
+      const img = await until(() => (shown.nodes.preview.querySelector('img.embed-image') ? 'yes' : ''));
+      assert.equal(img, 'yes');
+      assert.equal(chipText(shown.nodes.preview), '');
+      assert.equal(github.urls.length, 0);
+      assert.equal(shown.nodes.preview.textContent.includes('Sign in again'), false);
+    } finally {
+      shown.restore();
+    }
+  } finally {
+    db.close();
+    await deleteDatabase(name);
+  }
+
+  const missingName = `core-sample-${randomUUID()}`;
+  const missingDb = await openDatabase(missingName);
+  const missingGithub = githubFetch('offline');
+  missingGithub.fetchImpl.urls = missingGithub.urls;
+  try {
+    await seeded(missingDb);
+    const shown = await openPreview(missingDb, missingGithub.fetchImpl, { offline: true });
+    try {
+      const text = await until(() => chipText(shown.nodes.preview));
+      assert.equal(text, 'Not downloaded yet (offline)');
+      assert.equal(text.includes('Sign in again'), false);
+      assert.equal(missingGithub.urls.length, 0);
+      const button = shown.nodes.preview.querySelector('.embed-fallback');
+      for (const fn of shown.nodes.preview.listeners.click || []) {
+        await fn({ target: button, preventDefault() {} });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(missingGithub.urls.length, 0);
+      assert.equal(chipText(shown.nodes.preview), 'Not downloaded yet (offline)');
+    } finally {
+      shown.restore();
+    }
+  } finally {
+    missingDb.close();
+    await deleteDatabase(missingName);
   }
 });

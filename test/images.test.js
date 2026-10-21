@@ -2,9 +2,20 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
-import { deleteDatabase, getFile, getMeta, listImages, openDatabase, putFile, setMeta } from '../app/js/db.js';
+import { deleteDatabase, getFile, getImage, getMeta, listImages, openDatabase, putFile, setMeta } from '../app/js/db.js';
 import { fetchRawBytes } from '../app/js/github-api.js';
-import { dropStaleVaultIndex, embedImage, imagePayload, loadEmbedBlob, refreshVaultIndex, rememberImage } from '../app/js/images.js';
+import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
+import {
+  OFFLINE_IMAGE_REASON,
+  dropStaleVaultIndex,
+  embedImage,
+  imagePayload,
+  loadEmbedBlob,
+  prefetchEmbeddedImages,
+  pruneUnreferencedImages,
+  refreshVaultIndex,
+  rememberImage,
+} from '../app/js/images.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -136,16 +147,29 @@ test('svg is a blob image and a miss stays a placeholder without a request url',
   await deleteDatabase(name);
 });
 
-test('the image cache drops the least recently viewed blobs past the limit', async () => {
+test('referenced image blobs stay and only an unreferenced blob is pruned', async () => {
   const name = `core-sample-${randomUUID()}`;
   const db = await openDatabase(name);
-  const make = (n) => new Blob([new Uint8Array(8)], { type: 'image/png' });
+  const make = () => new Blob([new Uint8Array(8)], { type: 'image/png' });
   await rememberImage(db, { repo: 'owner/repo', path: 'a.png', blob: make(), type: 'image/png', viewedAt: 1 }, 20);
   await rememberImage(db, { repo: 'owner/repo', path: 'b.png', blob: make(), type: 'image/png', viewedAt: 2 }, 20);
   await rememberImage(db, { repo: 'owner/repo', path: 'c.png', blob: make(), type: 'image/png', viewedAt: 3 }, 20);
-  const { listImages } = await import('../app/js/db.js');
+  await rememberImage(db, { repo: 'other/repo', path: 'a.png', blob: make(), type: 'image/png', viewedAt: 1 });
+  const before = await listImages(db);
+  assert.deepEqual(before.map((row) => `${row.repo}:${row.path}`).sort(), [
+    'other/repo:a.png',
+    'owner/repo:a.png',
+    'owner/repo:b.png',
+    'owner/repo:c.png',
+  ]);
+  const pruned = await pruneUnreferencedImages(db, 'owner/repo', ['b.png', 'c.png']);
+  assert.equal(pruned, 1);
   const rows = await listImages(db);
-  assert.deepEqual(rows.map((row) => row.path).sort(), ['b.png', 'c.png']);
+  assert.deepEqual(rows.map((row) => `${row.repo}:${row.path}`).sort(), [
+    'other/repo:a.png',
+    'owner/repo:b.png',
+    'owner/repo:c.png',
+  ]);
   db.close();
   await deleteDatabase(name);
 });
@@ -457,7 +481,8 @@ test('a failed download is not cached and the next attempt tries again', async (
   const offline = await loadFromIndex(db, index, async () => {
     throw new Error('socket closed');
   });
-  assert.equal(offline.reason, "Couldn't reach GitHub (offline)");
+  assert.equal(offline.reason, OFFLINE_IMAGE_REASON);
+  assert.notEqual(offline.reason, 'Sign in again');
   assert.equal((await listImages(db)).length, 0);
   const again = await loadFromIndex(db, index, async () => httpResponse({ body: PNG }), { fresh: true });
   assert.equal(again.status, 'ready');
@@ -651,6 +676,258 @@ test('a v15 file list without a fetch time is rebuilt instead of trusted', async
   assert.equal(saved.paths.includes(IMAGE), true);
   assert.ok(seen.some((url) => url.includes('/git/trees/')));
   assert.equal(await dropStaleVaultIndex(db), false);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('prefetch stores every embedded image and a cold start reads them offline', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  const repo = 'owner/repo';
+  const field = 'Field Notes.md';
+  const weekly = 'Weekly.md';
+  const fieldImage = 'assets/Field Notes/image-1710000000000.png';
+  const diagram = 'figures/diagram.svg';
+  const wide = 'photos/wide.png';
+  const photo = 'assets/Weekly/photo.jpg';
+  const extra = 'assets/Weekly/extra.png';
+  const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
+  const svg = new TextEncoder().encode('<svg></svg>');
+  await saveGithubSession(db, { token: TOKEN, login: 'octocat' });
+  await saveGithubTarget(db, { repo, branch: 'main', root: '' });
+  await putFile(db, {
+    path: field,
+    content: [
+      '![[image-1710000000000.png|300]]',
+      '![diagram](figures/diagram.svg)',
+      '```',
+      '![[hidden.png]]',
+      '```',
+      '`![[coded.png]]`',
+    ].join('\n'),
+    kind: 'markdown',
+    encoding: 'utf-8',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await putFile(db, {
+    path: weekly,
+    content: '![[photo.jpg]]\n\n![wide](photos/wide.png)\n\n![[extra.png]]\n',
+    kind: 'markdown',
+    encoding: 'utf-8',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await rememberImage(db, {
+    repo,
+    path: photo,
+    blob: new Blob([jpeg], { type: 'image/jpeg' }),
+    type: 'image/jpeg',
+    sha: 'sha-photo',
+  });
+  await rememberImage(db, {
+    repo,
+    path: 'assets/orphan.png',
+    blob: new Blob([PNG], { type: 'image/png' }),
+    type: 'image/png',
+    sha: 'sha-orphan',
+  });
+  const shas = {
+    [fieldImage]: 'sha-field',
+    [diagram]: 'sha-diagram',
+    [wide]: 'sha-wide',
+    [photo]: 'sha-photo',
+    [extra]: 'sha-extra',
+    'assets/Field Notes/hidden.png': 'sha-hidden',
+  };
+  const methods = [];
+  let active = 0;
+  let peak = 0;
+  let persisted = false;
+  const imageUrls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const text = String(url);
+    const method = options.method || 'GET';
+    methods.push(method);
+    assert.equal(text.includes(TOKEN), false);
+    assert.equal(String(options.body || '').includes(TOKEN), false);
+    if (text.includes('/git/trees/')) {
+      return httpResponse({
+        body: JSON.stringify({
+          sha: 'tree123',
+          truncated: false,
+          tree: [
+            { path: field, type: 'blob', sha: 'sha-field-note' },
+            { path: weekly, type: 'blob', sha: 'sha-weekly-note' },
+            { path: '.obsidian/app.json', type: 'blob', sha: 'sha-app' },
+            { path: fieldImage, type: 'blob', sha: shas[fieldImage] },
+            { path: diagram, type: 'blob', sha: shas[diagram] },
+            { path: wide, type: 'blob', sha: shas[wide] },
+            { path: photo, type: 'blob', sha: shas[photo] },
+            { path: extra, type: 'blob', sha: shas[extra] },
+            { path: 'assets/Field Notes/hidden.png', type: 'blob', sha: shas['assets/Field Notes/hidden.png'] },
+          ],
+        }),
+      });
+    }
+    if (text.includes('app.json')) {
+      return httpResponse({ body: '{"attachmentFolderPath":"./assets/${noteFileName}"}' });
+    }
+    if (text.includes('/contents/')) {
+      imageUrls.push(text);
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      active -= 1;
+      if (text.includes('diagram.svg')) return httpResponse({ body: svg });
+      if (text.includes('photo.jpg')) return httpResponse({ body: jpeg });
+      return httpResponse({ body: PNG });
+    }
+    return httpResponse({ status: 404, body: 'missing' });
+  };
+  const storage = {
+    persisted: async () => false,
+    persist: async () => {
+      persisted = true;
+      return true;
+    },
+  };
+  const first = await prefetchEmbeddedImages(db, fetchImpl, { storage });
+  assert.equal(first.embedded, 5);
+  assert.equal(first.stored, 4);
+  assert.equal(first.skipped, 1);
+  assert.equal(first.failed, 0);
+  assert.equal(first.pruned, 1);
+  assert.equal(persisted, true);
+  assert.equal(peak, 3);
+  assert.equal(methods.every((method) => method === 'GET'), true);
+  assert.equal(imageUrls.some((url) => url.includes('photo.jpg')), false);
+  assert.equal(imageUrls.some((url) => url.includes('hidden.png')), false);
+  assert.equal(imageUrls.some((url) => url.includes('coded.png')), false);
+  const summary = await getMeta(db, 'imagePrefetch');
+  assert.equal(summary.embedded, 5);
+  assert.equal(summary.stored, 4);
+  const photoRow = await getImage(db, `${repo}\n${photo}`);
+  assert.equal(photoRow.sha, 'sha-photo');
+  const fieldRow = await getImage(db, `${repo}\n${fieldImage}`);
+  assert.equal(fieldRow.sha, 'sha-field');
+  assert.equal(await getImage(db, `${repo}\nassets/orphan.png`), undefined);
+  const map = await getMeta(db, 'githubResolvedEmbeds');
+  assert.equal(map.links[`${field}\nimage-1710000000000.png`], fieldImage);
+  assert.equal(map.links[`path\n${diagram}`], diagram);
+
+  imageUrls.length = 0;
+  const second = await prefetchEmbeddedImages(db, fetchImpl, { storage });
+  assert.equal(second.embedded, 5);
+  assert.equal(second.stored, 0);
+  assert.equal(second.skipped, 5);
+  assert.equal(second.failed, 0);
+  assert.equal(imageUrls.length, 0);
+
+  db.close();
+  const cold = await openDatabase(name);
+  await setMeta(cold, 'githubVaultIndex', {
+    repo,
+    branch: 'main',
+    root: '',
+    paths: [field],
+    attachmentFolderPath: '',
+    fetchedAt: 1,
+    treeSha: 'stale',
+    truncated: false,
+    shas: {},
+  });
+  let calls = 0;
+  const offlineFetch = async () => {
+    calls += 1;
+    throw new Error('offline');
+  };
+  const fromNote = await loadEmbedBlob(cold, {
+    link: 'image-1710000000000.png',
+    notePath: field,
+    repo,
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+    offline: true,
+    fetchImpl: offlineFetch,
+  });
+  const fromPath = await loadEmbedBlob(cold, {
+    link: diagram,
+    notePath: 'Other.md',
+    repo,
+    branch: 'main',
+    root: '',
+    token: '',
+    offline: true,
+    fetchImpl: offlineFetch,
+  });
+  const missed = await loadEmbedBlob(cold, {
+    link: 'absent.png',
+    notePath: field,
+    repo,
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+    offline: true,
+    fetchImpl: offlineFetch,
+  });
+  assert.equal(calls, 0);
+  assert.equal(fromNote.status, 'ready');
+  assert.equal(fromNote.path, fieldImage);
+  assert.equal(fromPath.status, 'ready');
+  assert.equal(fromPath.path, diagram);
+  assert.notEqual(fromPath.reason, 'Sign in again');
+  assert.equal(missed.status, 'missing');
+  assert.equal(missed.reason, OFFLINE_IMAGE_REASON);
+  assert.notEqual(missed.reason, 'Sign in again');
+  cold.close();
+  await deleteDatabase(name);
+});
+
+test('a failed image prefetch is tried again on the next sync', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  await saveGithubSession(db, { token: TOKEN });
+  await saveGithubTarget(db, { repo: 'owner/repo', branch: 'main', root: '' });
+  await putFile(db, {
+    path: 'Weekly.md',
+    content: '![[shot.png]]\n',
+    kind: 'markdown',
+    encoding: 'utf-8',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  let missing = true;
+  const fetchImpl = async (url) => {
+    const text = String(url);
+    assert.equal(text.includes(TOKEN), false);
+    if (text.includes('/git/trees/')) {
+      return httpResponse({
+        body: JSON.stringify({
+          sha: 'tree1',
+          truncated: false,
+          tree: [
+            { path: 'Weekly.md', type: 'blob', sha: 'sha-note' },
+            { path: 'shot.png', type: 'blob', sha: 'sha-shot' },
+          ],
+        }),
+      });
+    }
+    if (text.includes('app.json')) return httpResponse({ status: 404, body: 'missing' });
+    if (missing) return httpResponse({ status: 404, body: 'missing' });
+    return httpResponse({ body: PNG });
+  };
+  const failed = await prefetchEmbeddedImages(db, fetchImpl);
+  assert.equal(failed.embedded, 1);
+  assert.equal(failed.stored, 0);
+  assert.equal(failed.failed, 1);
+  assert.equal((await listImages(db)).length, 0);
+  missing = false;
+  const again = await prefetchEmbeddedImages(db, fetchImpl);
+  assert.equal(again.stored, 1);
+  assert.equal(again.failed, 0);
+  assert.equal((await listImages(db)).length, 1);
   db.close();
   await deleteDatabase(name);
 });

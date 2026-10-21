@@ -31,7 +31,7 @@ import {
 import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
-import { embedImage, forgetImage, loadEmbedBlob } from './images.js';
+import { embedImage, forgetImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
 import { createImageViewer } from './image-viewer.js';
 
 const SAVE_DELAY = 400;
@@ -153,6 +153,7 @@ export function mountApp(doc, db) {
       root: settings.root,
       token: settings.token,
       fetchImpl: globalThis.fetch.bind(globalThis),
+      offline: browserOffline(),
     });
     if (result.status !== 'ready' || !result.blob) return '';
     const url = URL.createObjectURL(result.blob);
@@ -258,9 +259,10 @@ export function mountApp(doc, db) {
           root: settings.root,
           token: settings.token,
           fetchImpl: globalThis.fetch.bind(globalThis),
+          offline: browserOffline(),
         });
       } catch {
-        showEmbedReason(node, "Couldn't reach GitHub (offline)");
+        showEmbedReason(node, browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)");
         continue;
       }
       if (ticket !== embedTicket || !node.isConnected) return;
@@ -309,10 +311,11 @@ export function mountApp(doc, db) {
         root: settings.root,
         token: settings.token,
         fetchImpl: globalThis.fetch.bind(globalThis),
+        offline: browserOffline(),
         fresh: true,
       });
     } catch {
-      showEmbedReason(node, "Couldn't reach GitHub (offline)");
+      showEmbedReason(node, browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)");
       return;
     }
     if (ticket !== embedTicket || !node.isConnected) return;
@@ -1136,6 +1139,7 @@ export function mountApp(doc, db) {
     }
     const plan = planDownload(files, loaded, mode);
     if (!plan.writes.length) {
+      startImagePrefetch(db);
       return { downloaded: 0, skipped: plan.skipped.length, empty: loaded.length === 0 };
     }
     const now = Date.now();
@@ -1174,7 +1178,13 @@ export function mountApp(doc, db) {
     }
     syncOpen();
     renderList();
+    startImagePrefetch(db);
     return { downloaded: writes.length, skipped: plan.skipped.length, empty: false };
+  }
+
+  function browserOffline() {
+    const nav = doc.defaultView?.navigator || globalThis.navigator;
+    return nav?.onLine === false;
   }
 
   async function eraseLocal() {
