@@ -66,7 +66,6 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     const win = doc.defaultView;
     toastTimer = win.setTimeout(() => {
       toast.hidden = true;
-      undo = null;
     }, 8000);
   }
 
@@ -414,8 +413,11 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
       && item.path !== file.path
     ));
     const result = await apply(plan);
-    showToast(plan.summary, result && result.undo);
     pendingOffer = sibling && sibling.path ? sibling.path : '';
+    showToast(plan.summary, async () => {
+      pendingOffer = '';
+      if (result && result.undo) await result.undo();
+    });
     paintList();
   }
 

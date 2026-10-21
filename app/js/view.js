@@ -1311,6 +1311,7 @@ export function mountApp(doc, db) {
     else await sync.refreshStatus();
     return {
       async undo() {
+        await saver.discard();
         const created = (plan.put || []).map((file) => file.path).filter((notePath) => !beforeFiles.some((file) => file.path === notePath));
         const restore = beforeFiles.filter((file) => created.includes(file.path) || (plan.put || []).some((item) => item.path === file.path) || (plan.remove || []).includes(file.path));
         await commitFiles(db, { put: restore, remove: created });
