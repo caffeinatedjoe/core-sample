@@ -1,8 +1,10 @@
 import {
   decideAll,
   formatWhen,
+  hasConflictRemote,
   hunksForConflict,
   listConflicts,
+  matchConflictCopy,
   mergedText,
   planResolution,
   sideMarks,
@@ -29,7 +31,7 @@ function marksFor(hunk, side) {
   return sideMarks(base, lines);
 }
 
-export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
+export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, keepRemote } = {}) {
   const sheet = doc.getElementById('conflict-sheet');
   if (!sheet || !doc.getElementById('undo-toast')) {
     return { open() {}, close() {}, showing() { return false; } };
@@ -49,18 +51,38 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
   let undo = null;
   let toastTimer = null;
   let pendingOffer = '';
+  let remoteNote = null;
+  let remoteReason = '';
+  let opening = 0;
+  const card = sheet.querySelector('.sheet-card');
+  const toastHome = toast.parentNode;
+  const toastNext = toast.nextSibling;
 
   function fileByPath(notePath) {
     return (files() || []).find((file) => file.path === notePath && !file.trashedAt);
   }
 
   function siblingFor(note) {
-    return (files() || []).find((file) => file.conflictCopy && !file.backup && !file.trashedAt && file.path.includes('(conflict ') && file.path.startsWith(note.path.slice(0, note.path.lastIndexOf('/') + 1)));
+    return matchConflictCopy(files(), note);
+  }
+
+  // Inside the open sheet the toast is the card's last row, so the list ends
+  // above it and no conflict row can sit under it.
+  function placeToast() {
+    if (!sheet.hidden && card) {
+      if (toast.parentNode !== card) card.append(toast);
+      toast.classList.add('undo-toast-docked');
+    } else if (toast.parentNode !== toastHome) {
+      toastHome.insertBefore(toast, toastNext && toastNext.parentNode === toastHome ? toastNext : null);
+      toast.classList.remove('undo-toast-docked');
+    }
   }
 
   function showToast(summary, undoFn) {
     undo = undoFn;
     toastText.textContent = summary;
+    toastButton.hidden = !undoFn;
+    placeToast();
     toast.hidden = false;
     if (toastTimer) clearTimeout(toastTimer);
     const win = doc.defaultView;
@@ -99,7 +121,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
       if (!leftover) pendingOffer = '';
       else {
         const offer = el(doc, 'div', 'conflict-offer');
-        offer.append(el(doc, 'p', 'conflict-offer-text', 'Move the leftover conflict copy to Trash? You can restore it later.'));
+        offer.append(el(doc, 'p', 'conflict-offer-text', `Move “${leftover.path}” to Trash? You can restore it later.`));
         const actions = el(doc, 'div', 'conflict-offer-actions');
         const trash = button(doc, 'conflict-primary', 'Move copy to Trash');
         trash.id = 'conflict-trash-copy';
@@ -158,7 +180,11 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
   }
 
   function currentFile() {
-    return fileByPath(path);
+    const file = fileByPath(path);
+    if (file && remoteNote && remoteNote.path === file.path && !hasConflictRemote(file)) {
+      return { ...file, ...remoteNote.fields };
+    }
+    return file;
   }
 
   function previewText() {
@@ -169,7 +195,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
       return editor ? editor.value : '';
     }
     if (choice === 'phone') return String(file.content ?? '');
-    if (choice === 'github' || choice === 'separate') return String(file.conflictRemote ?? '');
+    if (choice === 'github' || choice === 'separate') return hasConflictRemote(file) ? file.conflictRemote : '';
     return mergedText(hunks, trailing);
   }
 
@@ -197,7 +223,11 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     const preview = resolveView.querySelector('#merge-preview');
     const editor = resolveView.querySelector('#merge-editor');
     const text = previewText();
-    if (preview) preview.textContent = text || 'Nothing selected yet.';
+    if (preview) {
+      const whole = choice === 'phone' || choice === 'github' || choice === 'separate';
+      if (whole || handwritten) preview.textContent = text || '(empty note)';
+      else preview.textContent = text || 'Nothing selected yet.';
+    }
     if (editor && !handwritten && doc.activeElement !== editor) editor.value = text;
   }
 
@@ -251,11 +281,19 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     const both = button(doc, 'conflict-choice', 'Keep both notes');
     both.id = 'keep-both';
     both.setAttribute('aria-pressed', choice === 'separate' ? 'true' : 'false');
+    const remoteReady = hasConflictRemote(file);
+    github.disabled = !remoteReady;
+    both.disabled = !remoteReady;
     phone.addEventListener('click', () => chooseWhole('phone'));
     github.addEventListener('click', () => chooseWhole('github'));
     both.addEventListener('click', () => chooseWhole('separate'));
     actions.append(phone, github, both);
     whole.append(actions);
+    if (!remoteReady) {
+      const why = el(doc, 'p', 'conflict-remote-missing', remoteReason || "Keep GitHub is off: GitHub's version of this note is not on this phone.");
+      why.id = 'conflict-remote-missing';
+      whole.append(why);
+    }
     resolveView.append(whole);
 
     const phoneWhen = formatWhen(file.updatedAt);
@@ -360,6 +398,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
   }
 
   function chooseWhole(next) {
+    if ((next === 'github' || next === 'separate') && !hasConflictRemote(currentFile())) return;
     handwritten = false;
     choice = next;
     if (next === 'phone') hunks = decideAll(hunks, 'phone');
@@ -398,21 +437,30 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     if (!file) return;
     const mode = choice === 'phone' || choice === 'github' || choice === 'separate' ? choice : 'merge';
     const taken = new Set((files() || []).map((item) => item.path));
-    const plan = planResolution({
-      file,
-      hunks,
-      trailing,
-      mode,
-      editedText: handwritten ? resolveView.querySelector('#merge-editor').value : null,
-      now: Date.now(),
-      taken,
-    });
-    const sibling = (files() || []).find((item) => (
-      item.conflictCopy && !item.backup && !item.trashedAt && item.path.includes('(conflict ')
-      && item.path.startsWith(file.path.replace(/[^/]+$/, ''))
-      && item.path !== file.path
-    ));
-    const result = await apply(plan);
+    let plan;
+    try {
+      plan = planResolution({
+        file,
+        hunks,
+        trailing,
+        mode,
+        editedText: handwritten ? resolveView.querySelector('#merge-editor').value : null,
+        now: Date.now(),
+        taken,
+      });
+    } catch (error) {
+      showToast(error && error.message ? error.message : 'Nothing was saved.', null);
+      return;
+    }
+    const sibling = siblingFor(file);
+    let result;
+    try {
+      result = await apply(plan);
+    } catch (error) {
+      showToast(error && error.message ? error.message : 'Nothing was saved.', null);
+      return;
+    }
+    remoteNote = null;
     pendingOffer = sibling && sibling.path ? sibling.path : '';
     showToast(plan.summary, async () => {
       pendingOffer = '';
@@ -421,42 +469,100 @@ export function mountConflictScreen(doc, { files, apply, dismiss } = {}) {
     paintList();
   }
 
-  function openResolve(notePath) {
+  function showResolve(file, sibling) {
+    const merged = hunksForConflict(file, sibling);
+    hunks = merged.hunks;
+    trailing = merged.trailing;
+    renderResolve();
+  }
+
+  async function openResolve(notePath) {
     const file = fileByPath(notePath);
     if (!file) {
       paintList();
       return;
     }
+    const ticket = opening + 1;
+    opening = ticket;
     path = file.path;
-    const merged = hunksForConflict(file, siblingFor(file));
-    hunks = merged.hunks;
-    trailing = merged.trailing;
+    remoteNote = null;
+    remoteReason = '';
     choice = '';
     handwritten = false;
     focusAt = 0;
     listView.hidden = true;
     resolveView.hidden = false;
-    renderResolve();
+    const sibling = siblingFor(file);
+    if (hasConflictRemote(file) || !loadRemote) {
+      showResolve(file, sibling);
+      return;
+    }
+    heading.textContent = file.path;
+    for (const bar of [resolveBar(), stepBar()]) {
+      if (bar) bar.hidden = true;
+    }
+    resolveView.replaceChildren(el(doc, 'p', 'conflict-empty', "Loading GitHub's version…"));
+    let loaded = null;
+    try {
+      loaded = await loadRemote(file, sibling);
+    } catch {
+      loaded = null;
+    }
+    if (ticket !== opening || resolveView.hidden) return;
+    const latest = fileByPath(file.path);
+    if (!latest) {
+      paintList();
+      return;
+    }
+    if (loaded && loaded.file && hasConflictRemote(loaded.file)) {
+      remoteNote = {
+        path: latest.path,
+        fields: {
+          conflictRemote: loaded.file.conflictRemote,
+          conflictRemoteSha: loaded.file.conflictRemoteSha || latest.conflictRemoteSha || '',
+          conflictRemoteKnown: true,
+          conflictCopyPath: loaded.file.conflictCopyPath || latest.conflictCopyPath || '',
+        },
+      };
+      if (keepRemote) {
+        try {
+          await keepRemote(latest.path, remoteNote.fields);
+        } catch {
+          // The text is still on screen for this resolve.
+        }
+      }
+    } else {
+      remoteReason = loaded && loaded.reason ? loaded.reason : '';
+    }
+    if (ticket !== opening || resolveView.hidden) return;
+    showResolve(currentFile(), sibling);
   }
 
-  doc.getElementById('conflict-close').addEventListener('click', () => {
+  function hideSheet() {
     sheet.hidden = true;
-  });
+    opening += 1;
+    placeToast();
+  }
+
+  doc.getElementById('conflict-close').addEventListener('click', hideSheet);
   const back = doc.getElementById('conflict-back');
   if (back) {
     back.addEventListener('click', () => {
-      if (!resolveView.hidden) paintList();
-      else sheet.hidden = true;
+      if (!resolveView.hidden) {
+        opening += 1;
+        paintList();
+      } else hideSheet();
     });
   }
 
   return {
     open() {
       sheet.hidden = false;
+      placeToast();
       paintList();
     },
     close() {
-      sheet.hidden = true;
+      hideSheet();
     },
     showing() {
       return !sheet.hidden;

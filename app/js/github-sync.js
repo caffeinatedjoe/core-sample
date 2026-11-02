@@ -10,7 +10,7 @@ import {
 } from './github-api.js';
 import { loadGithubSettings } from './github-store.js';
 import { redact } from './github-redact.js';
-import { GITHUB_DELETED_TEXT, merge2, merge3 } from './conflicts.js';
+import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
 
 export const SYNC_DEBOUNCE_MS = 3000;
 export const SYNC_POLL_MS = 60 * 1000;
@@ -162,17 +162,60 @@ export function shouldAutoUpload(file) {
   return file.dirty === true;
 }
 
-export function shouldRemoveLocal(file, context = {}) {
-  if (!file || file.trashedAt || file.conflict || file.conflictCopy || file.dirty) return false;
+// A note GitHub no longer lists is removed only when the head that dropped it
+// descends from the commit this note was last synced at, and the phone still
+// holds exactly the blob GitHub had. Commit dates are never compared: a slow
+// clock on another computer must not decide whether text is kept.
+export function remoteDeleteDecision(file, context = {}) {
+  if (!file || file.trashedAt || file.conflict || file.conflictCopy || file.dirty) return 'keep';
   const base = typeof file.baseSha === 'string' ? file.baseSha : '';
   const remote = typeof file.remoteSha === 'string' ? file.remoteSha : '';
-  if (!base || !remote || base !== remote) return false;
+  if (!base) return 'keep';
   const headSha = context.headSha || '';
-  if (file.syncedCommit && headSha && file.syncedCommit === headSha) return false;
-  const syncedAt = Number(file.syncedAt) || Number(file.updatedAt) || 0;
-  const headDate = Number(context.headDate) || 0;
-  if (!syncedAt || !headDate) return false;
-  return headDate > syncedAt;
+  const synced = file.syncedCommit || '';
+  if (synced && headSha && synced === headSha) return 'keep';
+  if (base !== remote || !synced || !headSha) return 'conflict';
+  const lastBlobs = context.lastBlobs;
+  if (lastBlobs && typeof lastBlobs === 'object' && lastBlobs[file.path] !== base) return 'conflict';
+  const descends = context.descends instanceof Map ? context.descends.get(synced) : undefined;
+  if (descends === true) return 'remove';
+  if (descends === false) return 'conflict';
+  return 'keep';
+}
+
+export function shouldRemoveLocal(file, context = {}) {
+  return remoteDeleteDecision(file, context) === 'remove';
+}
+
+function blobsFromNotes(remoteNotes) {
+  const blobs = {};
+  for (const note of remoteNotes || []) {
+    if (note && note.localPath && note.sha) blobs[note.localPath] = note.sha;
+  }
+  return blobs;
+}
+
+export const ANCESTRY_LIMIT = 200;
+
+// Walks parents from head with the Git Data commit read the sync already uses.
+// Returns true or false, or null when GitHub could not answer.
+export async function commitDescendsFrom(readCommit, headSha, ancestor, limit = ANCESTRY_LIMIT) {
+  if (!headSha || !ancestor) return false;
+  if (headSha === ancestor) return true;
+  const queue = [headSha];
+  const seen = new Set();
+  while (queue.length && seen.size < limit) {
+    const sha = queue.shift();
+    if (seen.has(sha)) continue;
+    seen.add(sha);
+    const parents = await readCommit(sha);
+    if (parents == null) return null;
+    for (const parent of parents) {
+      if (parent === ancestor) return true;
+      if (!seen.has(parent)) queue.push(parent);
+    }
+  }
+  return false;
 }
 
 function countCopies(files) {
@@ -227,7 +270,9 @@ export function reconcileNotes(files, remoteNotes, context = {}) {
     }
     if (!found) {
       if (base) {
-        if (shouldRemoveLocal(file, context)) removals.push(file.path);
+        const decision = remoteDeleteDecision(file, context);
+        if (decision === 'remove') removals.push(file.path);
+        else if (decision === 'conflict') conflicts.push({ path: file.path, reason: 'deleted', remote: null });
       } else if (shouldAutoUpload(file)) {
         pushes.push(file);
       }
@@ -317,6 +362,79 @@ function blobText(body) {
   if (body.encoding === 'utf-8') return body.content;
   if (body.encoding === 'base64') return decodeUtf8Base64(body.content);
   throw new Error('GitHub left out the text of that note. Nothing was changed.');
+}
+
+function commitParents(body) {
+  if (!body || !Array.isArray(body.parents)) return [];
+  return body.parents.map((parent) => parent && parent.sha).filter((sha) => typeof sha === 'string' && sha);
+}
+
+// GitHub's current text for one path: ref, commit, tree, blob. Null when the
+// branch no longer has the note or GitHub could not answer.
+export async function fetchRemoteBlob(fetchImpl, settings, path) {
+  if (!settings || !settings.token || !settings.repo || !settings.branch || !path) return null;
+  const call = (url) => request(fetchImpl, settings.token, url);
+  const ref = await call(repoUrl(settings.repo, refReadPath(settings.branch)));
+  const headSha = ref.ok ? readRef(ref.body, settings.branch) : '';
+  if (!headSha) return null;
+  const commit = await call(repoUrl(settings.repo, `/git/commits/${headSha}`));
+  const treeSha = commit.ok && commit.body && commit.body.tree ? commit.body.tree.sha : '';
+  if (typeof treeSha !== 'string' || !treeSha) return null;
+  const tree = await call(repoUrl(settings.repo, `/git/trees/${treeSha}?recursive=1`));
+  if (!tree.ok) return null;
+  let notes = [];
+  try {
+    notes = selectMarkdown(tree.body, settings.root);
+  } catch {
+    return null;
+  }
+  const found = notes.find((note) => note.localPath === path);
+  if (!found) return null;
+  const blob = await call(repoUrl(settings.repo, `/git/blobs/${found.sha}`));
+  if (!blob.ok) return null;
+  return { sha: found.sha, text: blobText(blob.body) };
+}
+
+// The GitHub side for a conflict recorded before v26, which has no stored text.
+// Online it is GitHub's current blob for that path; offline it is the exactly
+// matched conflict copy. Neither leaves `reason` set and the file unchanged.
+export async function loadConflictRemote({
+  db,
+  file,
+  sibling = null,
+  fetchImpl = globalThis.fetch,
+  offline = () => false,
+} = {}) {
+  if (!file) return { file: null, source: '', reason: 'That note is not on this device.' };
+  if (hasConflictRemote(file)) return { file, source: 'stored', reason: '' };
+  if (!offline()) {
+    try {
+      const fetched = await fetchRemoteBlob(fetchImpl, await loadGithubSettings(db), file.path);
+      if (fetched) {
+        return {
+          file: { ...file, conflictRemote: fetched.text, conflictRemoteSha: fetched.sha, conflictRemoteKnown: true },
+          source: 'github',
+          reason: '',
+        };
+      }
+    } catch {
+      // Fall back to the matched copy below.
+    }
+  }
+  if (sibling && typeof sibling.content === 'string') {
+    return {
+      file: { ...file, conflictRemote: sibling.content, conflictRemoteKnown: true, conflictCopyPath: sibling.path },
+      source: 'copy',
+      reason: '',
+    };
+  }
+  return {
+    file,
+    source: '',
+    reason: offline()
+      ? "Keep GitHub is off: this phone is offline and has no copy of GitHub's version."
+      : "Keep GitHub is off: GitHub's version of this note could not be loaded.",
+  };
 }
 
 async function request(fetchImpl, token, url, options = {}) {
@@ -568,6 +686,8 @@ export function createAutoSync({
     const cursor = await getMeta(db, CURSOR_KEY);
     const samePlace = cursor && cursor.repo === settings.repo && cursor.branch === settings.branch && (cursor.root || '') === (settings.root || '');
     const savedEtag = samePlace ? cursor.etag || '' : '';
+    const previousBlobs = samePlace && cursor.lastBlobs && typeof cursor.lastBlobs === 'object' ? cursor.lastBlobs : null;
+    const parentsOf = new Map();
 
     let ref = await call(refUrl, { etag: savedEtag });
     if (ref.status === 401) {
@@ -619,6 +739,7 @@ export function createAutoSync({
       }
       treeSha = commit.body.tree.sha;
       headDate = commitDateMs(commit.body, now());
+      parentsOf.set(headSha, commitParents(commit.body));
     }
 
     const mine = ops.filter((op) => op.path && op.repo === settings.repo && op.branch === settings.branch);
@@ -641,6 +762,7 @@ export function createAutoSync({
         headSha,
         treeSha,
         headDate,
+        lastBlobs: previousBlobs,
       });
       return finish({
         configured: true,
@@ -664,6 +786,32 @@ export function createAutoSync({
     } catch {
       return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: mine.length > 0 });
     }
+    const files = await listFiles(db);
+    const listed = new Set(remoteNotes.map((note) => note.localPath));
+    const descends = new Map();
+    const readCommit = async (sha) => {
+      if (parentsOf.has(sha)) return parentsOf.get(sha);
+      const read = await call(repoUrl(settings.repo, `/git/commits/${encodeURIComponent(sha)}`));
+      if (!read.ok) return null;
+      const parents = commitParents(read.body);
+      parentsOf.set(sha, parents);
+      return parents;
+    };
+    for (const file of files) {
+      if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy || file.conflict || file.dirty) continue;
+      if (listed.has(file.path) || !syncedBase(file)) continue;
+      const synced = file.syncedCommit || '';
+      if (!synced || synced === headSha || descends.has(synced)) continue;
+      const answer = await commitDescendsFrom(readCommit, headSha, synced);
+      if (answer !== null) descends.set(synced, answer);
+    }
+    const plan = reconcileNotes(files, remoteNotes, {
+      headSha,
+      lastBlobs: previousBlobs,
+      descends,
+      ops: mine,
+    });
+    const seenBlobs = blobsFromNotes(remoteNotes);
     await setMeta(db, CURSOR_KEY, {
       repo: settings.repo,
       branch: settings.branch,
@@ -672,10 +820,8 @@ export function createAutoSync({
       headSha,
       treeSha,
       headDate,
+      lastBlobs: seenBlobs,
     });
-
-    const files = await listFiles(db);
-    const plan = reconcileNotes(files, remoteNotes, { headSha, headDate, ops: mine });
     const applied = [];
     let pulled = false;
     for (const item of plan.pulls) {
@@ -766,7 +912,9 @@ export function createAutoSync({
         conflictReason: reason,
         conflictRemote: copy,
         conflictRemoteSha: remoteSha,
+        conflictRemoteKnown: true,
         conflictBase: baseText,
+        conflictCopyPath: siblingPath,
       };
       await putFile(db, sibling);
       await putFile(db, marked);
@@ -1050,6 +1198,9 @@ export function createAutoSync({
     const writtenTreeSha = prepared && prepared.treeSha ? prepared.treeSha : treeSha;
     const writtenDate = prepared && prepared.headDate ? prepared.headDate : now();
     prepared = null;
+    const writtenBlobs = { ...seenBlobs };
+    for (const item of written) writtenBlobs[item.path] = item.sha;
+    for (const item of deletions) delete writtenBlobs[item.path];
     await setMeta(db, CURSOR_KEY, {
       repo: settings.repo,
       branch: settings.branch,
@@ -1058,6 +1209,7 @@ export function createAutoSync({
       headSha: commitSha,
       treeSha: writtenTreeSha,
       headDate: writtenDate,
+      lastBlobs: writtenBlobs,
     });
 
     const settled = [];

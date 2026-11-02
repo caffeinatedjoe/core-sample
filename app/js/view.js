@@ -32,7 +32,7 @@ import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
-import { createAutoSync } from './github-sync.js';
+import { createAutoSync, loadConflictRemote } from './github-sync.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
 
@@ -108,6 +108,8 @@ export function mountApp(doc, db) {
       syncedAt: current.syncedAt || null,
       syncedCommit: current.syncedCommit || '',
       conflictRemoteAt: current.conflictRemoteAt || null,
+      conflictRemoteKnown: current.conflictRemoteKnown === true,
+      conflictCopyPath: current.conflictCopyPath || '',
     };
   }
 
@@ -1280,7 +1282,21 @@ export function mountApp(doc, db) {
     renderList();
   }
 
+  async function keepConflictRemote(notePath, fields) {
+    const index = files.findIndex((item) => item.path === notePath);
+    if (index < 0) return;
+    const next = { ...files[index], ...fields };
+    await putFile(db, next);
+    files[index] = next;
+    if (current && current.path === notePath) Object.assign(current, fields);
+  }
+
   async function applyConflictPlan(plan) {
+    for (const file of plan.put || []) {
+      if (file && !file.backup && typeof file.content !== 'string') {
+        throw new Error('That choice would leave the note empty. Nothing was saved.');
+      }
+    }
     const beforeFiles = files.map((file) => ({ ...file }));
     const beforeOps = await listOps(db);
     await commitFiles(db, { put: plan.put || [], remove: plan.remove || [] });
@@ -1362,6 +1378,14 @@ export function mountApp(doc, db) {
     files: () => files,
     apply: applyConflictPlan,
     dismiss: dismissConflictCopy,
+    loadRemote: (file, sibling) => loadConflictRemote({
+      db,
+      file,
+      sibling,
+      fetchImpl: globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined,
+      offline: () => browserOffline(),
+    }),
+    keepRemote: keepConflictRemote,
   });
   syncStatus?.addEventListener('click', () => {
     if (syncStatus.getAttribute('aria-disabled') === 'true') return;

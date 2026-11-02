@@ -12,6 +12,7 @@ import {
   createSyncClock,
   isAppGenerated,
   isLocalCopyName,
+  loadConflictRemote,
   presentSyncStatus,
   reconcileNotes,
   refReadPath,
@@ -63,6 +64,7 @@ function gitServer() {
     moveOnSecondRef: false,
     files: new Map([['Field Notes.md', { sha: 'blob-1', text: 'Local line\n' }]]),
     blobs: new Map([['blob-1', 'Local line\n']]),
+    parents: new Map(),
   };
   const log = [];
   let refReads = 0;
@@ -96,9 +98,11 @@ function gitServer() {
     }
     const commitRead = path.match(/^\/repos\/owner\/repo\/git\/commits\/([^/]+)$/);
     if (commitRead && method === 'GET') {
+      const sha = decodeURIComponent(commitRead[1]);
       return json(200, {
-        sha: state.head,
+        sha,
         tree: { sha: state.tree },
+        parents: (state.parents.get(sha) || []).map((parent) => ({ sha: parent })),
         committer: { date: state.commitDate || '2026-10-21T00:00:00.000Z' },
       });
     }
@@ -136,6 +140,7 @@ function gitServer() {
     if (path === '/repos/owner/repo/git/commits' && method === 'POST') {
       state.commits = (state.commits || 0) + 1;
       state.commit = `commit-${state.commits + 1}`;
+      state.parents.set(state.commit, JSON.parse(options.body).parents || []);
       return json(201, { sha: state.commit, committer: { date: state.commitDate || '2026-10-21T12:00:00.000Z' } });
     }
     if (path === '/repos/owner/repo/git/refs/heads/main' && method === 'PATCH') {
@@ -303,7 +308,7 @@ test('status is never Synced before a confirmed write, and a conflict keeps both
   assert.equal(isAppGenerated(note('Welcome.md', '# Welcome\n')), true);
   assert.equal(shouldAutoUpload(note('Welcome.md', '# Welcome\n')), false);
   assert.equal(shouldAutoUpload(note('Draft.md', 'new\n', { origin: 'user' })), true);
-  assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', updatedAt: 2 }), { headSha: 'c2', headDate: 10 }), true);
+  assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', updatedAt: 2 }), { headSha: 'c2', headDate: 10 }), false);
   assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', syncedCommit: 'c1', syncedAt: 1 }), { headSha: 'c1', headDate: 10 }), false);
 
   const local = note('Field Notes.md', 'mine\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' });
@@ -758,6 +763,8 @@ test('a user-created note uploads, Welcome and copies do not, and a clean GitHub
     assert.equal(draft.dirty, false);
     assert.ok(draft.baseSha);
 
+    box.git.state.parents.set('commit-1', ['commit-old']);
+    box.git.state.parents.set('commit-deleted', [box.git.state.head]);
     box.git.state.files.delete('Field Notes.md');
     box.git.state.head = 'commit-deleted';
     box.git.state.commitDate = '2026-10-21T12:00:00.000Z';
@@ -946,6 +953,116 @@ test('a local note is not removed unless the base matches and the remote tree is
     assert.notEqual(kept.status, undefined);
   } finally {
     await mismatch.close();
+  }
+});
+
+test('a GitHub delete from a slow-clock computer is removed by ancestry, not by date', async () => {
+  const box = await harness({ now: Date.parse('2026-10-22T09:00:00.000Z') });
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', {
+      baseSha: 'blob-1',
+      remoteSha: 'blob-1',
+      syncedAt: Date.parse('2026-10-22T08:00:00.000Z'),
+      syncedCommit: 'commit-1',
+    }));
+    const first = await box.sync.runNow();
+    assert.equal(first.status, SYNC_STATUS.synced);
+    box.git.state.parents.set('commit-slow', ['commit-1']);
+    box.git.state.files.delete('Field Notes.md');
+    box.git.state.head = 'commit-slow';
+    box.git.state.tree = 'tree-slow';
+    box.git.state.commitDate = '2020-01-01T00:00:00.000Z';
+    const removed = await box.sync.runNow();
+    assert.equal(removed.status, SYNC_STATUS.synced);
+    assert.equal(await getFile(box.db, 'Field Notes.md'), undefined);
+    const walked = box.git.log.filter((item) => item.method === 'GET' && /\/git\/commits\/commit-slow$/.test(new URL(item.url).pathname));
+    assert.equal(walked.length >= 1, true);
+    assert.equal(box.git.log.some((item) => new URL(item.url).pathname.includes('/compare/')), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a GitHub delete on a head that does not descend from the base becomes a conflict', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', {
+      baseSha: 'blob-1',
+      remoteSha: 'blob-1',
+      syncedAt: 1,
+      syncedCommit: 'commit-1',
+    }));
+    box.git.state.parents.set('commit-rewritten', ['commit-unrelated']);
+    box.git.state.files.delete('Field Notes.md');
+    box.git.state.head = 'commit-rewritten';
+    box.git.state.commitDate = '2030-01-01T00:00:00.000Z';
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.conflict);
+    const kept = await getFile(box.db, 'Field Notes.md');
+    assert.equal(kept.content, 'Local line\n');
+    assert.equal(kept.conflictReason, 'deleted');
+    assert.equal(box.git.log.some((item) => item.method === 'PATCH'), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a new conflict records the path of its own copy', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Notes/Beta.md', 'phone\n', { dirty: true, baseSha: 'blob-b0', remoteSha: 'blob-b0' }));
+    box.git.state.files.set('Notes/Beta.md', { sha: 'blob-b9', text: 'github\n' });
+    box.git.state.blobs.set('blob-b9', 'github\n');
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.conflict);
+    const marked = await getFile(box.db, 'Notes/Beta.md');
+    const copy = (await listFiles(box.db)).find((file) => file.conflictCopy);
+    assert.equal(marked.conflictCopyPath, copy.path);
+    assert.equal(copy.path.startsWith('Notes/Beta (conflict '), true);
+    assert.equal(marked.conflictRemote, 'github\n');
+  } finally {
+    await box.close();
+  }
+});
+
+test('a legacy conflict loads GitHub text by its own path online and its exact copy offline', async () => {
+  const box = await harness();
+  try {
+    box.git.state.files.set('Notes/sL1.md', { sha: 'blob-s1', text: 'github one\n' });
+    box.git.state.files.set('Notes/sL2.md', { sha: 'blob-s2', text: 'github two\n' });
+    box.git.state.blobs.set('blob-s1', 'github one\n');
+    box.git.state.blobs.set('blob-s2', 'github two\n');
+    const legacy = note('Notes/sL2.md', 'phone two\n', { dirty: true, conflict: true });
+    const online = await loadConflictRemote({
+      db: box.db,
+      file: legacy,
+      sibling: note('Notes/sL2 (conflict 2026-10-20 1718).md', 'older copy\n', { conflictCopy: true }),
+      fetchImpl: box.git.fetchImpl,
+    });
+    assert.equal(online.source, 'github');
+    assert.equal(online.file.conflictRemote, 'github two\n');
+    assert.equal(online.file.conflictRemoteSha, 'blob-s2');
+    const reads = box.git.log.filter((item) => item.method !== 'GET');
+    assert.deepEqual(reads, []);
+    assert.equal(box.git.log.every((item) => item.headers.Authorization === `Bearer ${TOKEN}`), true);
+    assert.equal(box.git.log.some((item) => item.url.includes(TOKEN)), false);
+
+    const offline = await loadConflictRemote({
+      db: box.db,
+      file: legacy,
+      sibling: note('Notes/sL2 (conflict 2026-10-20 1718).md', 'github two from copy\n', { conflictCopy: true }),
+      fetchImpl: box.git.fetchImpl,
+      offline: () => true,
+    });
+    assert.equal(offline.source, 'copy');
+    assert.equal(offline.file.conflictRemote, 'github two from copy\n');
+
+    const neither = await loadConflictRemote({ db: box.db, file: legacy, sibling: null, fetchImpl: box.git.fetchImpl, offline: () => true });
+    assert.equal(neither.source, '');
+    assert.equal(neither.reason.includes('offline'), true);
+    assert.equal(neither.file.conflictRemote, undefined);
+  } finally {
+    await box.close();
   }
 });
 

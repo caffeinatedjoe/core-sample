@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,37 @@ const appDir = join(here, '..', 'app');
 const NOTE = 'Field Notes.md';
 const COPY = 'Field Notes (conflict 2026-10-20 1718).md';
 const TOKEN = 'gho_testtokenvalue123456';
+const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
+const STAMP = '2026-10-20 1718';
+
+async function shot(page, name) {
+  await mkdir(SHOTS, { recursive: true });
+  await page.screenshot({ path: join(SHOTS, name) });
+}
+
+function conflicted(path, phone, github, extra = {}) {
+  return markdown(path, phone, {
+    dirty: true,
+    conflict: true,
+    conflictAt: Date.parse('2026-10-21T19:18:00Z'),
+    conflictReason: 'both',
+    conflictRemote: github,
+    conflictRemoteSha: `blob-${path}`,
+    conflictBase: 'old\n',
+    baseSha: 'blob-old',
+    remoteSha: 'blob-old',
+    ...extra,
+  });
+}
+
+async function hittable(locator) {
+  return locator.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (target && (target === node || node.contains(target))) return true;
+    return `${node.textContent.trim().slice(0, 40)} covered by ${target?.id || target?.className || target?.tagName}`;
+  });
+}
 
 function serve() {
   const types = {
@@ -167,6 +198,21 @@ async function mockGithub(context, state) {
   });
 }
 
+async function waitForStart(page) {
+  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v27');
+  // start() records lastOpened and recent asynchronously; seeding before then gets overwritten.
+  await page.waitForFunction(() => new Promise((resolve) => {
+    const request = indexedDB.open('core-sample');
+    request.onerror = () => resolve(false);
+    request.onsuccess = () => {
+      const db = request.result;
+      const get = db.transaction('meta').objectStore('meta').get('recent');
+      get.onsuccess = () => { db.close(); resolve(Boolean(get.result)); };
+      get.onerror = () => { db.close(); resolve(false); };
+    };
+  }));
+}
+
 async function seed(page, rows, lastOpened) {
   await page.evaluate(async ({ rows, lastOpened, token }) => {
     const db = await new Promise((resolve, reject) => {
@@ -268,7 +314,7 @@ test('webkit v24 profile does not upload Welcome or copies until an explicit res
     await mockGithub(context, state);
     await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v26');
+    await waitForStart(page);
     await seed(page, [
       markdown('Welcome.md', '# Welcome\n'),
       markdown(NOTE, 'mine\n', {
@@ -320,7 +366,7 @@ test('webkit restore after a synced delete uploads the note again', { timeout: 9
     await mockGithub(context, state);
     await page.clock.install();
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v26');
+    await waitForStart(page);
     await seed(page, [
       markdown('Welcome.md', '# Welcome\n', { origin: 'app', localOnly: true }),
       markdown(NOTE, 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1', origin: 'user' }),
@@ -349,7 +395,7 @@ test('webkit rename does not bring the old path back', { timeout: 90000 }, async
     await mockGithub(context, state);
     await page.clock.install();
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v26');
+    await waitForStart(page);
     await seed(page, [
       markdown('Welcome.md', '# Welcome\n', { origin: 'app', localOnly: true }),
       markdown('Logs.md', 'See [[Field Notes]]\n', { baseSha: 'blob-1', remoteSha: 'blob-1', origin: 'user' }),
@@ -380,7 +426,7 @@ test('webkit leftover conflict copies stay tappable and dismiss to Trash', { tim
     await mockGithub(context, state);
     await page.clock.install();
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v26');
+    await waitForStart(page);
     await seed(page, [
       markdown(NOTE, 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1', origin: 'user' }),
       markdown(COPY, 'theirs\n', { conflictCopy: true }),
@@ -399,5 +445,138 @@ test('webkit leftover conflict copies stay tappable and dismiss to Trash', { tim
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced');
     assert.equal(state.files.has(COPY), false);
     assert.equal(state.writes.length, 0);
+  });
+});
+
+async function openApp(page, port) {
+  await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
+  await waitForStart(page);
+}
+
+test('webkit resolving the middle of three conflicts in a folder trashes only its own copy', { timeout: 90000 }, async (t) => {
+  await withBrowser(t, async ({ page, context, port }) => {
+    const state = gitState([['Other.md', { sha: 'blob-o', text: 'other\n' }]]);
+    await mockGithub(context, state);
+    await openApp(page, port);
+    const names = ['Alpha', 'Beta', 'Gamma'];
+    await seed(page, [
+      ...names.map((name) => conflicted(`Notes/${name}.md`, `phone ${name}\n`, `github ${name}\n`)),
+      ...names.map((name) => markdown(`Notes/${name} (conflict ${STAMP}).md`, `github ${name}\n`, { conflictCopy: true, origin: 'app' })),
+    ], 'Notes/Beta.md');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Conflict');
+    await page.locator('#sync-status').click();
+    await page.locator('.conflict-open', { hasText: 'Notes/Beta.md' }).click();
+    await page.locator('#keep-phone').click();
+    await page.locator('#conflict-resolve-button').click();
+    await page.waitForSelector('#conflict-trash-copy');
+    const offer = await page.locator('.conflict-offer-text').textContent();
+    assert.equal(offer.includes(`Notes/Beta (conflict ${STAMP}).md`), true, offer);
+    assert.equal(/Alpha|Gamma/.test(offer), false, offer);
+    await shot(page, 'named-trash-prompt.png');
+    await page.locator('#conflict-trash-copy').click();
+    const rows = await readFiles(page);
+    const trashed = rows.filter((row) => row.conflictCopy && !row.backup && row.trashedAt).map((row) => row.path);
+    assert.deepEqual(trashed, [`Notes/Beta (conflict ${STAMP}).md`]);
+    assert.equal(rows.find((row) => row.path === 'Notes/Alpha.md').conflict, true);
+    assert.equal(rows.find((row) => row.path === 'Notes/Gamma.md').conflict, true);
+    assert.equal(rows.find((row) => row.path === 'Notes/Beta.md').content, 'phone Beta\n');
+  });
+});
+
+test('webkit undo toast leaves every conflict row tappable', { timeout: 90000 }, async (t) => {
+  await withBrowser(t, async ({ page, context, port }) => {
+    const state = gitState([['Other.md', { sha: 'blob-o', text: 'other\n' }]]);
+    await mockGithub(context, state);
+    await openApp(page, port);
+    const names = ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7'];
+    await seed(page, [
+      ...names.map((name) => conflicted(`Notes/${name}.md`, `phone ${name}\n`, `github ${name}\n`)),
+      ...names.map((name) => markdown(`Notes/${name} (conflict ${STAMP}).md`, `github ${name}\n`, { conflictCopy: true, origin: 'app' })),
+    ], 'Notes/N1.md');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Conflict');
+    await page.locator('#sync-status').click();
+    await page.locator('.conflict-open', { hasText: 'Notes/N1.md' }).click();
+    await page.locator('#keep-phone').click();
+    await page.locator('#conflict-resolve-button').click();
+    await page.waitForSelector('#undo-toast:not([hidden])');
+    await page.waitForSelector('#conflict-trash-copy');
+    await shot(page, 'conflict-list-toast.png');
+    const targets = page.locator('#conflict-list-view button');
+    const count = await targets.count();
+    assert.equal(count >= 14, true, String(count));
+    for (let i = 0; i < count; i += 1) {
+      const target = targets.nth(i);
+      await target.evaluate((node) => node.scrollIntoView({ block: 'end' }));
+      assert.equal(await page.locator('#undo-toast').isHidden(), false);
+      assert.equal(await hittable(target), true);
+    }
+    assert.equal(await hittable(page.locator('#undo-toast-action')), true);
+  });
+});
+
+test('webkit legacy conflicts show their own GitHub text and Keep GitHub saves it online and offline', { timeout: 90000 }, async (t) => {
+  await withBrowser(t, async ({ page, context, port }) => {
+    const state = gitState([
+      ['Notes/sL1.md', { sha: 'blob-s1', text: 'github one live\n' }],
+      ['Notes/sL2.md', { sha: 'blob-s2', text: 'github two live\n' }],
+    ]);
+    await mockGithub(context, state);
+    await openApp(page, port);
+    const legacy = (path, content) => markdown(path, content, { dirty: true, updatedAt: Date.parse('2026-10-21T19:10:00Z'), conflict: true, baseSha: 'blob-old', remoteSha: 'blob-old' });
+    await seed(page, [
+      legacy('Notes/sL1.md', 'phone one\n'),
+      legacy('Notes/sL2.md', 'phone two\n'),
+      legacy('Notes/sL3.md', 'phone three\n'),
+      markdown(`Notes/sL1 (conflict ${STAMP}).md`, 'github one copy\n', { conflictCopy: true }),
+      markdown(`Notes/sL2 (conflict ${STAMP}).md`, 'github two copy\n', { conflictCopy: true }),
+    ], 'Notes/sL2.md');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Conflict');
+    await page.locator('#sync-status').click();
+
+    await page.locator('.conflict-open', { hasText: 'Notes/sL2.md' }).click();
+    await page.waitForSelector('#keep-github:not([disabled])');
+    const opened = await page.locator('#conflict-resolve-view').innerText();
+    assert.equal(opened.includes('github two live'), true, opened);
+    assert.equal(/github one/.test(opened), false, opened);
+    await shot(page, 'legacy-resolve-github-text.png');
+    await page.locator('#keep-github').click();
+    assert.equal(await page.locator('#merge-preview').textContent(), 'github two live\n');
+    await page.locator('#conflict-resolve-button').click();
+    await page.waitForSelector('#undo-toast:not([hidden])');
+    let rows = await readFiles(page);
+    assert.equal(rows.find((row) => row.path === 'Notes/sL2.md').content, 'github two live\n');
+    assert.equal(rows.find((row) => row.path === 'Notes/sL2.md').conflict, false);
+
+    await context.setOffline(true);
+    await page.waitForFunction(() => navigator.onLine === false);
+    await page.locator('.conflict-open', { hasText: 'Notes/sL1.md' }).click();
+    await page.waitForSelector('#keep-github:not([disabled])');
+    const offline = await page.locator('#conflict-resolve-view').innerText();
+    assert.equal(offline.includes('github one copy'), true, offline);
+    assert.equal(/github two/.test(offline), false, offline);
+    await page.locator('#keep-github').click();
+    assert.equal(await page.locator('#merge-preview').textContent(), 'github one copy\n');
+    await page.locator('#conflict-resolve-button').click();
+    await page.waitForFunction(() => !document.getElementById('conflict-resolve-view')?.offsetParent);
+    rows = await readFiles(page);
+    assert.equal(rows.find((row) => row.path === 'Notes/sL1.md').content, 'github one copy\n');
+
+    await page.locator('.conflict-open', { hasText: 'Notes/sL3.md' }).click();
+    await page.waitForSelector('#conflict-remote-missing');
+    assert.equal(await page.locator('#keep-github').isDisabled(), true);
+    assert.equal(await page.locator('#keep-both').isDisabled(), true);
+    const why = await page.locator('#conflict-remote-missing').textContent();
+    assert.equal(why.includes('offline'), true, why);
+    await page.locator('#keep-github').click({ force: true });
+    assert.equal(await page.locator('#conflict-resolve-button').isDisabled(), true);
+    rows = await readFiles(page);
+    for (const row of rows.filter((item) => item.kind === 'markdown' && !item.backup)) {
+      assert.equal(typeof row.content === 'string' && row.content.length > 0, true, row.path);
+    }
+    assert.equal(rows.find((row) => row.path === 'Notes/sL3.md').content, 'phone three\n');
   });
 });
