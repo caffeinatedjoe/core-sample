@@ -14,7 +14,7 @@ Taken: a list of every conflicted note, with the path and why it is here, and on
 
 **Obsidian Sync.** A conflict becomes a second note, `Note (conflict date).md`. The app does not merge. The person copies the text they want to keep. That is safe and clumsy: the copy is easy to miss, and the original stays conflicted with no screen to finish.
 
-Taken: a separate note only when someone taps "Keep both as separate notes." Older `(conflict …).md` copies already on the phone stay in the list and can be opened against the original or dismissed. Dismiss moves that copy to Trash, where it can be restored. After a resolve finishes, the list offers to move that note's leftover copy to Trash too. A new conflict stores GitHub's text on the note and still writes that copy, so a failed screen never loses a side.
+Taken: a separate note only when someone taps "Keep both as separate notes." Older `(conflict …).md` copies already on the phone stay in the list and can be opened against the original or dismissed. Dismiss moves that copy to Trash, where it can be restored. After a resolve finishes, the list offers to move that note's leftover copy to Trash too, and the prompt names the file. The copy is the one recorded on the conflict, or the one whose exact name is this note plus `(conflict …)` in the same folder. With no exact match there is no offer. While the sheet is open the undo toast is the sheet's last row, so it never sits over a conflict row. A new conflict stores GitHub's text on the note and still writes that copy, so a failed screen never loses a side.
 
 **Working Copy on iOS.** A phone is too narrow for columns. The diff is stacked, the targets are large, and resolving is one commit you can still edit. Ours and theirs are named in words.
 
