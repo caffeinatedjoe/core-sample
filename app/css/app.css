@@ -1300,8 +1300,15 @@ button.sync-status {
   font-weight: 700;
 }
 
-.conflict-primary:disabled {
+.conflict-primary:disabled,
+.conflict-choice:disabled {
   opacity: 0.45;
+}
+
+.conflict-remote-missing {
+  margin: 0.5rem 0 0;
+  font-size: 1rem;
+  color: var(--muted);
 }
 
 .undo-toast {
@@ -1318,6 +1325,12 @@ button.sync-status {
   border-radius: 0.75rem;
   background: var(--ink);
   color: var(--bg);
+}
+
+.undo-toast.undo-toast-docked {
+  position: static;
+  flex: none;
+  margin: 0.5rem 0.75rem calc(var(--safe-bottom) + 0.75rem);
 }
 
 .undo-toast p {

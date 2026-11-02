@@ -260,7 +260,7 @@ export function merge2(localText, remoteText) {
 
 export function hunksForConflict(file, sibling) {
   const local = String(file?.content ?? '');
-  const remote = typeof file?.conflictRemote === 'string' && file.conflictRemote !== ''
+  const remote = hasConflictRemote(file)
     ? file.conflictRemote
     : String(sibling?.content ?? '');
   if (typeof file?.conflictBase === 'string') return merge3(file.conflictBase, local, remote);
@@ -331,6 +331,10 @@ export function formatWhen(ms, now = Date.now()) {
   return `${months[date.getMonth()]} ${date.getDate()}${year}, ${clock}`;
 }
 
+const CONFLICT_COPY_NAME = /^(.+) \(conflict (\d{4}-\d{2}-\d{2} \d{4})(?:-\d+)?\)\.md$/i;
+export const EMPTY_RESOLVE_ERROR = 'That choice would leave the note empty. Nothing was saved.';
+export const MISSING_REMOTE_ERROR = "GitHub's copy is not on this phone. Nothing was saved.";
+
 function stemOf(path) {
   const slash = String(path).lastIndexOf('/');
   const base = slash >= 0 ? path.slice(slash + 1) : String(path);
@@ -340,6 +344,49 @@ function stemOf(path) {
 function dirOf(path) {
   const slash = String(path).lastIndexOf('/');
   return slash >= 0 ? path.slice(0, slash + 1) : '';
+}
+
+function localStamp(when) {
+  const stamp = new Date(when);
+  if (Number.isNaN(stamp.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}${pad(stamp.getMinutes())}`;
+}
+
+// Same folder and `<name> (conflict YYYY-MM-DD HHmm[-n]).md`. A prefix such as
+// `sL` must not claim `sL1 (conflict …)`.
+export function isExactConflictCopyPath(notePath, copyPath, stamp = '') {
+  const note = String(notePath || '');
+  const copy = String(copyPath || '');
+  if (!note || !copy || dirOf(copy) !== dirOf(note)) return false;
+  const match = copy.slice(dirOf(copy).length).match(CONFLICT_COPY_NAME);
+  if (!match || match[1] !== stemOf(note)) return false;
+  return !stamp || match[2] === stamp;
+}
+
+// Recorded path first, then the path derived from the conflict time, then the
+// exact name when only one copy fits. Anything else is no match.
+export function matchConflictCopy(files, note) {
+  if (!note || !note.path) return null;
+  const live = (files || []).filter((file) => (
+    file && file.conflictCopy && !file.backup && !file.trashedAt && file.path !== note.path
+  ));
+  if (note.conflictCopyPath) {
+    return live.find((file) => file.path === note.conflictCopyPath) || null;
+  }
+  const stamp = note.conflictAt ? localStamp(note.conflictAt) : '';
+  if (stamp) {
+    const timed = live.filter((file) => isExactConflictCopyPath(note.path, file.path, stamp));
+    if (timed.length === 1) return timed[0];
+  }
+  const named = live.filter((file) => isExactConflictCopyPath(note.path, file.path));
+  return named.length === 1 ? named[0] : null;
+}
+
+export function hasConflictRemote(file) {
+  if (!file) return false;
+  if (file.conflictRemoteKnown === true && typeof file.conflictRemote === 'string') return true;
+  return typeof file.conflictRemote === 'string' && file.conflictRemote !== '';
 }
 
 export function datedCopyPath(path, label, when, taken = new Set()) {
@@ -371,9 +418,7 @@ export function listConflicts(files) {
   const items = [];
   const claimed = new Set();
   for (const file of notes) {
-    const stem = stemOf(file.path);
-    const dir = dirOf(file.path);
-    const sibling = siblings.find((copy) => !claimed.has(copy.path) && copy.path.startsWith(dir) && stemOf(copy.path).startsWith(stem) && copy.path.includes('(conflict '));
+    const sibling = matchConflictCopy(siblings, file);
     if (sibling) claimed.add(sibling.path);
     items.push({
       path: file.path,
@@ -386,10 +431,8 @@ export function listConflicts(files) {
     });
   }
   for (const sibling of siblings) {
-    const original = notes.find((file) => {
-      const stem = stemOf(file.path);
-      return sibling.path.startsWith(dirOf(file.path)) && stemOf(sibling.path).startsWith(stem);
-    });
+    const original = notes.find((file) => matchConflictCopy(siblings, file)?.path === sibling.path)
+      || notes.find((file) => isExactConflictCopyPath(file.path, sibling.path));
     items.push({
       path: sibling.path,
       role: 'sibling',
@@ -415,6 +458,8 @@ function cleared(file, extra) {
     conflictRemote: '',
     conflictRemoteSha: '',
     conflictBase: '',
+    conflictCopyPath: '',
+    conflictRemoteKnown: false,
   };
 }
 
@@ -446,9 +491,23 @@ export function planResolution({
   taken = new Set(),
 } = {}) {
   if (!file) throw new Error('That note is not on this device.');
+  if ((mode === 'github' || mode === 'separate') && !hasConflictRemote(file)) {
+    throw new Error(MISSING_REMOTE_ERROR);
+  }
   const remoteText = typeof file.conflictRemote === 'string' ? file.conflictRemote : '';
   const remoteSha = file.conflictRemoteSha || '';
-  const phoneText = String(file.content ?? '');
+  if (typeof file.content !== 'string') throw new Error(EMPTY_RESOLVE_ERROR);
+  const phoneText = file.content;
+  const bothEmpty = phoneText === '' && hasConflictRemote(file) && remoteText === '';
+  const guard = (plan) => {
+    for (const item of plan.put) {
+      if (item.backup) continue;
+      if (typeof item.content !== 'string' || (item.content === '' && !bothEmpty)) {
+        throw new Error(EMPTY_RESOLVE_ERROR);
+      }
+    }
+    return plan;
+  };
   const generated = mode === 'phone'
     ? phoneText
     : mode === 'github'
@@ -488,19 +547,19 @@ export function planResolution({
       updatedAt: now,
     });
     if (remoteText === GITHUB_DELETED_TEXT) {
-      return {
+      return guard({
         put: [phone],
         remove: [file.path],
         backup: null,
         summary: 'Kept both notes. GitHub no longer has the original.',
-      };
+      });
     }
-    return {
+    return guard({
       put: [original, phone],
       remove: [],
       backup: null,
       summary: 'Kept both notes.',
-    };
+    });
   }
 
   if (mode === 'github' && (file.conflictReason === 'deleted' || remoteText === GITHUB_DELETED_TEXT)) {
@@ -520,12 +579,12 @@ export function planResolution({
     dirty: !keepGithub,
     updatedAt: now,
   });
-  return {
+  return guard({
     put: backup ? [resolved, backup] : [resolved],
     remove: [],
     backup,
     summary: keepGithub
       ? 'Kept the GitHub version. The phone copy is in a backup note.'
       : 'Kept the merged note. The discarded side is in a backup note.',
-  };
+  });
 }

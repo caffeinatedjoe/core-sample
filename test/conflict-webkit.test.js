@@ -161,7 +161,18 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
   try {
     await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v26');
+    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v27');
+    // start() records lastOpened asynchronously; seeding before then gets overwritten.
+    await page.waitForFunction(() => new Promise((resolve) => {
+      const request = indexedDB.open('core-sample');
+      request.onerror = () => resolve(false);
+      request.onsuccess = () => {
+        const db = request.result;
+        const get = db.transaction('meta').objectStore('meta').get('recent');
+        get.onsuccess = () => { db.close(); resolve(Boolean(get.result)); };
+        get.onerror = () => { db.close(); resolve(false); };
+      };
+    }));
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open('core-sample');

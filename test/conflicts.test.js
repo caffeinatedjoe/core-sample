@@ -4,9 +4,13 @@ import { test } from 'node:test';
 import {
   datedCopyPath,
   decideAll,
+  EMPTY_RESOLVE_ERROR,
   formatWhen,
   hunksForConflict,
+  isExactConflictCopyPath,
   listConflicts,
+  matchConflictCopy,
+  MISSING_REMOTE_ERROR,
   merge2,
   merge3,
   mergedText,
@@ -168,6 +172,68 @@ test('resolve plans keep a backup of the discarded side', () => {
   const legacy = hunksForConflict({ content: 'mine\n', conflict: true }, { content: 'theirs\n' });
   assert.equal(legacy.auto, false);
   assert.deepEqual(legacy.hunks[0].github, ['theirs']);
+});
+
+function md(path, content, extra = {}) {
+  return { path, content, kind: 'markdown', trashedAt: null, ...extra };
+}
+
+test('each of three conflicts in one folder matches only its own copy', () => {
+  const stamp = '2026-10-20 1718';
+  const notes = ['Alpha', 'Beta', 'Gamma'].map((name) => md(`Notes/${name}.md`, `phone ${name}\n`, { conflict: true }));
+  const copies = ['Alpha', 'Beta', 'Gamma'].map((name) => md(`Notes/${name} (conflict ${stamp}).md`, `github ${name}\n`, { conflictCopy: true }));
+  const all = [...copies.slice().reverse(), ...notes];
+  assert.equal(matchConflictCopy(all, notes[1]).path, `Notes/Beta (conflict ${stamp}).md`);
+  assert.equal(matchConflictCopy(all, notes[0]).path, `Notes/Alpha (conflict ${stamp}).md`);
+  assert.equal(matchConflictCopy(all, notes[2]).path, `Notes/Gamma (conflict ${stamp}).md`);
+  const recorded = { ...notes[1], conflictCopyPath: `Notes/Beta (conflict ${stamp}).md` };
+  assert.equal(matchConflictCopy(all, recorded).path, recorded.conflictCopyPath);
+  assert.equal(matchConflictCopy(copies.filter((c) => !c.path.includes('Beta')), notes[1]), null);
+  assert.equal(matchConflictCopy(all, { ...notes[1], conflictCopyPath: 'Notes/Beta (conflict 2026-01-01 0000).md' }), null);
+  const listed = listConflicts(all).filter((item) => item.role === 'note');
+  for (const item of listed) {
+    assert.equal(item.siblingPath, item.path.replace(/\.md$/, ` (conflict ${stamp}).md`));
+  }
+});
+
+test('a note name that prefixes another never claims its copy', () => {
+  assert.equal(isExactConflictCopyPath('Notes/sL.md', 'Notes/sL1 (conflict 2026-10-20 1718).md'), false);
+  assert.equal(isExactConflictCopyPath('Notes/sL1.md', 'Notes/sL1 (conflict 2026-10-20 1718-2).md'), true);
+  assert.equal(isExactConflictCopyPath('Notes/sL1.md', 'Other/sL1 (conflict 2026-10-20 1718).md'), false);
+  const files = [
+    md('Notes/sL1.md', 'phone one\n', { conflict: true }),
+    md('Notes/sL2.md', 'phone two\n', { conflict: true }),
+    md('Notes/sL1 (conflict 2026-10-20 1718).md', 'github one\n', { conflictCopy: true }),
+    md('Notes/sL2 (conflict 2026-10-20 1718).md', 'github two\n', { conflictCopy: true }),
+  ];
+  const sL2 = files[1];
+  const merged = hunksForConflict(sL2, matchConflictCopy(files, sL2));
+  assert.deepEqual(merged.hunks[0].github, ['github two']);
+  const sL1 = files[0];
+  assert.deepEqual(hunksForConflict(sL1, matchConflictCopy(files, sL1)).hunks[0].github, ['github one']);
+});
+
+test('resolve refuses to save an empty body unless both sides are empty', () => {
+  const legacy = md('Notes/sL2.md', 'phone two\n', { conflict: true });
+  assert.throws(() => planResolution({ file: legacy, hunks: [], mode: 'github', now: 1 }), { message: MISSING_REMOTE_ERROR });
+  assert.throws(() => planResolution({ file: legacy, hunks: [], mode: 'separate', now: 1 }), { message: MISSING_REMOTE_ERROR });
+  const known = { ...legacy, conflictRemote: 'github two\n', conflictRemoteSha: 'blob-s2', conflictRemoteKnown: true };
+  const kept = planResolution({ file: known, hunks: [], mode: 'github', now: 1 });
+  assert.equal(kept.put.find((item) => item.path === known.path).content, 'github two\n');
+  const remoteEmpty = { ...legacy, conflictRemote: '', conflictRemoteKnown: true };
+  assert.throws(() => planResolution({ file: remoteEmpty, hunks: [], mode: 'github', now: 1 }), { message: EMPTY_RESOLVE_ERROR });
+  assert.throws(
+    () => planResolution({ file: known, hunks: merge2('phone two\n', 'github two\n').hunks, mode: 'merge', editedText: '', now: 1 }),
+    { message: EMPTY_RESOLVE_ERROR },
+  );
+  assert.throws(
+    () => planResolution({ file: known, hunks: merge2('phone two\n', 'github two\n').hunks, mode: 'merge', now: 1 }),
+    { message: EMPTY_RESOLVE_ERROR },
+  );
+  assert.throws(() => planResolution({ file: { ...known, content: undefined }, hunks: [], mode: 'phone', now: 1 }), { message: EMPTY_RESOLVE_ERROR });
+  const bothEmpty = { ...legacy, content: '', conflictRemote: '', conflictRemoteKnown: true };
+  const empty = planResolution({ file: bothEmpty, hunks: [], mode: 'github', now: 1 });
+  assert.equal(empty.put.find((item) => item.path === legacy.path).content, '');
 });
 
 test('addition and deletion colors pass contrast in light and dark', () => {
