@@ -53,6 +53,10 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
   let pendingOffer = '';
   let remoteNote = null;
   let remoteReason = '';
+  let remoteState = '';
+  let remoteTitle = '';
+  let remoteHint = '';
+  let busy = false;
   let opening = 0;
   const card = sheet.querySelector('.sheet-card');
   const toastHome = toast.parentNode;
@@ -217,8 +221,9 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     if (next) next.disabled = focusAt >= conflicts.length - 1;
     const resolve = doc.getElementById('conflict-resolve-button');
     if (resolve) {
-      const ready = choice === 'phone' || choice === 'github' || choice === 'separate' || left === 0;
-      resolve.disabled = !ready;
+      const remoteReady = hasConflictRemote(currentFile());
+      const ready = choice === 'phone' || choice === 'github' || choice === 'separate' || (remoteReady && left === 0);
+      resolve.disabled = busy || !ready;
     }
     const preview = resolveView.querySelector('#merge-preview');
     const editor = resolveView.querySelector('#merge-editor');
@@ -282,19 +287,19 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     both.id = 'keep-both';
     both.setAttribute('aria-pressed', choice === 'separate' ? 'true' : 'false');
     const remoteReady = hasConflictRemote(file);
-    github.disabled = !remoteReady;
-    both.disabled = !remoteReady;
+    phone.disabled = busy;
+    github.disabled = busy || !remoteReady;
+    both.disabled = busy || !remoteReady;
     phone.addEventListener('click', () => chooseWhole('phone'));
     github.addEventListener('click', () => chooseWhole('github'));
     both.addEventListener('click', () => chooseWhole('separate'));
     actions.append(phone, github, both);
     whole.append(actions);
-    if (!remoteReady) {
-      const why = el(doc, 'p', 'conflict-remote-missing', remoteReason || "Keep GitHub is off: GitHub's version of this note is not on this phone.");
-      why.id = 'conflict-remote-missing';
-      whole.append(why);
-    }
     resolveView.append(whole);
+    if (!remoteReady) {
+      renderUnavailable(file);
+      return;
+    }
 
     const phoneWhen = formatWhen(file.updatedAt);
     const githubWhen = formatWhen(file.conflictRemoteAt || file.conflictAt);
@@ -363,8 +368,49 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     preview.id = 'merge-preview';
     resolveView.append(editLabel, previewHeading, preview);
 
-    const resolve = button(doc, 'conflict-primary', 'Resolve');
+    mountResolveButton();
+    refreshChrome();
+    const conflicts = [...resolveView.querySelectorAll('.hunk-conflict')];
+    if (conflicts[focusAt]) conflicts[focusAt].scrollIntoView({ block: 'nearest' });
+  }
+
+  // Without GitHub's text there is nothing honest to diff against, so the
+  // phone's text is shown as-is and only Keep phone or Try again are offered.
+  function renderUnavailable(file) {
+    const fixedStep = stepBar();
+    if (fixedStep) fixedStep.hidden = true;
+    for (const bar of resolveView.querySelectorAll('.conflict-bar')) bar.remove();
+    const box = el(doc, 'section', 'conflict-remote-missing');
+    box.id = 'conflict-remote-missing';
+    box.dataset.state = remoteState || 'missing';
+    box.append(el(doc, 'h3', 'conflict-remote-title', remoteTitle || "GitHub's version isn't on this phone"));
+    box.append(el(doc, 'p', 'conflict-remote-reason', remoteHint || remoteReason || "Keep GitHub stays off until it loads. Tap Try again."));
+    const retry = button(doc, 'conflict-dismiss', 'Try again');
+    retry.id = 'conflict-retry-remote';
+    retry.disabled = busy;
+    retry.addEventListener('click', () => openResolve(file.path));
+    box.append(retry);
+    resolveView.append(box);
+    const side = el(doc, 'div', 'conflict-side');
+    const head = el(doc, 'div', 'conflict-side-head');
+    head.append(el(doc, 'span', 'conflict-side-title', 'On this phone'));
+    const body = el(doc, 'pre', 'diff-block conflict-plain');
+    body.id = 'conflict-phone-text';
+    body.textContent = String(file.content ?? '') || '(empty note)';
+    side.append(head, body);
+    resolveView.append(side);
+    const previewHeading = el(doc, 'h3', 'merge-preview-heading', 'Preview');
+    const preview = el(doc, 'pre', 'merge-preview');
+    preview.id = 'merge-preview';
+    resolveView.append(previewHeading, preview);
+    mountResolveButton();
+    refreshChrome();
+  }
+
+  function mountResolveButton() {
+    const resolve = button(doc, 'conflict-primary', busy ? 'Syncing…' : 'Resolve');
     resolve.id = 'conflict-resolve-button';
+    if (busy) resolve.setAttribute('aria-busy', 'true');
     resolve.addEventListener('click', () => confirm());
     const actionBar = resolveBar();
     if (actionBar) {
@@ -373,9 +419,6 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     } else {
       resolveView.append(resolve);
     }
-    refreshChrome();
-    const conflicts = [...resolveView.querySelectorAll('.hunk-conflict')];
-    if (conflicts[focusAt]) conflicts[focusAt].scrollIntoView({ block: 'nearest' });
   }
 
   function sideBlock(title, when, marks) {
@@ -432,7 +475,33 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     renderResolve();
   }
 
+  // Resolving waits for a full sync, which can take a few seconds. The screen
+  // shows that it is working and ignores taps until the plan is applied.
+  function setBusy(on) {
+    busy = on;
+    const resolve = doc.getElementById('conflict-resolve-button');
+    if (resolve) {
+      const online = !doc.defaultView || !doc.defaultView.navigator || doc.defaultView.navigator.onLine !== false;
+      resolve.textContent = on ? (online ? 'Syncing…' : 'Saving…') : 'Resolve';
+      if (on) resolve.setAttribute('aria-busy', 'true');
+      else resolve.removeAttribute('aria-busy');
+    }
+    const controls = [...resolveView.querySelectorAll('button, textarea')];
+    if (resolve) controls.push(resolve);
+    for (const node of controls) {
+      if (on) {
+        node.dataset.wasDisabled = node.disabled ? 'true' : 'false';
+        node.disabled = true;
+      } else if (node.dataset.wasDisabled) {
+        node.disabled = node.dataset.wasDisabled === 'true';
+        delete node.dataset.wasDisabled;
+      }
+    }
+    if (!on) refreshChrome();
+  }
+
   async function confirm() {
+    if (busy) return;
     const file = currentFile();
     if (!file) return;
     const mode = choice === 'phone' || choice === 'github' || choice === 'separate' ? choice : 'merge';
@@ -454,12 +523,15 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     }
     const sibling = siblingFor(file);
     let result;
+    setBusy(true);
     try {
       result = await apply(plan);
     } catch (error) {
+      setBusy(false);
       showToast(error && error.message ? error.message : 'Nothing was saved.', null);
       return;
     }
+    busy = false;
     remoteNote = null;
     pendingOffer = sibling && sibling.path ? sibling.path : '';
     showToast(plan.summary, async () => {
@@ -487,6 +559,10 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     path = file.path;
     remoteNote = null;
     remoteReason = '';
+    remoteState = '';
+    remoteTitle = '';
+    remoteHint = '';
+    busy = false;
     choice = '';
     handwritten = false;
     focusAt = 0;
@@ -533,6 +609,9 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
       }
     } else {
       remoteReason = loaded && loaded.reason ? loaded.reason : '';
+      remoteState = loaded && loaded.state ? loaded.state : 'failed';
+      remoteTitle = loaded && loaded.title ? loaded.title : '';
+      remoteHint = loaded && loaded.hint ? loaded.hint : '';
     }
     if (ticket !== opening || resolveView.hidden) return;
     showResolve(currentFile(), sibling);
