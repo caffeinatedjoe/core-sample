@@ -250,6 +250,11 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
     const before = patches;
     await page.locator('#conflict-resolve-button').click();
     await page.waitForSelector('#undo-toast:not([hidden])');
+    const lingering = await page.evaluate(() => {
+      const node = document.getElementById('conflict-resolve-button');
+      return Boolean(node && (node.textContent === 'Syncing…' || node.hasAttribute('aria-busy')));
+    });
+    assert.equal(lingering, false);
     await shot('undo-toast.png');
     await page.locator('#undo-toast-action').click();
     await page.waitForFunction(() => document.getElementById('source')?.value === 'phone\nkeep\n');
