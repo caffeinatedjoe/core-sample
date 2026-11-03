@@ -1,4 +1,4 @@
-import { commitFiles, deleteMeta, deleteOps, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, setMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -31,6 +31,7 @@ import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
 import { createAutoSync, loadConflictRemote, syncAlert } from './github-sync.js';
 import { mountDrawer } from './drawer.js';
+import { LONG_PRESS, SLOP } from './drawer-gesture.js';
 import { basename } from './embeds.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
@@ -50,9 +51,11 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   const formError = doc.getElementById('new-note-error');
   const search = doc.getElementById('notes-search');
   const searchCase = doc.getElementById('search-case');
+  const searchCancel = doc.getElementById('search-cancel');
   const searchOptions = doc.getElementById('search-options');
   const searchOptionsPanel = doc.getElementById('search-options-panel');
   const searchContent = doc.getElementById('search-content');
+  const drawerPanel = list?.closest?.('.drawer-panel') || doc.querySelector?.('.drawer-panel');
   const panelBox = doc.getElementById('action-panel');
   const backupFile = doc.getElementById('backup-file');
   const backupBox = doc.getElementById('backup-panel');
@@ -65,6 +68,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let recent = [];
   let expanded = new Set();
   let query = '';
+  let searching = false;
+  let vaultPaths = null;
   let matchCase = false;
   let panel = null;
   let backupStep = null;
@@ -506,26 +511,56 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     closeSheet();
   }
 
+  function paintSearchMode() {
+    drawerPanel?.classList?.toggle?.('is-searching', searching);
+    if (searchCancel) searchCancel.hidden = !searching;
+    if (!searching) {
+      query = '';
+      if (search) search.value = '';
+      if (searchOptionsPanel) searchOptionsPanel.hidden = true;
+      searchOptions?.setAttribute?.('aria-expanded', 'false');
+    }
+  }
+
+  function setSearching(on) {
+    searching = Boolean(on);
+    paintSearchMode();
+    renderList();
+  }
+
   function renderList() {
-    const rows = listBrowser({
-      files,
-      folders,
-      expanded: [...expanded],
-      recent,
-      query,
-      currentPath: current ? current.path : '',
-      matchCase,
-      searchContent: searchContent ? searchContent.checked !== false : true,
-    });
-    list.replaceChildren();
-    for (const row of rows) list.append(renderRow(row));
-    if (vaultCount) vaultCount.textContent = vaultSummary(files, folders).text;
+    const q = searching ? query : '';
+    if (searching && !String(q || '').trim()) {
+      list.replaceChildren();
+    } else {
+      const rows = listBrowser({
+        files,
+        folders,
+        expanded: [...expanded],
+        recent,
+        query: q,
+        currentPath: current ? current.path : '',
+        matchCase,
+        searchContent: searchContent ? searchContent.checked !== false : true,
+      });
+      list.replaceChildren();
+      for (const row of rows) list.append(renderRow(row));
+    }
+    if (vaultCount) vaultCount.textContent = vaultSummary(files, folders, vaultPaths).text;
   }
 
   async function paintVault() {
-    if (!vaultName) return;
-    const settings = await embedSettings();
-    vaultName.textContent = (settings.repo || '').split('/').pop() || 'Core Sample';
+    if (vaultName) {
+      const settings = await embedSettings();
+      vaultName.textContent = (settings.repo || '').split('/').pop() || 'Core Sample';
+    }
+    try {
+      const index = await getMeta(db, 'githubVaultIndex');
+      vaultPaths = index && Array.isArray(index.paths) ? index.paths : null;
+    } catch {
+      vaultPaths = null;
+    }
+    if (vaultCount) vaultCount.textContent = vaultSummary(files, folders, vaultPaths).text;
   }
 
   function renderRow(row) {
@@ -566,15 +601,61 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const name = doc.createElement('span');
       name.className = 'note-name';
       name.textContent = row.title;
-      const detail = doc.createElement('span');
-      detail.className = 'note-path';
-      detail.textContent = row.detail || row.path;
-      openBtn.append(name, detail);
+      openBtn.append(name);
+      if (row.detail) {
+        const detail = doc.createElement('span');
+        detail.className = 'note-path';
+        detail.textContent = row.detail;
+        openBtn.append(detail);
+      }
       openBtn.addEventListener('click', () => openPath(row.path));
     }
     item.className = 'browser-row';
-    item.append(openBtn, textButton('Edit', () => openItem(row.path, row.type === 'folder' ? 'folder' : 'note')));
+    item.append(openBtn);
+    bindRowMenu(item, row.path, row.type === 'folder' ? 'folder' : 'note');
     return item;
+  }
+
+  function bindRowMenu(item, path, kind) {
+    const view = doc.defaultView || globalThis;
+    let timer = 0;
+    let start = null;
+    let opened = false;
+
+    const cancelHold = () => {
+      if (timer) view.clearTimeout?.(timer);
+      timer = 0;
+      start = null;
+    };
+
+    item.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      opened = true;
+      openItem(path, kind);
+    });
+    item.addEventListener('touchstart', (event) => {
+      const touch = event.changedTouches && event.changedTouches[0];
+      if (!touch) return;
+      start = { x: touch.clientX, y: touch.clientY };
+      opened = false;
+      timer = view.setTimeout?.(() => {
+        opened = true;
+        openItem(path, kind);
+      }, LONG_PRESS);
+    }, { passive: true });
+    item.addEventListener('touchmove', (event) => {
+      const touch = event.changedTouches && event.changedTouches[0];
+      if (!start || !touch) return;
+      if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > SLOP) cancelHold();
+    }, { passive: true });
+    item.addEventListener('touchend', cancelHold);
+    item.addEventListener('touchcancel', cancelHold);
+    item.addEventListener('click', (event) => {
+      if (!opened) return;
+      event.preventDefault();
+      event.stopPropagation();
+      opened = false;
+    }, true);
   }
 
   function textButton(label, onClick, className = 'row-more') {
@@ -1007,6 +1088,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     afterClose() {
       closePanel();
       if (form) form.hidden = true;
+      if (searching) setSearching(false);
     },
     blocked: () => booting || overlayOpen(),
   });
@@ -1033,9 +1115,23 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     saver.schedule(snapshot);
   }
 
-  search.addEventListener('input', () => {
+  search?.addEventListener('focus', () => {
+    if (!searching) setSearching(true);
+  });
+  search?.addEventListener('input', () => {
     query = search.value;
+    if (!searching) {
+      searching = true;
+      paintSearchMode();
+    }
     renderList();
+  });
+  search?.addEventListener('blur', () => {
+    if (searching && !String(search.value || '').trim()) setSearching(false);
+  });
+  searchCancel?.addEventListener('click', () => {
+    setSearching(false);
+    search?.blur?.();
   });
   searchCase?.addEventListener('click', () => {
     matchCase = !matchCase;
@@ -1048,10 +1144,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     searchOptions.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   searchContent?.addEventListener('change', renderList);
-  doc.getElementById('search-button')?.addEventListener('click', () => {
-    search.focus();
-    search.select?.();
-  });
   doc.getElementById('new-note-button')?.addEventListener('click', () => {
     formError.textContent = '';
     closePanel();
@@ -1437,6 +1529,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     applyDownload,
     eraseLocal,
     hold: holdEditor,
+    opened: () => drawer.close(),
   });
 
   function hideFlush() {

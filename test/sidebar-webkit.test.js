@@ -56,12 +56,18 @@ test('webkit sidebar opens from the panel button and closes on the dimmed note o
     assert.ok(Math.abs(open.width - 390 * 0.85) <= 2, `panel width ${open.width}`);
     assert.equal(await page.locator('#vault-name').textContent(), 'zt_vault');
     assert.equal(await page.locator('#vault-count').textContent(), '3 files, 2 folders');
-    for (const id of ['#notes-button', '#search-case', '#search-options', '#new-note-button', '#new-folder-button', '#settings-button']) {
+    assert.equal(await page.locator('.row-more').count(), 0, 'no per-row Edit');
+    assert.equal(await page.locator('#vault-button').count(), 0, 'the vault name is not a button');
+    for (const id of ['#notes-button', '#new-note-button', '#new-folder-button', '#settings-button']) {
       const box = await page.locator(id).boundingBox();
       assert.ok(box.width >= 44 && box.height >= 44, `${id} is ${box.width}x${box.height}`);
     }
-    const pill = await page.locator('#search-button').boundingBox();
+    const pill = await page.locator('#search-bar').boundingBox();
+    const tree = await page.locator('#notes-list').boundingBox();
     assert.ok(pill.height >= 44 && pill.width > 200);
+    assert.ok(pill.y > tree.y, 'search sits at the bottom of the panel');
+    const title = await page.locator('#note-title').boundingBox();
+    assert.ok(title.width > 180, `title width ${title.width}`);
     await shot(page, 'sidebar-open.png');
 
     await page.locator('#notes-close').click();
@@ -124,18 +130,23 @@ test('webkit sidebar search replaces the tree and says No matches found.', { tim
     await openApp(page, url, ROWS, 'Welcome.md', META);
     await page.locator('#notes-button').click();
     await settled(page, true);
-    await page.locator('#search-button').click();
+    await page.locator('#notes-search').click();
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'notes-search');
+    assert.equal(await page.locator('.drawer-panel').evaluate((node) => node.classList.contains('is-searching')), true);
+    assert.equal(await page.locator('.browser-label').count(), 0, 'the tree is replaced while searching');
 
     await page.locator('#notes-search').fill('basanite');
     await page.waitForFunction(() => document.getElementById('notes-list').textContent.trim() === 'No matches found.');
-    assert.equal(await page.locator('.browser-label').count(), 0, 'the tree is replaced while searching');
     await shot(page, 'sidebar-search-empty.png');
 
     await page.locator('#notes-search').fill('quartz');
     await page.waitForFunction(() => document.querySelectorAll('#notes-list .note-link').length === 1);
-    assert.match(await page.locator('#notes-list').innerText(), /Basalt[\s\S]*quartz vein/);
-    await shot(page, 'sidebar-search-hit.png');
+    assert.match(await page.locator('#notes-list').innerText(), /Basalt/);
+    assert.equal(await page.locator('.note-path').count(), 0, 'rows are name-only');
+    const field = await page.locator('#search-bar').boundingBox();
+    const results = await page.locator('#notes-list').boundingBox();
+    assert.ok(field.y > results.y, 'the field stays at the bottom with results');
+    await shot(page, 'sidebar-search-results.png');
 
     await page.locator('#notes-search').fill('QUARTZ');
     await page.waitForFunction(() => document.querySelectorAll('#notes-list .note-link').length === 1);
@@ -150,8 +161,9 @@ test('webkit sidebar search replaces the tree and says No matches found.', { tim
     await page.locator('#notes-search').fill('core');
     await page.waitForFunction(() => document.querySelectorAll('#notes-list .note-link').length === 1);
 
-    await page.locator('#notes-search').fill('');
+    await page.locator('#search-cancel').click();
     await page.waitForFunction(() => document.querySelectorAll('#notes-list .browser-label').length >= 2);
+    assert.equal(await page.locator('.drawer-panel').evaluate((node) => node.classList.contains('is-searching')), false);
     assert.deepEqual(errors, []);
   });
 });
@@ -176,13 +188,11 @@ test('webkit gear opens Settings with GitHub, sync, backup and the build id', { 
     assert.equal(await page.locator('#layout-debug').isVisible(), true);
     await page.locator('#build-version').click();
 
+    await page.waitForFunction(() => !document.getElementById('notes-sheet').classList.contains('is-open'));
+    assert.equal(await page.locator('#github-export-backup').count(), 0, 'export lives in Backup only');
     await page.locator('#settings-close').click();
     await page.waitForSelector('#settings-sheet', { state: 'hidden' });
-    assert.equal((await drawerState(page)).open, true, 'Done returns to the sidebar');
-
-    await page.locator('#vault-button').click();
-    await page.waitForSelector('#settings-sheet:not([hidden])');
-    await page.locator('#settings-close').click();
+    assert.equal((await drawerState(page)).open, false, 'Done returns to the note');
     assert.deepEqual(errors, []);
   });
 });
@@ -204,4 +214,70 @@ test('webkit sidebar and Settings follow the dark system setting', { timeout: 90
     await shot(page, 'settings-dark.png');
     assert.deepEqual(errors, []);
   }, { colorScheme: 'dark' });
+});
+
+test('webkit long-press on a sidebar row opens rename, move and delete', { timeout: 90000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, ROWS, 'Welcome.md', META);
+    await page.locator('#notes-button').click();
+    await settled(page, true);
+    await page.locator('.browser-row', { hasText: 'Welcome' }).first().dispatchEvent('contextmenu');
+    await page.waitForSelector('#action-panel:not([hidden])');
+    for (const label of ['Rename', 'Move', 'Delete', 'Cancel']) {
+      assert.equal(await page.getByRole('button', { name: label, exact: true }).isVisible(), true, label);
+    }
+    await shot(page, 'sidebar-row-menu.png');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit signed-in Settings hides client id behind Advanced', { timeout: 90000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, ROWS, 'Welcome.md', {
+      ...META,
+      githubToken: 'gho_testtokenvalue123456',
+      githubLogin: 'joe',
+      githubClientId: 'Iv1.public',
+      githubRelay: 'https://relay.example',
+    });
+    await page.locator('#notes-button').click();
+    await settled(page, true);
+    await page.locator('#settings-button').click();
+    await page.waitForSelector('#settings-sheet:not([hidden])');
+    await page.waitForFunction(() => !document.getElementById('notes-sheet').classList.contains('is-open'));
+    assert.equal(await page.locator('#github-advanced').evaluate((node) => node.open), false);
+    assert.equal(await page.locator('#github-client-id').isVisible(), false);
+    assert.equal(await page.locator('#github-relay').isVisible(), false);
+    assert.equal(await page.locator('#github-save-config').isVisible(), false);
+    assert.equal(await page.locator('#export-backup').isVisible(), true);
+    assert.equal(await page.locator('#github-export-backup').count(), 0);
+    await shot(page, 'settings-signed-in.png');
+    await page.locator('#github-advanced > summary').click();
+    assert.equal(await page.locator('#github-client-id').isVisible(), true);
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit wrapped task lines hang under the text', { timeout: 90000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    const wrap = '- [ ] A long field note about the ridge quartz that must wrap onto a second line on an iPhone so the hang indent is visible under the words and not the checkbox\n- [x] Another wrapped completed task with enough words about clay strata and basalt cores to wrap as well\n';
+    await openApp(page, url, [note('Tasks.md', `# Tasks\n\n${wrap}`)], 'Tasks.md');
+    await page.waitForFunction(() => document.querySelectorAll('#source .cm-task-line').length >= 2);
+    const hang = await page.evaluate(() => {
+      const line = document.querySelector('#source .cm-task-line');
+      const style = getComputedStyle(line);
+      return {
+        hang: style.getPropertyValue('--list-hang').trim(),
+        marker: style.getPropertyValue('--list-marker').trim(),
+        indent: style.textIndent,
+        height: line.getBoundingClientRect().height,
+        title: document.getElementById('note-title').getBoundingClientRect().width,
+      };
+    });
+    assert.ok(hang.height > 36, `wrapped height ${hang.height}`);
+    assert.equal(hang.hang === '0ch' || hang.hang === '0', true, hang.hang);
+    assert.ok(hang.title > 180, `title width ${hang.title}`);
+    await shot(page, 'live-wrapped-task.png');
+    assert.deepEqual(errors, []);
+  });
 });

@@ -435,15 +435,12 @@ test('the startup check paints the saved sign-in before a timeout and never show
       if (String(url) === 'https://api.github.com/user') calls += 1;
       return new Promise(() => {});
     });
-    let exported = 0;
+    let opened = 0;
     const app = mountGithub(seen.doc, db, {
       now: () => clock,
       sleep: () => Promise.resolve(),
       accessTimeoutMs: 30,
-      exportBackup: async () => {
-        exported += 1;
-        return true;
-      },
+      opened: () => { opened += 1; },
     });
     await app.refresh();
     app.resume();
@@ -455,8 +452,8 @@ test('the startup check paints the saved sign-in before a timeout and never show
     assert.equal(seen.nodes['github-status'].textContent, '');
     assert.equal(await loadPendingFlow(db), null);
     assert.equal(seen.nodes['github-storage'].textContent, 'Storage on this phone is set to stay.');
-    seen.nodes['github-export-backup'].click();
-    await until(() => exported === 1);
+    assert.equal(seen.nodes['github-advanced'].open, false);
+    assert.equal(seen.nodes['github-advanced'].classList.contains('is-bare'), false);
     await app.whenChecked();
     assert.equal(seen.nodes['github-login'].textContent, 'Signed in as octocat. Couldn\'t reach GitHub (timed out)');
     assert.equal(seen.nodes['github-connect'].hidden, true);
@@ -465,6 +462,7 @@ test('the startup check paints the saved sign-in before a timeout and never show
 
     seen.nodes['settings-button'].click();
     await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(opened, 1);
     assert.equal(calls, 1);
 
     clock += 10 * 60 * 1000;

@@ -149,6 +149,13 @@ export function mountGithub(doc, db, hooks) {
       failureLine.textContent = text;
       failureLine.hidden = !text;
     }
+    const advanced = doc.getElementById('github-advanced');
+    if (advanced) {
+      const wasBare = advanced.classList?.contains?.('is-bare');
+      advanced.classList?.toggle?.('is-bare', !signedIn);
+      if (!signedIn) advanced.open = true;
+      else if (wasBare) advanced.open = false;
+    }
     return pendingLive;
   }
 
@@ -597,15 +604,14 @@ export function mountGithub(doc, db, hooks) {
   }
 
   function openSettings() {
+    hooks.opened?.();
     sheet.hidden = false;
     refresh().then(() => {
       kick();
     }).catch((error) => showError(error));
   }
 
-  for (const id of ['settings-button', 'vault-button']) {
-    doc.getElementById(id)?.addEventListener('click', openSettings);
-  }
+  doc.getElementById('settings-button')?.addEventListener('click', openSettings);
   doc.getElementById('settings-close').addEventListener('click', () => {
     sheet.hidden = true;
   });
@@ -621,13 +627,6 @@ export function mountGithub(doc, db, hooks) {
   if (signAgain) {
     signAgain.addEventListener('click', () => {
       connect();
-    });
-  }
-  const exportBackupButton = doc.getElementById('github-export-backup');
-  if (exportBackupButton) {
-    exportBackupButton.addEventListener('click', () => {
-      if (!hooks.exportBackup) return;
-      Promise.resolve(hooks.exportBackup()).catch((error) => showError(error));
     });
   }
   codeButton.addEventListener('click', () => {

@@ -42,19 +42,6 @@
       <div class="drawer-dim" aria-hidden="true"></div>
       <button type="button" id="notes-close" class="drawer-scrim" aria-label="Close notes" tabindex="-1"></button>
       <nav class="drawer-panel" role="dialog" aria-modal="true" aria-label="Notes">
-        <div class="search-row">
-          <label class="search-field">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>
-            <input id="notes-search" type="search" placeholder="Search..." enterkeyhint="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search notes">
-          </label>
-          <button type="button" id="search-case" class="search-toggle" aria-pressed="false" aria-label="Match case">Aa</button>
-          <button type="button" id="search-options" class="search-toggle" aria-expanded="false" aria-controls="search-options-panel" aria-label="Search options">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2"></circle><circle cx="9" cy="17" r="2"></circle></svg>
-          </button>
-        </div>
-        <div id="search-options-panel" class="search-options" hidden>
-          <label class="check-row"><input id="search-content" type="checkbox" checked> Search note text</label>
-        </div>
         <div class="drawer-tools">
           <button type="button" id="new-note-button" class="tool-button" aria-label="New note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"></path><path d="M17.5 3.5a1.8 1.8 0 0 1 2.5 2.5L13 13l-3.2.7.7-3.2z"></path></svg>
@@ -71,16 +58,25 @@
         <div id="action-panel" class="action-panel" hidden></div>
         <ul id="notes-list" class="notes-list"></ul>
         <footer class="drawer-foot">
-          <button type="button" id="search-button" class="search-pill">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>
-            <span>Search</span>
-            <svg class="pill-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9.5 4-4 4 4M8 14.5l4 4 4-4"></path></svg>
-          </button>
-          <div class="vault-row">
-            <button type="button" id="vault-button" class="vault-button">
-              <span class="vault-line"><span id="vault-name" class="vault-name">Core Sample</span><svg class="vault-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></span>
-              <span id="vault-count" class="vault-count"></span>
+          <div id="search-bar" class="search-bar">
+            <label class="search-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>
+              <input id="notes-search" type="search" placeholder="Search..." enterkeyhint="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search notes">
+            </label>
+            <button type="button" id="search-case" class="search-toggle" aria-pressed="false" aria-label="Match case">Aa</button>
+            <button type="button" id="search-options" class="search-toggle" aria-expanded="false" aria-controls="search-options-panel" aria-label="Search options">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2"></circle><circle cx="9" cy="17" r="2"></circle></svg>
             </button>
+            <button type="button" id="search-cancel" class="search-toggle" hidden>Cancel</button>
+          </div>
+          <div id="search-options-panel" class="search-options" hidden>
+            <label class="check-row"><input id="search-content" type="checkbox" checked> Search note text</label>
+          </div>
+          <div class="vault-row">
+            <div class="vault-meta">
+              <span id="vault-name" class="vault-name">Core Sample</span>
+              <span id="vault-count" class="vault-count"></span>
+            </div>
             <button type="button" id="settings-button" class="round-button" aria-label="Settings">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>
             </button>
@@ -109,15 +105,19 @@
             <p class="github-lead">Sign in with a device code. The token stays on this phone. Saved notes sync with the branch after a short pause.</p>
             <p id="github-storage" class="github-note"></p>
             <p id="github-auth-failure" class="github-note" hidden></p>
-            <button type="button" id="github-export-backup">Export backup</button>
-            <label>Client id
-              <input id="github-client-id" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="From your OAuth app">
-            </label>
-            <label>Relay URL
-              <input id="github-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://….workers.dev">
-            </label>
+            <details id="github-advanced" class="github-advanced is-bare" open>
+              <summary>Advanced</summary>
+              <label>Client id
+                <input id="github-client-id" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="From your OAuth app">
+              </label>
+              <label>Relay URL
+                <input id="github-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://….workers.dev">
+              </label>
+              <div class="github-actions">
+                <button type="button" id="github-save-config">Save</button>
+              </div>
+            </details>
             <div class="github-actions">
-              <button type="button" id="github-save-config">Save</button>
               <button type="button" id="github-connect">Connect</button>
             </div>
             <div id="github-device" hidden>

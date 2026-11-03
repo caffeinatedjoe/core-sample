@@ -162,9 +162,7 @@ a:focus-visible {
 .round-button svg,
 .tool-button svg,
 .search-toggle svg,
-.search-field svg,
-.search-pill svg,
-.vault-caret {
+.search-field svg {
   width: 22px;
   height: 22px;
   fill: none;
@@ -264,6 +262,14 @@ a:focus-visible {
 }
 
 #source .cm-line { padding: 0; }
+
+/* Soft-wrapped list and task lines hang under the text, not the marker.
+   --list-hang is the source indent in ch; --list-marker is the checkbox/bullet. */
+#source .cm-line.cm-task-line,
+#source .cm-line.cm-list-line {
+  padding-left: calc(var(--list-hang, 0ch) + var(--list-marker));
+  text-indent: calc(-1 * var(--list-marker));
+}
 #source .cm-placeholder { color: var(--muted); }
 
 #source .cm-line.cm-heading {
@@ -630,11 +636,10 @@ html.viewer-scroll-lock body {
   transition: none;
 }
 
-.search-row {
+.search-bar {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 6px 4px 12px;
 }
 
 .search-field {
@@ -643,9 +648,9 @@ html.viewer-scroll-lock body {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 40px;
-  padding: 0 10px;
-  border-radius: 10px;
+  min-height: 48px;
+  padding: 0 16px;
+  border-radius: 24px;
   background: var(--chip);
   color: var(--panel-muted);
 }
@@ -715,10 +720,29 @@ html.viewer-scroll-lock body {
   accent-color: var(--accent);
 }
 
+.drawer-panel.is-searching .drawer-tools,
+.drawer-panel.is-searching .new-note,
+.drawer-panel.is-searching .vault-row {
+  display: none;
+}
+
+#search-cancel {
+  min-width: 64px;
+  padding: 0 8px;
+  font-size: 15px;
+}
+
+.drawer-panel:not(.is-searching) #search-case,
+.drawer-panel:not(.is-searching) #search-options,
+.drawer-panel:not(.is-searching) #search-cancel,
+.drawer-panel:not(.is-searching) #search-options-panel {
+  display: none;
+}
+
 .drawer-tools {
   display: flex;
   gap: 4px;
-  padding: 0 8px;
+  padding: calc(var(--safe-top) > 0px ? 0px : 4px) 8px 0;
 }
 
 .new-note {
@@ -854,6 +878,13 @@ html.viewer-scroll-lock body {
   font-size: 15px;
 }
 
+.browser-row,
+.note-link {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .note-link {
   width: 100%;
   min-width: 0;
@@ -862,11 +893,10 @@ html.viewer-scroll-lock body {
   background: transparent;
   color: inherit;
   border-radius: 10px;
-  padding: 10px;
+  padding: 12px 10px;
   min-height: 48px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
 }
 
 .note-link.is-current { background: var(--chip); }
@@ -898,72 +928,28 @@ html.viewer-scroll-lock body {
   border-top: 1px solid var(--panel-line);
 }
 
-.search-pill {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 24px;
-  background: var(--chip);
-  color: inherit;
-  font-size: 17px;
-  font-weight: 600;
-}
-
-.search-pill span {
-  flex: 1;
-  text-align: left;
-}
-
-.search-pill .pill-chevron {
-  width: 18px;
-  height: 18px;
-  color: var(--panel-muted);
-}
-
 .vault-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.vault-button {
+.vault-meta {
   flex: 1;
   min-width: 0;
-  min-height: 48px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   justify-content: center;
+  min-height: 48px;
   padding: 0 4px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-}
-
-.vault-line {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  max-width: 100%;
-  font-size: 16px;
-  font-weight: 700;
 }
 
 .vault-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.vault-caret {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  color: var(--panel-muted);
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .vault-count {
@@ -1009,6 +995,41 @@ html.viewer-scroll-lock body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--panel-muted);
+}
+
+.github-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.github-advanced > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.github-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.github-advanced > summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--panel-muted);
+  font-size: 14px;
+}
+
+.github-advanced[open] > summary::after {
+  content: "▾";
+}
+
+.github-advanced.is-bare > summary {
+  display: none;
 }
 
 .settings-value {
@@ -1155,24 +1176,32 @@ html.viewer-scroll-lock body {
 
 ::selection { background: #e4c9a4; color: #2b251f; }
 
-/* The note-screen sync flag: shown only for a conflict, a conflict copy, a
-   sign-in problem or a failed sync. */
+/* A 44pt target that reads as a small flag. The words stay in the DOM for
+   VoiceOver and the tests; they are clipped so they cannot squeeze the title. */
 .sync-status {
   grid-column: 3;
   justify-self: end;
-  max-width: 42vw;
+  width: 44px;
   min-height: 44px;
   margin: 0;
-  padding: 0 12px;
+  padding: 0;
   border: 0;
-  border-radius: 22px;
+  border-radius: 50%;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   background: var(--chip);
-  color: var(--danger);
-  font-size: 14px;
-  font-weight: 700;
+  color: transparent;
+  font-size: 1px;
+  line-height: 44px;
+}
+
+.sync-status::after {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 17px auto;
+  border-radius: 50%;
+  background: var(--danger);
 }
 
 .conflict-sheet {

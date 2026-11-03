@@ -50,6 +50,8 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
   let focusAt = 0;
   let undo = null;
   let toastTimer = null;
+  // Path of the leftover copy from the resolve that just finished. Always
+  // overwritten so an unanswered earlier prompt cannot name the wrong file.
   let pendingOffer = '';
   let remoteNote = null;
   let remoteReason = '';
@@ -121,11 +123,11 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     heading.textContent = 'Conflicts';
     listView.replaceChildren();
     if (pendingOffer) {
-      const leftover = (files() || []).find((file) => file.path === pendingOffer && file.conflictCopy && !file.trashedAt);
+      const leftover = (files() || []).find((file) => file.path === pendingOffer && !file.trashedAt);
       if (!leftover) pendingOffer = '';
       else {
         const offer = el(doc, 'div', 'conflict-offer');
-        offer.append(el(doc, 'p', 'conflict-offer-text', `Move “${leftover.path}” to Trash? You can restore it later.`));
+        offer.append(el(doc, 'p', 'conflict-offer-text', `Move “${pendingOffer}” to Trash? You can restore it later.`));
         const actions = el(doc, 'div', 'conflict-offer-actions');
         const trash = button(doc, 'conflict-primary', 'Move copy to Trash');
         trash.id = 'conflict-trash-copy';
@@ -522,6 +524,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
       return;
     }
     const sibling = siblingFor(file);
+    const leftoverPath = sibling && sibling.path ? sibling.path : '';
     let result;
     setBusy(true);
     try {
@@ -533,7 +536,9 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
     }
     setBusy(false);
     remoteNote = null;
-    pendingOffer = sibling && sibling.path ? sibling.path : '';
+    // Always this resolve's leftover, even if an earlier prompt was left up.
+    // Keep GitHub leaves the conflict copy; if there isn't one, offer the backup.
+    pendingOffer = leftoverPath || (plan.backup && plan.backup.path) || '';
     showToast(plan.summary, async () => {
       pendingOffer = '';
       if (result && result.undo) await result.undo();

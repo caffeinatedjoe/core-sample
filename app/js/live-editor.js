@@ -136,7 +136,11 @@ function decorate(view, hooks) {
   const to = visible[visible.length - 1].to;
   const out = [];
   for (const spec of liveSpecs(view.state, { ranges, from, to })) {
-    if (spec.type === 'line') out.push(Decoration.line({ class: spec.cls }).range(spec.at));
+    if (spec.type === 'line') {
+      const opts = { class: spec.cls };
+      if (spec.attrs) opts.attributes = spec.attrs;
+      out.push(Decoration.line(opts).range(spec.at));
+    }
     else if (spec.type === 'mark') out.push(Decoration.mark({ class: spec.cls }).range(spec.from, spec.to));
     else if (spec.type === 'hide') out.push(hidden.range(spec.from, spec.to));
     else if (spec.type === 'replace') out.push(Decoration.replace({ widget: new LiveWidget(spec.widget, hooks, 'inline') }).range(spec.from, spec.to));

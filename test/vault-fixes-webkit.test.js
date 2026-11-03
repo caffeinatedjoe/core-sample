@@ -199,7 +199,7 @@ async function mockGithub(context, state) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v30');
+  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v31');
   // start() records lastOpened and recent asynchronously; seeding before then gets overwritten.
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');
@@ -374,7 +374,7 @@ test('webkit restore after a synced delete uploads the note again', { timeout: 9
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced');
     await page.locator('#notes-button').click();
-    await page.locator('.browser-row', { hasText: 'Field Notes' }).locator('.row-more').first().click();
+    await page.locator('.browser-row', { hasText: 'Field Notes' }).first().dispatchEvent('contextmenu');
     await page.getByRole('button', { name: 'Delete' }).click();
     await page.getByRole('button', { name: 'Move to Trash' }).click();
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Changes pending');
@@ -403,7 +403,7 @@ test('webkit rename does not bring the old path back', { timeout: 90000 }, async
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced');
     await page.locator('#notes-button').click();
-    await page.locator('.browser-row', { hasText: 'Logs' }).locator('.row-more').first().click();
+    await page.locator('.browser-row', { hasText: 'Logs' }).first().dispatchEvent('contextmenu');
     await page.getByRole('button', { name: 'Rename' }).click();
     await page.locator('#action-panel input').fill('Journal');
     await page.getByRole('button', { name: 'Save' }).click();

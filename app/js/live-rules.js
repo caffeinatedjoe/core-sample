@@ -27,6 +27,16 @@ export function frontmatterEnd(doc) {
   return -1;
 }
 
+function indentColumns(text) {
+  let columns = 0;
+  for (const ch of String(text ?? '')) {
+    if (ch === ' ') columns += 1;
+    else if (ch === '\t') columns += 4 - (columns % 4);
+    else break;
+  }
+  return columns;
+}
+
 function spaceAfter(doc, pos, limit) {
   let end = pos;
   while (end < limit && /[ \t]/.test(doc.sliceString(end, end + 1))) end += 1;
@@ -106,9 +116,15 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
   const tree = syntaxTree(state);
   const specs = [];
   const lineClasses = new Map();
-  const addLine = (pos, cls) => {
+  const lineAttrs = new Map();
+  const addLine = (pos, cls, attrs) => {
     const at = doc.lineAt(pos).from;
     lineClasses.set(at, lineClasses.has(at) ? `${lineClasses.get(at)} ${cls}` : cls);
+    if (attrs) lineAttrs.set(at, { ...lineAttrs.get(at), ...attrs });
+  };
+  const hang = (pos, indent) => {
+    const at = doc.lineAt(pos).from;
+    lineAttrs.set(at, { ...lineAttrs.get(at), style: `--list-hang:${indentColumns(indent)}ch` });
   };
   const mark = (a, b, cls) => { if (b > a) specs.push({ type: 'mark', from: a, to: b, cls }); };
   const hide = (a, b) => { if (b > a) specs.push({ type: 'hide', from: a, to: b }); };
@@ -152,6 +168,7 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
       else replace(a, b, { kind: 'task', checked: task.checked });
       if (task.checked) mark(b, line.to, 'cm-task-done');
       addLine(line.from, 'cm-task-line');
+      hang(line.from, task.indent);
     }
     for (const item of scanLine(line.text, line.from, inlineCode)) {
       claims.push(item);
@@ -236,6 +253,9 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
         return undefined;
       }
       if (name === 'ListMark' && parent?.parent) {
+        const line = doc.lineAt(node.from);
+        addLine(line.from, 'cm-list-line');
+        hang(line.from, line.text.slice(0, node.from - line.from));
         if (parent.parent.name === 'OrderedList') mark(node.from, node.to, 'cm-list-number');
         else if (touches(ranges, node.from, node.to)) mark(node.from, node.to, 'cm-mark');
         else replace(node.from, node.to, { kind: 'bullet' });
@@ -284,7 +304,11 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
   });
 
   const out = [];
-  for (const [at, cls] of lineClasses) out.push({ type: 'line', at, cls });
+  for (const [at, cls] of lineClasses) {
+    const spec = { type: 'line', at, cls };
+    if (lineAttrs.has(at)) spec.attrs = lineAttrs.get(at);
+    out.push(spec);
+  }
   const covering = specs.filter((spec) => spec.type === 'replace' || spec.type === 'hide')
     .sort((a, b) => a.from - b.from || b.to - a.to);
   let reach = -1;

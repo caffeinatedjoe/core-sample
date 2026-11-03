@@ -113,6 +113,17 @@ test('tasks become checkboxes; the marker shows when the selection touches it', 
   assert.equal(doc.slice(done.from, done.to), ' done');
 });
 
+test('list and task lines hang by their source indent', () => {
+  const doc = '- one\n    - two\n- [ ] task\n\t- [x] done';
+  const lines = specsOf(doc).filter((s) => s.type === 'line');
+  const lists = lines.filter((s) => s.cls.includes('cm-list-line') && !s.cls.includes('cm-task-line'));
+  const tasks = lines.filter((s) => s.cls.includes('cm-task-line'));
+  assert.equal(lists[0].attrs.style, '--list-hang:0ch');
+  assert.equal(lists[1].attrs.style, '--list-hang:4ch');
+  assert.equal(tasks[0].attrs.style, '--list-hang:0ch');
+  assert.equal(tasks[1].attrs.style, '--list-hang:4ch');
+});
+
 test('quotes hide the marker off the line', () => {
   const doc = '> quoted *it*\n> second';
   assert.equal(visible(doc), 'quoted it\nsecond');

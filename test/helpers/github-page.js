@@ -20,7 +20,26 @@ export function element(id) {
     rel: '',
     focused: false,
     scrolled: false,
+    className: '',
+    open: false,
     listeners: {},
+  };
+  node.classList = {
+    contains(name) {
+      return node.className.split(/\s+/).includes(name);
+    },
+    add(name) {
+      if (node.classList.contains(name)) return;
+      node.className = `${node.className} ${name}`.trim();
+    },
+    remove(name) {
+      node.className = node.className.split(/\s+/).filter((item) => item && item !== name).join(' ');
+    },
+    toggle(name, on) {
+      const next = on == null ? !node.classList.contains(name) : Boolean(on);
+      if (next) node.classList.add(name);
+      else node.classList.remove(name);
+    },
   };
   node.addEventListener = (type, fn) => {
     (node.listeners[type] ||= []).push(fn);
@@ -46,6 +65,7 @@ export function page(fetchImpl) {
     'github-choice', 'github-confirm-replace',
     'github-disconnect-confirm', 'github-erase-confirm', 'github-connect', 'github-export-backup', 'github-file-bar',
     'github-file-status', 'settings-button', 'vault-button', 'settings-close', 'github-save-config', 'github-open-github',
+    'github-advanced',
     'github-check-now', 'github-cancel', 'github-save-repo', 'github-download', 'github-alongside',
     'github-export-replace', 'github-disconnect', 'github-disconnect-yes', 'github-erase',
     'github-erase-yes', 'github-push', 'github-pull',
@@ -56,6 +76,8 @@ export function page(fetchImpl) {
     nodes[id].hidden = true;
   }
   nodes['github-verify'].href = DEVICE_PAGE;
+  nodes['github-advanced'].className = 'github-advanced is-bare';
+  nodes['github-advanced'].open = true;
   const opens = [];
   const copies = [];
   const doc = {

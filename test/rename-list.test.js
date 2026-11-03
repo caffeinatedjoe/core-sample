@@ -121,7 +121,7 @@ test('renaming from the list replaces the visible name and the stored path', asy
   assert.ok(welcome, 'the list shows Welcome before rename');
   assert.equal(texts(list, 'note-name').includes('Field notes'), true);
   assert.equal(texts(list, 'note-name').includes('Old heading'), false);
-  await clickText(welcome, 'Edit');
+  for (const fn of welcome.listeners.contextmenu || []) fn({ preventDefault() {} });
   await clickText(nodes['action-panel'], 'Rename');
   const input = find(nodes['action-panel'], (node) => node.tag === 'input');
   assert.equal(input.value, 'Welcome');
@@ -146,8 +146,9 @@ test('renaming from the list replaces the visible name and the stored path', asy
 
   nodes['notes-search'].value = '';
   for (const fn of nodes['notes-search'].listeners.input) fn();
+  for (const fn of nodes['notes-search'].listeners.blur || []) fn();
   const field = list.children.find((row) => texts(row, 'note-name').includes('Field notes'));
-  await clickText(field, 'Edit');
+  for (const fn of field.listeners.contextmenu || []) fn({ preventDefault() {} });
   await clickText(nodes['action-panel'], 'Move');
   await clickText(nodes['action-panel'], 'Notes');
 

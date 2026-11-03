@@ -74,3 +74,25 @@ test('the vault summary counts live notes and their folders', () => {
   assert.deepEqual([summary.folders, summary.text], [4, '3 files, 4 folders']);
   assert.equal(vaultSummary([files[0]], []).text, '1 file, 0 folders');
 });
+
+test('the vault summary skips phone-only extras and prefers the GitHub tree', () => {
+  const local = vaultSummary([
+    { path: 'Welcome.md', kind: 'markdown', content: '', origin: 'app', localOnly: true, trashedAt: null },
+    { path: 'Note.md', kind: 'markdown', content: '', trashedAt: null },
+    { path: 'Note (conflict 2026-10-21 1918).md', kind: 'markdown', content: '', conflictCopy: true, trashedAt: null },
+    { path: 'Note (backup 2026-10-21 1918).md', kind: 'markdown', content: '', backup: true, trashedAt: null },
+    { path: '.obsidian/app.md', kind: 'markdown', content: '', trashedAt: null },
+  ], ['Empty']);
+  assert.equal(local.files, 1);
+  assert.equal(local.text, '1 file, 1 folder');
+
+  const vault = vaultSummary([], ['Empty'], [
+    'Welcome.md',
+    'assets/photo.png',
+    'logs/Core.md',
+    '.obsidian/app.json',
+  ]);
+  assert.equal(vault.files, 3);
+  assert.equal(vault.folders, 2);
+  assert.equal(vault.text, '3 files, 2 folders');
+});

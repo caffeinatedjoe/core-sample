@@ -1,4 +1,4 @@
-import { noteSnippet, noteTitle } from './notes.js';
+import { noteTitle } from './notes.js';
 import { ancestorFolders, liveNotes, parentPath } from './organize.js';
 import { isIgnoredPath } from './vault-paths.js';
 
@@ -41,7 +41,6 @@ function appendTree(rows, files, folders, open, dir, depth, currentPath) {
       title: noteTitle(file),
       depth,
       current: file.path === currentPath,
-      detail: noteSnippet(file),
     });
   }
 }
@@ -101,11 +100,31 @@ export function moveTargets(files, folders, from, isFolder) {
 
 export const NO_MATCHES = 'No matches found.';
 
-// Counts what the tree shows: live notes and the folders that hold them or
-// were made empty on purpose. Trash and ignored paths are left out.
-export function vaultSummary(files, folders) {
-  const notes = liveNotes(files).length;
-  const count = folderSet(files, folders).size;
+function isPhoneOnly(file) {
+  if (!file || file.trashedAt || isIgnoredPath(file.path)) return true;
+  if (file.conflictCopy || file.backup || file.localOnly === true || file.origin === 'app') return true;
+  return / \((?:conflict|backup) \d{4}-\d{2}-\d{2} \d{4}(?:-\d+)?\)\.md$/i.test(file.path);
+}
+
+// What Obsidian shows under the vault name: every non-dot file on GitHub
+// (notes and attachments) and the folders that hold them. Local-only Welcome,
+// conflict copies and backup copies are left out. `vaultPaths` is the saved
+// GitHub tree when we have it.
+export function vaultSummary(files, folders, vaultPaths) {
+  const paths = Array.isArray(vaultPaths)
+    ? vaultPaths.filter((path) => path && !isIgnoredPath(path))
+    : (files || []).filter((file) => !isPhoneOnly(file)).map((file) => file.path);
+  const dirs = new Set();
+  for (const path of paths) {
+    for (const folder of ancestorFolders(path)) dirs.add(folder);
+  }
+  if (!Array.isArray(vaultPaths)) {
+    for (const folder of folders || []) {
+      if (folder && !isIgnoredPath(folder)) dirs.add(folder);
+    }
+  }
+  const notes = paths.length;
+  const count = dirs.size;
   return {
     files: notes,
     folders: count,
@@ -124,7 +143,6 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
       title: hit.title,
       depth: 0,
       current: hit.path === currentPath,
-      detail: hit.kind === 'content' ? hit.snippet : noteSnippet(files.find((file) => file.path === hit.path)),
     }));
   }
 
@@ -141,7 +159,6 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
         title: noteTitle(file),
         depth: 0,
         current: path === currentPath,
-        detail: noteSnippet(file),
         recent: true,
       });
     }

@@ -129,9 +129,11 @@ navigation bar.
   revealed. Text uses the iOS body text style, so Dynamic Type still applies.
   The keyboard and safe-area handling in `viewport.js` is unchanged.
 
-- **Navigation.** The notes moved into an Obsidian-style left sidebar with
-  search at the top and the vault name and a Settings gear at the bottom. See
-  Navigation and Settings in [DECISIONS.md](../DECISIONS.md).
+- **Navigation.** The notes live in an Obsidian-style left sidebar. Search
+  sits at the bottom of the panel; tapping it replaces the tree with results
+  and keeps the field above the keyboard. Rows show the name only. Rename,
+  move and delete are on a long-press menu. See Navigation and Settings in
+  [DECISIONS.md](../DECISIONS.md).
 
 ## Left out on purpose
 
@@ -143,11 +145,10 @@ navigation bar.
 - Syntax colors inside code blocks.
 - List continuation on Enter. Enter inserts a plain new line, as the old
   text box did.
-- The sidebar's Search pill does not switch between views the way
-  Obsidian's does (its up and down chevron cycles Files, Search, Bookmarks
-  and others). Core Sample has one panel, so the pill focuses the search
-  field. Bookmarks, tags and the vault switcher are not built; the vault name
-  opens Settings.
+- The sidebar's Search field does not switch between views the way
+  Obsidian's chevron does (Files, Search, Bookmarks and others). Core Sample
+  has one panel. Bookmarks, tags and a vault switcher are not built; there
+  is one vault, so the name is a label.
 
 ## Sources
 
