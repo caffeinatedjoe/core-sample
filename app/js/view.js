@@ -176,9 +176,19 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     },
   });
 
+  function paintFormatBar() {
+    const bar = doc.getElementById('format-bar');
+    if (!bar) return;
+    bar.hidden = Boolean(source.readOnly) || !source.hasFocus();
+  }
+
   const source = createEditor(host, {
     onChange: rememberEdit,
-    onBlur: flushNow,
+    onFocus: paintFormatBar,
+    onBlur() {
+      flushNow();
+      paintFormatBar();
+    },
     onToggle: toggledTask,
     onTap: tapped,
     hydrate: hydrateEmbed,
@@ -186,6 +196,24 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
   // Text typed before the last note loads would be replaced by it.
   source.readOnly = true;
+  paintFormatBar();
+  const formatBar = doc.getElementById('format-bar');
+  if (formatBar) {
+    formatBar.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('button')) event.preventDefault();
+    });
+    formatBar.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-format]');
+      if (!button || source.readOnly) return;
+      const action = button.getAttribute('data-format');
+      if (action === 'dismiss') {
+        source.blur();
+        paintFormatBar();
+        return;
+      }
+      source.format?.(action);
+    });
+  }
 
   function revokeEmbed(url) {
     if (!url || !embedUrls.has(url)) return;
@@ -1296,6 +1324,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function holdEditor(held) {
     holding = Boolean(held);
     source.readOnly = holding || booting;
+    paintFormatBar();
   }
 
   async function replaceFile(file) {

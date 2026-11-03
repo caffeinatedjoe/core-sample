@@ -14,9 +14,13 @@ import {
   historyKeymap,
   keymap,
   placeholder,
+  redo,
   syntaxTree,
+  undo,
 } from '../vendor/codemirror.js';
 import { basename } from './embeds.js';
+import { formatChange } from './format.js';
+import { continueEnter, indentChange } from './list-continue.js';
 import { liveSpecs, markdownLanguage, taskToggle } from './live-rules.js';
 import { planPreviewClick } from './preview-tap.js';
 
@@ -126,6 +130,31 @@ class LiveWidget extends WidgetType {
   }
 }
 
+function runChange(view, spec, userEvent = 'input') {
+  if (view.state.readOnly) return false;
+  if (!spec) return false;
+  if (spec.noop) return true;
+  view.dispatch({
+    changes: { from: spec.from, to: spec.to, insert: spec.insert },
+    selection: { anchor: spec.selection.anchor, head: spec.selection.head ?? spec.selection.anchor },
+    userEvent,
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function enterCommand(view) {
+  const { from, to } = view.state.selection.main;
+  return runChange(view, continueEnter(view.state.doc.toString(), from, to));
+}
+
+function indentCommand(dir) {
+  return (view) => {
+    const { from, to } = view.state.selection.main;
+    return runChange(view, indentChange(view.state.doc.toString(), from, to, dir));
+  };
+}
+
 const hidden = Decoration.replace({});
 
 function decorate(view, hooks) {
@@ -180,7 +209,7 @@ export function diffChange(before, after) {
   return { from: start, to: endBefore, insert: after.slice(start, endAfter) };
 }
 
-// hooks: onChange(), onBlur(), onToggle(), onTap(plan, node, event), hydrate(node)
+// hooks: onChange(), onFocus(), onBlur(), onToggle(), onTap(plan, node, event), hydrate(node)
 export function createLiveEditor(host, hooks = {}) {
   const editable = new Compartment();
   let quiet = false;
@@ -189,7 +218,13 @@ export function createLiveEditor(host, hooks = {}) {
     EditorState.lineSeparator.of('\n'),
     markdownLanguage.extension,
     history(),
-    keymap.of([...defaultKeymap, ...historyKeymap]),
+    keymap.of([
+      { key: 'Enter', run: enterCommand },
+      { key: 'Tab', run: indentCommand(1) },
+      { key: 'Shift-Tab', run: indentCommand(-1) },
+      ...defaultKeymap,
+      ...historyKeymap,
+    ]),
     EditorView.lineWrapping,
     placeholder('Write in Markdown…'),
     EditorView.contentAttributes.of({
@@ -203,7 +238,10 @@ export function createLiveEditor(host, hooks = {}) {
     livePlugin(hooks),
     EditorView.updateListener.of((update) => {
       if (update.docChanged && !quiet) hooks.onChange?.();
-      if (update.focusChanged && !update.view.hasFocus) hooks.onBlur?.();
+      if (update.focusChanged) {
+        if (update.view.hasFocus) hooks.onFocus?.();
+        else hooks.onBlur?.();
+      }
     }),
   ];
 
@@ -355,6 +393,12 @@ export function createLiveEditor(host, hooks = {}) {
     },
     hasFocus() {
       return view.hasFocus;
+    },
+    format(action) {
+      if (action === 'undo') return undo(view);
+      if (action === 'redo') return redo(view);
+      const { from, to } = view.state.selection.main;
+      return runChange(view, formatChange(view.state.doc.toString(), from, to, action), 'input.format');
     },
     measure() {
       view.requestMeasure();

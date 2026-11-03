@@ -130,21 +130,52 @@ navigation bar.
   The keyboard and safe-area handling in `viewport.js` is unchanged.
 
 - **Navigation.** The notes live in an Obsidian-style left sidebar. Search
-  sits at the bottom of the panel; tapping it replaces the tree with results
-  and keeps the field above the keyboard. Rows show the name only. Rename,
-  move and delete are on a long-press menu. See Navigation and Settings in
-  [DECISIONS.md](../DECISIONS.md).
+  sits at the top of the panel, next to Aa and the options button, so the
+  iOS keyboard does not cover it. Tapping it replaces the tree with results.
+  The vault name, counts and gear stay at the bottom. Rows show the name
+  only. Rename, move and delete are on a long-press menu. See Navigation and
+  Settings in [DECISIONS.md](../DECISIONS.md).
+- **Format toolbar.** While the editor is focused, a rounded dark pill sits
+  at the bottom of the shell, which already shrinks by `--keyboard-inset`,
+  so the bar tracks the iOS keyboard. It is a horizontally scrolling row of
+  44pt buttons with no visible scrollbar. Hide keyboard is pinned on the
+  right and is the only control that blurs the editor. Every other action
+  is a CodeMirror transaction from `format.js`: it wraps or toggles the
+  selection or inserts at the caret, `preventDefault`s `pointerdown` so
+  focus stays in the note, and goes through the history so undo still
+  works. The order is the everyday Markdown on a phone, most used first:
+
+  1. Task checkbox — Joe's notes are checklists.
+  2. Bullet list, then numbered list — the other list starts.
+  3. Bold, then italic — inline emphasis while typing.
+  4. Link / wikilink — a URL selection becomes `[text](url)` with the
+     caret in the label; anything else becomes `[[selection]]`.
+  5. Heading — cycles none → H1 → H2 → H3 → off.
+  6. Indent, then outdent — nest the current list (same as Tab / Shift-Tab).
+  7. Quote, inline code, strikethrough, fenced code, highlight (`==`),
+     horizontal rule — used, but less often than lists and emphasis.
+  8. Undo, then redo — last in the scrolling row because iOS already has
+     shake and three-finger undo; they are here so the bar can stand in
+     for Obsidian's.
+
+  Hide keyboard stays outside the scroller so it is always reachable.
+- **List continuation.** Enter on a bullet (`-`, `*`, `+`), a task
+  (`- [ ]` / `- [x]`, always continued as unchecked `- [ ]`), a numbered
+  item (`1.` or `1)`, incremented), or a quote (`>`) inserts the same
+  marker at the same indent. Enter on an empty item removes the marker
+  and ends the list, or outdents one level when nested. Following numbered
+  items are renumbered only when they already form a simple sequence;
+  otherwise only the new line increments. Tab / Shift-Tab and the indent
+  buttons nest and unnest. Line endings match the file: a CRLF note keeps
+  `\r` on every touched line, and bytes elsewhere stay identical. The
+  rules live in `list-continue.js` and are unit tested without a DOM.
 
 ## Left out on purpose
 
-- The mobile editing toolbar. Undo and redo use the iOS gestures (shake,
-  three-finger swipe) and the keyboard's own undo.
 - A Properties editor. Frontmatter is shown as a muted monospace block.
 - Rendered tables, callout widgets, math and note embeds. Tables and callouts
   are styled in place as text. `![[note]]` stays a link chip, as before.
 - Syntax colors inside code blocks.
-- List continuation on Enter. Enter inserts a plain new line, as the old
-  text box did.
 - The sidebar's Search field does not switch between views the way
   Obsidian's chevron does (Files, Search, Bookmarks and others). Core Sample
   has one panel. Bookmarks, tags and a vault switcher are not built; there

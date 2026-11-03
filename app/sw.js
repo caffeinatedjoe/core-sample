@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v31';
+const CACHE = 'core-sample-shell-v32';
 
 const SHELL = [
   './',
@@ -23,6 +23,8 @@ const SHELL = [
   './js/checklist.js',
   './js/live-rules.js',
   './js/live-editor.js',
+  './js/format.js',
+  './js/list-continue.js',
   './js/drawer.js',
   './js/drawer-gesture.js',
   './vendor/codemirror.js',
