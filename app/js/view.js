@@ -1,6 +1,4 @@
-import { renderMarkdown } from './markdown.js';
-import { toggleChecklist } from './checklist.js';
-import { commitFiles, deleteOps, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteMeta, deleteOps, listOps, putFile, putOp, setMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -10,7 +8,6 @@ import {
   pickCurrent,
   planWikilink,
 } from './notes.js';
-import { planPreviewClick } from './preview-tap.js';
 import { listBrowser, moveTargets, rememberRecent } from './browser.js';
 import { buildBackup, mergeBackup, parseBackup } from './backup.js';
 import {
@@ -33,14 +30,17 @@ import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
 import { createAutoSync, loadConflictRemote } from './github-sync.js';
+import { basename } from './embeds.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
+import { createLiveEditor } from './live-editor.js';
+import { headingOffset } from './live-rules.js';
 
 const SAVE_DELAY = 400;
 
-export function mountApp(doc, db) {
-  const source = doc.getElementById('source');
-  const preview = doc.getElementById('preview');
+// `createEditor` is for tests that run without a real DOM.
+export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
+  const host = doc.getElementById('source');
   const title = doc.getElementById('note-title');
   const status = doc.getElementById('save-status');
   const sheet = doc.getElementById('notes-sheet');
@@ -48,8 +48,6 @@ export function mountApp(doc, db) {
   const form = doc.getElementById('new-note-form');
   const nameInput = doc.getElementById('new-note-name');
   const formError = doc.getElementById('new-note-error');
-  const modeSource = doc.getElementById('mode-source');
-  const modePreview = doc.getElementById('mode-preview');
   const search = doc.getElementById('notes-search');
   const panelBox = doc.getElementById('action-panel');
   const backupFile = doc.getElementById('backup-file');
@@ -61,7 +59,6 @@ export function mountApp(doc, db) {
   let query = '';
   let panel = null;
   let current = null;
-  let mode = 'source';
   let erasing = false;
   let holding = false;
 
@@ -122,29 +119,29 @@ export function mountApp(doc, db) {
     else if (state === 'invalid') status.textContent = detail;
   }
 
-  function applyMode(next, { persist = true } = {}) {
-    mode = next === 'preview' ? 'preview' : 'source';
-    source.hidden = mode !== 'source';
-    preview.hidden = mode !== 'preview';
-    modeSource.setAttribute('aria-pressed', mode === 'source' ? 'true' : 'false');
-    modePreview.setAttribute('aria-pressed', mode === 'preview' ? 'true' : 'false');
-    if (mode === 'preview') paintPreview();
-    if (persist) setMeta(db, 'editorMode', mode).catch(() => {});
-  }
-
   let embedTicket = 0;
   const embedUrls = new Set();
   const embedBlobs = new WeakMap();
+  const embedCache = new Map();
   const viewerUrls = new Set();
   const photos = createImageViewer(doc, doc.getElementById('image-viewer'), {
     onClose() {
       for (const url of viewerUrls) {
-        const shown = [...preview.querySelectorAll('img')].some((img) => img.getAttribute('src') === url);
+        const shown = source.embedNodes().some((node) => node.querySelector('img')?.getAttribute('src') === url);
         if (!shown) URL.revokeObjectURL(url);
       }
       viewerUrls.clear();
     },
   });
+
+  const source = createEditor(host, {
+    onChange: rememberEdit,
+    onBlur: flushNow,
+    onToggle: toggledTask,
+    onTap: tapped,
+    hydrate: hydrateEmbed,
+  });
+  Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
 
   function revokeEmbed(url) {
     if (!url || !embedUrls.has(url)) return;
@@ -154,6 +151,7 @@ export function mountApp(doc, db) {
   }
 
   function revokeEmbeds() {
+    embedCache.clear();
     for (const url of [...embedUrls]) revokeEmbed(url);
   }
 
@@ -161,13 +159,16 @@ export function mountApp(doc, db) {
     photos.close({ animate: false, restoreFocus: false });
   }
 
-  async function loadEmbedSrc(embed) {
-    let settings = { token: '', repo: '', branch: '', root: '' };
+  async function embedSettings() {
     try {
-      settings = await loadGithubSettings(db);
+      return await loadGithubSettings(db);
     } catch {
-      settings = { token: '', repo: '', branch: '', root: '' };
+      return { token: '', repo: '', branch: '', root: '' };
     }
+  }
+
+  async function loadEmbedSrc(embed) {
+    const settings = await embedSettings();
     const result = await loadEmbedBlob(db, {
       link: embed,
       notePath: current && current.path ? current.path : '',
@@ -189,42 +190,40 @@ export function mountApp(doc, db) {
   }
 
   function openViewer(target) {
+    const drawn = new Map();
+    for (const node of source.embedNodes()) {
+      const pos = source.posOf(node);
+      if (pos >= 0) drawn.set(pos, node);
+    }
     const slides = [];
     let start = 0;
-    for (const node of preview.querySelectorAll('.embed')) {
-      const img = node.querySelector('img.embed-image');
-      const embed = node.dataset.embed || '';
-      const src = img?.getAttribute('src') || '';
+    for (const item of source.images()) {
+      const { image } = item;
+      if (image.kind === 'label') continue;
+      const node = drawn.get(item.from) || drawn.get(item.to) || null;
+      const img = node?.querySelector('img.embed-image') || null;
+      const src = img?.getAttribute('src') || (image.kind === 'remote' ? image.src : '');
       const usable = /^(blob:|https:|data:image\/)/i.test(src);
+      const embed = image.kind === 'embed' ? image.embed : '';
       if (!usable && !embed) continue;
-      if (img && (img === target || img.contains(target))) start = slides.length;
+      if (node && (node === target || node.contains(target))) start = slides.length;
       slides.push({
         src: usable ? src : '',
         blob: img ? embedBlobs.get(img) || null : null,
-        alt: img?.getAttribute('alt') || node.querySelector('.embed-fallback')?.textContent || '',
+        alt: img?.getAttribute('alt') || node?.querySelector('.embed-fallback')?.textContent || image.alt || basename(image.name || ''),
         thumb: img || node,
         load: usable ? null : () => loadEmbedSrc(embed),
       });
     }
     if (!slides.length) return;
-    photos.open({ slides, index: start, scrollEl: preview });
-  }
-
-  function paintPreview() {
-    const ticket = ++embedTicket;
-    closeViewer();
-    revokeEmbeds();
-    const scroll = preview.scrollTop;
-    preview.innerHTML = renderMarkdown(source.value);
-    preview.scrollTop = scroll;
-    bindImageErrors(preview);
-    if (mode === 'preview') hydrateEmbeds(ticket);
+    photos.open({ slides, index: start, scrollEl: source.scrollEl });
   }
 
   function bindImageErrors(root) {
     for (const img of root.querySelectorAll('img.embed-image')) {
       if (img.dataset.embedBound === '1') continue;
       img.dataset.embedBound = '1';
+      img.addEventListener('load', () => source.measure());
       img.addEventListener('error', () => {
         const src = img.getAttribute('src');
         const frame = doc.defaultView?.requestAnimationFrame?.bind(doc.defaultView) || ((fn) => fn());
@@ -244,87 +243,23 @@ export function mountApp(doc, db) {
     fallback.className = 'embed-fallback';
     fallback.textContent = reason || 'Not found in vault';
     node.append(fallback);
+    source.measure();
   }
 
   function replaceBrokenImage(img) {
-    const host = img.closest('.embed');
-    if (!host || !img.isConnected) return;
+    const node = img.closest('.embed');
+    if (!node || !img.isConnected) return;
     const src = img.getAttribute('src') || '';
+    if (node.dataset.embed) embedCache.delete(node.dataset.embed);
     if (src) revokeEmbed(src);
-    showEmbedReason(host, "Couldn't display");
+    showEmbedReason(node, "Couldn't display");
   }
 
-  async function hydrateEmbeds(ticket) {
-    const nodes = [...preview.querySelectorAll('[data-embed]')];
-    if (!nodes.length) return;
-    let settings = { token: '', repo: '', branch: '', root: '' };
+  async function fetchEmbed(link, fresh) {
+    const settings = await embedSettings();
     try {
-      settings = await loadGithubSettings(db);
-    } catch {
-      settings = { token: '', repo: '', branch: '', root: '' };
-    }
-    if (ticket !== embedTicket) return;
-    if (ticket !== embedTicket) return;
-    const notePath = current && current.path ? current.path : '';
-    for (const node of nodes) {
-      if (ticket !== embedTicket || !node.isConnected) return;
-      const link = node.dataset.embed || '';
-      let result;
-      try {
-        result = await loadEmbedBlob(db, {
-          link,
-          notePath,
-          repo: settings.repo,
-          branch: settings.branch,
-          root: settings.root,
-          token: settings.token,
-          fetchImpl: globalThis.fetch.bind(globalThis),
-          offline: browserOffline(),
-        });
-      } catch {
-        showEmbedReason(node, browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)");
-        continue;
-      }
-      if (ticket !== embedTicket || !node.isConnected) return;
-      if (result.status !== 'ready') {
-        showEmbedReason(node, result.reason);
-        continue;
-      }
-      const made = embedImage(result.blob, {
-        createObjectURL: URL.createObjectURL.bind(URL),
-        createElement: (tag) => doc.createElement(tag),
-        width: node.dataset.width || '',
-        height: node.dataset.height || '',
-        name: result.name,
-        type: result.type,
-      });
-      if (ticket !== embedTicket) {
-        URL.revokeObjectURL(made.url);
-        return;
-      }
-      embedUrls.add(made.url);
-      embedBlobs.set(made.img, result.blob);
-      made.img.dataset.imagePath = result.path || '';
-      made.img.dataset.imageRepo = settings.repo || '';
-      node.replaceChildren(made.img);
-      bindImageErrors(node);
-    }
-  }
-
-  async function retryEmbed(node) {
-    if (!node || !node.isConnected) return;
-    const ticket = embedTicket;
-    let settings = { token: '', repo: '', branch: '', root: '' };
-    try {
-      settings = await loadGithubSettings(db);
-    } catch {
-      settings = { token: '', repo: '', branch: '', root: '' };
-    }
-    if (ticket !== embedTicket || !node.isConnected) return;
-    let result;
-    try {
-      result = await loadEmbedBlob(db, {
-        link: node.dataset.embed || '',
+      const result = await loadEmbedBlob(db, {
+        link,
         notePath: current && current.path ? current.path : '',
         repo: settings.repo,
         branch: settings.branch,
@@ -332,58 +267,90 @@ export function mountApp(doc, db) {
         token: settings.token,
         fetchImpl: globalThis.fetch.bind(globalThis),
         offline: browserOffline(),
-        fresh: true,
+        ...(fresh ? { fresh: true } : {}),
       });
+      return { ...result, repo: settings.repo || '', url: '' };
     } catch {
-      showEmbedReason(node, browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)");
+      return { status: 'error', reason: browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)" };
+    }
+  }
+
+  // One load per image link per open note. Widgets are redrawn as the caret
+  // moves, so they share the blob and its object URL instead of refetching.
+  function cachedEmbed(link, fresh = false) {
+    if (!fresh && embedCache.has(link)) return embedCache.get(link);
+    const entry = fetchEmbed(link, fresh);
+    embedCache.set(link, entry);
+    return entry;
+  }
+
+  function fillEmbed(node, entry) {
+    if (entry.status !== 'ready' || !entry.blob) {
+      showEmbedReason(node, entry.reason);
       return;
     }
-    if (ticket !== embedTicket || !node.isConnected) return;
-    if (result.status !== 'ready') {
-      showEmbedReason(node, result.reason);
-      return;
-    }
-    const made = embedImage(result.blob, {
-      createObjectURL: URL.createObjectURL.bind(URL),
+    const made = embedImage(entry.blob, {
+      createObjectURL: (blob) => {
+        if (!entry.url) {
+          entry.url = URL.createObjectURL(blob);
+          embedUrls.add(entry.url);
+        }
+        return entry.url;
+      },
       createElement: (tag) => doc.createElement(tag),
       width: node.dataset.width || '',
       height: node.dataset.height || '',
-      name: result.name,
-      type: result.type,
+      name: entry.name,
+      type: entry.type,
     });
-    embedUrls.add(made.url);
-    embedBlobs.set(made.img, result.blob);
-    made.img.dataset.imagePath = result.path || '';
-    made.img.dataset.imageRepo = settings.repo || '';
+    embedBlobs.set(made.img, entry.blob);
+    made.img.dataset.imagePath = entry.path || '';
+    made.img.dataset.imageRepo = entry.repo || '';
     node.replaceChildren(made.img);
     bindImageErrors(node);
   }
 
+  async function hydrateEmbed(node, fresh = false) {
+    const link = node.dataset.embed || '';
+    if (!link) return;
+    const ticket = embedTicket;
+    const entry = await cachedEmbed(link, fresh);
+    if (ticket !== embedTicket) return;
+    fillEmbed(node, entry);
+  }
+
+  function retryEmbed(node) {
+    if (!node || !node.isConnected) return;
+    hydrateEmbed(node, true);
+  }
+
   function showNote(note, { heading = '' } = {}) {
+    const same = current && current.path === note.path;
     current = note;
-    source.value = note.content;
+    if (!same) {
+      embedTicket += 1;
+      closeViewer();
+      revokeEmbeds();
+      source.load(note.content);
+    } else {
+      source.value = note.content;
+    }
     title.textContent = noteTitle(note);
-    paintPreview();
-    if (heading && mode === 'preview') scrollToHeading(heading);
+    if (heading) scrollToHeading(heading);
   }
 
   function scrollToHeading(heading) {
-    const want = heading.trim().toLowerCase();
-    for (const node of preview.querySelectorAll('[data-heading]')) {
-      if ((node.dataset.heading || '').trim().toLowerCase() === want) {
-        node.scrollIntoView({ block: 'start' });
-        return;
-      }
-    }
+    const at = headingOffset(source.value, heading);
+    if (at >= 0) source.scrollToPos(at);
   }
 
   function clearEditor() {
     current = null;
-    source.value = '';
-    title.textContent = '';
+    embedTicket += 1;
     closeViewer();
     revokeEmbeds();
-    preview.replaceChildren();
+    source.load('');
+    title.textContent = '';
   }
 
   async function flushEditing() {
@@ -417,10 +384,7 @@ export function mountApp(doc, db) {
       const fresh = files.find((file) => file.path === current.path && !file.trashedAt);
       if (fresh) {
         current = fresh;
-        if (source.value !== fresh.content) {
-          source.value = fresh.content;
-          if (mode === 'preview') paintPreview();
-        }
+        if (source.value !== fresh.content) source.value = fresh.content;
         title.textContent = noteTitle(fresh);
         return;
       }
@@ -888,7 +852,7 @@ export function mountApp(doc, db) {
     showNote(note);
     closeSheet();
     sync?.noteEdited(note);
-    if (mode === 'source') source.focus();
+    source.focus();
   }
 
   async function exportBackup() {
@@ -899,7 +863,6 @@ export function mountApp(doc, db) {
     const payload = buildBackup(files, {
       folders,
       lastOpened: current ? current.path : null,
-      editorMode: mode,
       recent,
     });
     const json = JSON.stringify(payload);
@@ -960,7 +923,6 @@ export function mountApp(doc, db) {
       await setMeta(db, 'recent', recent);
       await setMeta(db, 'expanded', []);
       if (backup.lastOpened) await setMeta(db, 'lastOpened', backup.lastOpened);
-      applyMode(backup.editorMode, { persist: true });
       const next = pickCurrent(live(), backup.lastOpened);
       if (next) showNote(next);
       else clearEditor();
@@ -995,13 +957,6 @@ export function mountApp(doc, db) {
     saver.schedule(snapshot);
   }
 
-  source.addEventListener('input', rememberEdit);
-  source.addEventListener('blur', flushNow);
-  modeSource.addEventListener('click', () => applyMode('source'));
-  modePreview.addEventListener('click', () => {
-    if (current) current.content = source.value;
-    applyMode('preview');
-  });
   doc.getElementById('notes-button').addEventListener('click', openSheet);
   doc.getElementById('notes-close').addEventListener('click', closeSheet);
   sheet.addEventListener('click', (event) => {
@@ -1098,43 +1053,32 @@ export function mountApp(doc, db) {
     closeSheet();
   }
 
-  preview.addEventListener('click', (event) => {
-    const plan = planPreviewClick(event.target);
-    if (plan.type === 'external' || plan.type === 'none') return;
-    if (plan.preventDefault) event.preventDefault();
+  function toggledTask() {
+    flushNow();
+  }
 
-    if (plan.type === 'task') {
-      if (holding) return;
-      const next = toggleChecklist(source.value, plan.index);
-      const selStart = source.selectionStart;
-      const selEnd = source.selectionEnd;
-      const sourceScroll = source.scrollTop;
-      const previewScroll = preview.scrollTop;
-      source.value = next;
-      source.selectionStart = selStart;
-      source.selectionEnd = selEnd;
-      source.scrollTop = sourceScroll;
-      if (current) {
-        if (next !== current.content) current.dirty = true;
-        current.content = next;
-        current.updatedAt = Date.now();
-        title.textContent = noteTitle(current);
-      }
-      paintPreview();
-      preview.scrollTop = previewScroll;
-      saver.schedule(snapshot);
-      saver.flush().catch(() => {});
+  function openExternal(href) {
+    const link = doc.createElement('a');
+    link.href = href;
+    link.rel = 'noopener';
+    doc.body.append(link);
+    link.click();
+    link.remove();
+  }
+
+  function tapped(plan, node) {
+    if (plan.type === 'external') {
+      openExternal(plan.href);
       return;
     }
 
     if (plan.type === 'image') {
-      openViewer(event.target);
+      openViewer(node);
       return;
     }
 
     if (plan.type === 'embed-retry') {
-      const node = event.target.closest?.('.embed');
-      if (node) retryEmbed(node);
+      retryEmbed(node.closest?.('.embed'));
       return;
     }
 
@@ -1159,7 +1103,7 @@ export function mountApp(doc, db) {
         linkNav = null;
       });
     }
-  });
+  }
 
   function flushNow() {
     if (erasing || !current) return;
@@ -1265,7 +1209,6 @@ export function mountApp(doc, db) {
       current = file;
       source.value = file.content;
       title.textContent = noteTitle(current);
-      if (mode === 'preview') paintPreview();
     }
     renderList();
   }
@@ -1426,7 +1369,7 @@ export function mountApp(doc, db) {
       if (!session.expanded && session.current) {
         for (const folder of ancestorFolders(session.current.path)) expanded.add(folder);
       }
-      applyMode(session.mode, { persist: false });
+      deleteMeta(db, 'editorMode').catch(() => {});
       if (session.current) {
         showNote(session.current);
         await setMeta(db, 'lastOpened', session.current.path);

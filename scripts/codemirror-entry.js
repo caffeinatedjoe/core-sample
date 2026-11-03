@@ -2,11 +2,9 @@
 // this into app/vendor/codemirror.js. @codemirror/lang-markdown is left out:
 // it pulls in the HTML, CSS and JavaScript languages for nested code.
 export {
-  Annotation,
+  Compartment,
   EditorSelection,
   EditorState,
-  RangeSetBuilder,
-  StateEffect,
   Transaction,
 } from '@codemirror/state';
 export {
@@ -15,6 +13,7 @@ export {
   ViewPlugin,
   WidgetType,
   keymap,
+  placeholder,
 } from '@codemirror/view';
 export {
   Language,
@@ -26,8 +25,6 @@ export {
   defaultKeymap,
   history,
   historyKeymap,
-  indentLess,
-  indentMore,
   redo,
   undo,
 } from '@codemirror/commands';

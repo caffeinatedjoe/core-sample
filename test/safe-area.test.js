@@ -72,8 +72,9 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(build, /top:\s*var\(--safe-top\)/);
   assert.equal(build.includes('bottom'), false);
   assert.match(html, /<header class="top">\s*<button type="button" id="build-version"/);
-  assert.match(rule(css, '.source'), /var\(--scroll-pad\)/);
-  assert.match(css, /\.preview \{\s*padding:[^}]*var\(--scroll-pad\)/);
+  const editor = rule(css, '#source .cm-content');
+  assert.match(editor, /padding:[^;]*var\(--safe-right\)[^;]*var\(--scroll-pad\)[^;]*var\(--safe-left\)/);
+  assert.match(editor, /font-size:\s*max\(16px, 1em\)/);
   assert.match(rule(css, '.notes-list'), /padding:\s*0 8px var\(--scroll-pad\)/);
 
   assert.match(html, /id="layout-debug"[^>]*hidden/);

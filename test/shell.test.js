@@ -54,7 +54,9 @@ test('the service worker caches every file the shell loads', () => {
     seen.add(name);
     const text = read(`app/js/${name}`);
     for (const match of text.matchAll(/from '\.\/([^']+)'/g)) queue.push(match[1]);
+    for (const match of text.matchAll(/from '\.\.\/(vendor\/[^']+)'/g)) refs.push(`./${match[1]}`);
   }
+  assert.equal(refs.includes('./vendor/codemirror.js'), true, 'the editor bundle is reached from main.js');
   for (const name of seen) refs.push(`./js/${name}`);
   const sw = read('app/sw.js');
   for (const match of sw.matchAll(/importScripts\('(\.\/[^']+)'\)/g)) refs.push(match[1]);

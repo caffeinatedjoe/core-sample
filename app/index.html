@@ -37,10 +37,6 @@
       </div>
       <div class="title-row">
         <h1 id="note-title" class="note-title"></h1>
-        <div class="mode-switch" role="group" aria-label="Editor mode">
-          <button type="button" id="mode-source" aria-pressed="true">Source</button>
-          <button type="button" id="mode-preview" aria-pressed="false">Preview</button>
-        </div>
       </div>
       <div id="github-file-bar" class="github-file-bar" hidden>
         <button type="button" id="github-push">Push</button>
@@ -49,8 +45,7 @@
       </div>
     </header>
     <main class="stage">
-      <textarea id="source" class="source" spellcheck="true" autocapitalize="sentences" autocomplete="off" autocorrect="on" aria-label="Note markdown" placeholder="Write in Markdown…"></textarea>
-      <article id="preview" class="preview" hidden aria-label="Rendered note"></article>
+      <div id="source" class="source"></div>
     </main>
     <pre id="layout-debug" class="layout-debug" hidden></pre>
     <div id="notes-sheet" class="sheet" hidden>

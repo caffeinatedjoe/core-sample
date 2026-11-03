@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { deleteDatabase, listFiles, openDatabase, putFile, setMeta } from '../app/js/db.js';
 import { makeFile } from '../app/js/notes.js';
 import { mountApp } from '../app/js/view.js';
+import { fakeEditorFactory } from './helpers/fake-editor.js';
 
 function element(tag) {
   const node = {
@@ -77,13 +78,13 @@ async function clickText(root, label) {
 function page() {
   const nodes = {};
   const ids = [
-    'source', 'preview', 'note-title', 'save-status', 'notes-sheet', 'notes-list',
-    'new-note-form', 'new-note-name', 'new-note-error', 'mode-source', 'mode-preview',
+    'source', 'note-title', 'save-status', 'notes-sheet', 'notes-list',
+    'new-note-form', 'new-note-name', 'new-note-error',
     'notes-search', 'action-panel', 'backup-file', 'notes-button', 'notes-close',
     'new-folder-button', 'backup-button',
   ];
   for (const id of ids) {
-    const node = element(id === 'source' ? 'textarea' : 'div');
+    const node = element('div');
     node.id = id;
     nodes[id] = node;
   }
@@ -110,7 +111,7 @@ test('renaming from the list replaces the visible name and the stored path', asy
   await setMeta(db, 'recent', ['Welcome.md', 'logs/Field notes.md']);
 
   const { doc, nodes } = page();
-  const app = mountApp(doc, db);
+  const app = mountApp(doc, db, { createEditor: fakeEditorFactory(element) });
   await app.start();
   assert.equal(nodes['note-title'].textContent, 'Welcome');
 

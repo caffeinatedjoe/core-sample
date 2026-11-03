@@ -357,12 +357,11 @@ test('a task has no bullet, an empty box still renders, and a heading stays insi
   assert.ok(paragraphAt !== -1 && paragraphAt < listEnd);
 });
 
-test('task lines and wrapped text use a row so the box stays on the first line', () => {
+test('task lines keep the box on the first line, and the editor checkbox has a 44px target', () => {
   const html = renderMarkdown('- [ ] one two three four five six seven eight nine ten\n');
   assert.match(html, /<div class="task-line"><button type="button" class="task-toggle"[^>]*>[\s\S]*?<\/button><span class="task-text">/);
-  assert.match(css, /\.task-line,\s*\n\.bullet-line \{\s*\n {2}display: flex;/);
-  assert.match(css, /\.task-line > :last-child,\s*\n\.bullet-line > :last-child \{\s*\n {2}flex: 1;/);
-  assert.match(css, /\.preview li\.task,\s*\n\.preview li\.bullet,\s*\n\.preview li\.ordered \{\s*\n {2}list-style: none;/);
+  assert.match(css, /\.task-toggle \{[^}]*display: inline-grid;[^}]*vertical-align: -0\.2em;/);
+  assert.match(css, /\.task-toggle::before \{[^}]*width: 44px;[^}]*height: 44px;/);
 });
 
 test('renders a wikilink as a button, not a fragment anchor', () => {

@@ -121,13 +121,15 @@ test('an external link is not preventDefaulted', () => {
   assert.equal(planPreviewClick(element('a', { attrs: { href: 'mailto:joe@example.com' } })).preventDefault, false);
 });
 
-test('the preview handler returns before cancelling an external click', () => {
+test('the editor opens an external link without cancelling it into nothing', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
   const view = readFileSync(join(root, 'app/js/view.js'), 'utf8');
+  const editor = readFileSync(join(root, 'app/js/live-editor.js'), 'utf8');
   const css = readFileSync(join(root, 'app/css/app.css'), 'utf8');
   const sw = readFileSync(join(root, 'app/sw.js'), 'utf8');
-  assert.match(view, /if \(plan\.type === 'external' \|\| plan\.type === 'none'\) return;/);
-  assert.match(view, /planPreviewClick\(event\.target\)/);
+  assert.match(view, /if \(plan\.type === 'external'\) \{\s*openExternal\(plan\.href\);/);
+  assert.match(view, /link\.href = href;\s*link\.rel = 'noopener';[\s\S]*link\.click\(\);/);
+  assert.match(editor, /hooks\.onTap\?\.\(planPreviewClick\(target\), node, event\)/);
   assert.match(css, /\.wikilink \{[^}]*cursor: pointer;/s);
   assert.equal(css.includes('-webkit-overflow-scrolling'), false);
   assert.equal(sw.includes('preventDefault'), false);

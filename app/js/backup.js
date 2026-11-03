@@ -29,7 +29,6 @@ export function buildBackup(files, meta = {}, now = Date.now()) {
     files: (files || []).map(copyFile).sort((a, b) => a.path.localeCompare(b.path)),
     folders: [...(meta.folders || [])].filter((folder) => typeof folder === 'string').sort(),
     lastOpened: typeof meta.lastOpened === 'string' ? meta.lastOpened : null,
-    editorMode: meta.editorMode === 'preview' ? 'preview' : 'source',
     recent: Array.isArray(meta.recent) ? meta.recent.filter((path) => typeof path === 'string') : [],
   };
 }
@@ -57,7 +56,6 @@ export function parseBackup(input) {
     files,
     folders: Array.isArray(data.folders) ? data.folders.filter((folder) => typeof folder === 'string') : [],
     lastOpened: typeof data.lastOpened === 'string' ? data.lastOpened : null,
-    editorMode: data.editorMode === 'preview' ? 'preview' : 'source',
     recent: Array.isArray(data.recent) ? data.recent.filter((path) => typeof path === 'string') : [],
   };
 }

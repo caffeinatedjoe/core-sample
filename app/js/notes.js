@@ -9,9 +9,9 @@ export const WELCOME_MD = `# Welcome
 
 Core Sample keeps notes on this phone. They are saved as you type.
 
-- [ ] Switch to Preview and tap this box
-- [ ] Open Source and see the Markdown change
-- [ ] Tap [[Another note]] in Preview to open it
+- [ ] Tap this box to tick it
+- [ ] Tap a line to see its **Markdown**
+- [ ] Tap [[Another note]] to open it
 
 Notes → GitHub can sign in and download Markdown. Edits to the saved branch sync after a short pause.
 
@@ -165,13 +165,11 @@ export async function loadSession(db) {
   }
   const notes = files.filter((file) => file.kind === 'markdown' && !file.trashedAt && !isIgnoredPath(file.path));
   const lastOpened = await getMeta(db, 'lastOpened');
-  const editorMode = await getMeta(db, 'editorMode');
   const expanded = await getMeta(db, 'expanded');
   return {
     files,
     notes,
     current: pickCurrent(notes, lastOpened),
-    mode: editorMode === 'preview' ? 'preview' : 'source',
     folders: stringList(await getMeta(db, 'folders')),
     recent: stringList(await getMeta(db, 'recent')),
     expanded: Array.isArray(expanded) ? expanded.filter((item) => typeof item === 'string') : null,
