@@ -370,8 +370,12 @@ export async function githubRequest(fetchImpl, url, { token, method = 'GET', bod
   let response;
   try {
     response = await fetchImpl(url, init);
-  } catch {
-    if (signal && signal.aborted) throw new Error('GitHub took too long to answer.');
+  } catch (error) {
+    if ((signal && signal.aborted) || (error && error.timedOut)) {
+      const timedOut = new Error('GitHub took too long to answer.');
+      timedOut.timedOut = true;
+      throw timedOut;
+    }
     throw new Error('GitHub could not be reached. The copy on this device was kept.');
   }
   let text = '';
