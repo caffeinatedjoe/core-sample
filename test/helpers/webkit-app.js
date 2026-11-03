@@ -43,7 +43,9 @@ export function serve() {
   });
 }
 
-export async function withPhone(t, run, { colorScheme = 'light' } = {}) {
+// `serviceWorkers: 'block'` lets context.route() see image loads: WebKit
+// sends a controlled page's subresources past Playwright's router.
+export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers = 'allow' } = {}) {
   let playwright;
   try {
     playwright = await import('playwright');
@@ -54,7 +56,7 @@ export async function withPhone(t, run, { colorScheme = 'light' } = {}) {
   const { webkit, devices } = playwright;
   const server = await serve();
   const browser = await webkit.launch();
-  const context = await browser.newContext({ ...devices['iPhone 13'], colorScheme });
+  const context = await browser.newContext({ ...devices['iPhone 13'], colorScheme, serviceWorkers });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
