@@ -20,9 +20,9 @@ export function closesFence(line, open) {
 
 // `- [ ]`, `* [x]`, `+ [X]`. Leading spaces and tabs are kept as-is so a
 // nested vault line toggles without the indent changing. The mark is the
-// single character inside the brackets.
+// single character inside the brackets. A CRLF file's `\r` is not text.
 export function parseTask(line) {
-  const match = /^([ \t]*)([-*+])([ \t]+)\[([ xX])\](.*)$/.exec(line);
+  const match = /^([ \t]*)([-*+])([ \t]+)\[([ xX])\]([^\r]*)\r?$/.exec(line);
   if (!match) return null;
   const markIndex = match[1].length + match[2].length + match[3].length + 1;
   return {

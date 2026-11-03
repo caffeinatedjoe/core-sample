@@ -4,7 +4,7 @@ import { EditorState, ensureSyntaxTree } from '../app/vendor/codemirror.js';
 import { headingOffset, liveSpecs, markdownLanguage, taskToggle } from '../app/js/live-rules.js';
 
 function stateOf(doc) {
-  const state = EditorState.create({ doc, extensions: [markdownLanguage.extension] });
+  const state = EditorState.create({ doc, extensions: [EditorState.lineSeparator.of('\n'), markdownLanguage.extension] });
   ensureSyntaxTree(state, state.doc.length, 5000);
   return state;
 }
@@ -179,4 +179,30 @@ test('headingOffset finds the heading line, skipping fences', () => {
   const text = '```\n# Fake\n```\n## Real one ##\n';
   assert.equal(headingOffset(text, 'real one'), text.indexOf('## Real'));
   assert.equal(headingOffset(text, 'fake'), -1);
+});
+
+test('CRLF notes render tasks and headings, and the text keeps every \\r', () => {
+  const doc = '# Head\r\n- [ ] task\r\n- [x] done\r\nend';
+  assert.equal(visible(doc), 'Head\r\n☐ task\r\n☑ done\r\nend');
+  const state = stateOf(doc);
+  const change = taskToggle(state, state.doc.line(2).from);
+  assert.deepEqual(change, { from: 11, to: 12, insert: 'x' });
+  assert.equal(headingOffset(doc, 'head'), 0);
+});
+
+test('edits round-trip byte for byte: CRLF, tabs, trailing spaces and unicode survive', () => {
+  const original = '# Plan \t\r\n\r\n- [ ] one  \r\n\t- [x] two\t\r\n```js\r\n  x = 1;   \r\n```\r\n日本語 🌧️ [[Note|alias]] ![[a.png|200]]\n\nno newline at end   ';
+  let state = EditorState.create({ doc: original, extensions: [EditorState.lineSeparator.of('\n'), markdownLanguage.extension] });
+  assert.equal(state.doc.toString(), original);
+  for (const cursor of [null, 0, 5, 20, original.length]) liveSpecs(stateOf(original), { ranges: cursor === null ? [] : [{ from: cursor, to: cursor }] });
+  assert.equal(state.doc.toString(), original, 'drawing never edits the text');
+  const at = original.indexOf('one') + 3;
+  state = state.update({ changes: { from: at, insert: '!' } }).state;
+  assert.equal(state.doc.toString(), `${original.slice(0, at)}!${original.slice(at)}`);
+  const toggle = taskToggle(state, state.doc.lineAt(at).from);
+  state = state.update({ changes: toggle }).state;
+  const expected = `${original.slice(0, at)}!${original.slice(at)}`.replace('- [ ] one', '- [x] one');
+  assert.equal(state.doc.toString(), expected);
+  state = state.update({ changes: taskToggle(state, state.doc.lineAt(at).from) }).state;
+  assert.equal(state.doc.toString(), `${original.slice(0, at)}!${original.slice(at)}`);
 });

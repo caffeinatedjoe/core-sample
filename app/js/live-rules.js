@@ -323,14 +323,15 @@ export function headingOffset(text, heading) {
   if (!want) return -1;
   let offset = 0;
   let fence = null;
-  for (const line of String(text ?? '').split('\n')) {
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.replace(/\r$/, '');
     const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (fenceMatch && (!fence || fenceMatch[1][0] === fence)) fence = fence ? null : fenceMatch[1][0];
     else if (!fence) {
       const match = /^(#{1,6})\s+(\S.*)$/.exec(line);
       if (match && match[2].replace(/\s+#+\s*$/, '').trim().toLowerCase() === want) return offset;
     }
-    offset += line.length + 1;
+    offset += raw.length + 1;
   }
   return -1;
 }
