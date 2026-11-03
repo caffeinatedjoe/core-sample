@@ -114,6 +114,75 @@ async function migrateImageBytes(db, row, bytes) {
   }
 }
 
+export async function moveImageCache(db, { repo = '', from, to } = {}) {
+  if (!from || !to || from === to) return 0;
+  let moved = 0;
+  const repos = [];
+  if (repo) repos.push(repo);
+  repos.push('');
+  for (const item of repos) {
+    let hit = null;
+    try {
+      hit = await cachedImage(db, item, from);
+    } catch {
+      hit = null;
+    }
+    if (!hit?.data) continue;
+    try {
+      const already = await cachedImage(db, item, to);
+      if (!already?.data) {
+        await rememberImage(db, {
+          repo: item,
+          path: to,
+          data: hit.data,
+          type: hit.type || '',
+          sha: hit.sha || '',
+          viewedAt: Date.now(),
+        });
+      }
+      await deleteImages(db, [cacheKey(item, from)]);
+      moved += 1;
+    } catch {
+      // The bytes remain under the old key if the move cannot finish.
+    }
+  }
+  return moved;
+}
+
+export function remapVaultIndex(index, pathMap = {}) {
+  if (!index || typeof index !== 'object') return index;
+  const map = pathMap && typeof pathMap === 'object' ? pathMap : {};
+  const remap = (path) => (map[path] && map[path] !== path ? map[path] : path);
+  const paths = [];
+  const seen = new Set();
+  for (const path of index.paths || []) {
+    const next = remap(path);
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    paths.push(next);
+  }
+  const shas = {};
+  for (const [path, sha] of Object.entries(index.shas || {})) {
+    const next = remap(path);
+    if (next) shas[next] = sha;
+  }
+  const sizes = {};
+  for (const [path, size] of Object.entries(index.sizes || {})) {
+    const next = remap(path);
+    if (next) sizes[next] = size;
+  }
+  return { ...index, paths, shas, sizes };
+}
+
+export async function remapImageIndex(db, pathMap) {
+  if (!pathMap || !Object.keys(pathMap).length) return null;
+  const saved = await getMeta(db, INDEX_KEY);
+  if (!saved) return null;
+  const next = remapVaultIndex(saved, pathMap);
+  await setMeta(db, INDEX_KEY, next);
+  return next;
+}
+
 // Read only. A view does not write the record. Last-viewed is not stored:
 // a referenced image is never evicted, so there is no least-recently-viewed list.
 export async function cachedImage(db, repo, path) {

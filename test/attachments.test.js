@@ -26,7 +26,7 @@ test('root and subfolder notes use the v0.0.9 ./assets/${filename} folder', () =
   assert.equal(ATTACHMENT_FOLDER, './assets/${filename}');
   assert.equal(noteAttachmentFolder('Site Log.md'), 'assets/Site Log');
   assert.equal(noteAttachmentFolder('Site Log.md', './assets/${filename}'), 'assets/Site Log');
-  assert.equal(noteAttachmentFolder('Agility Onboarding 2026.md'), 'assets/Agility Onboarding 2026');
+  assert.equal(noteAttachmentFolder('Workshop Notes 2026.md'), 'assets/Workshop Notes 2026');
   assert.equal(noteAttachmentFolder('Projects/Café Notes.md'), 'Projects/assets/Café Notes');
   assert.equal(noteAttachmentFolder('Field/Deep/Core 7.md'), 'Field/Deep/assets/Core 7');
 });

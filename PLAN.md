@@ -83,12 +83,12 @@ Implemented as core-sample-shell-v34. A ` ```dataview ` TASK block in Live Previ
 
 ## v35 — Attachments
 
-Implemented as core-sample-shell-v35. See [docs/attachments.md](docs/attachments.md).
+Implemented as core-sample-shell-v35, with the rename/sync fix in core-sample-shell-v35.1. See [docs/attachments.md](docs/attachments.md).
 
 - Sidebar lists non-Markdown files from the GitHub tree (`kind: 'binary'` stubs, no byte download at startup). Images open the existing viewer; other types show name, size, and "Can't preview this file type".
 - Bytes are fetched on first view or embed render and cached in the `images` store.
 - Live Preview still draws `![[name.png]]` / `![[name.png|300]]` / `![](relative/path.png)`. Wikilink resolution is exact path, unique basename, then closest to the note.
-- Paste and the format-bar Image picker write original bytes locally, insert a shortest `![[filename]]`, and upload through the Git Data blob API as base64. Paths follow Custom Attachment Location v0.0.9 defaults. Note rename also renames `assets/<basename>/` when that folder exists.
+- Paste and the format-bar Image picker write original bytes locally, insert a shortest `![[filename]]`, and upload through the Git Data blob API as base64. Paths follow Custom Attachment Location v0.0.9 defaults. Note rename also renames `assets/<basename>/` when that folder exists. Unchanged attachment moves reuse the existing GitHub blob sha; one unresolvable binary does not hold the rest of the commit.
 - Attachment Manager is ignored. Core Sample does not write `app.json`.
 
 ## Priority when a stage gets crowded

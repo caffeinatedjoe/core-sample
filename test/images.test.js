@@ -16,6 +16,9 @@ import {
   pruneUnreferencedImages,
   refreshVaultIndex,
   rememberImage,
+  remapVaultIndex,
+  moveImageCache,
+  cachedImage,
 } from '../app/js/images.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
@@ -1049,4 +1052,44 @@ test('a failed image prefetch is tried again on the next sync', async () => {
   assert.equal((await listImages(db)).length, 1);
   db.close();
   await deleteDatabase(name);
+});
+
+test('moving an attachment moves cached bytes to the new path key', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  await rememberImage(db, {
+    repo: 'owner/repo',
+    path: 'assets/Site Log/shot.png',
+    data: PNG.buffer.slice(0),
+    type: 'image/png',
+    sha: 'png-1',
+  });
+  const moved = await moveImageCache(db, {
+    repo: 'owner/repo',
+    from: 'assets/Site Log/shot.png',
+    to: 'assets/Field Log/shot.png',
+  });
+  assert.equal(moved, 1);
+  const next = await cachedImage(db, 'owner/repo', 'assets/Field Log/shot.png');
+  assert.equal(next.bytes, PNG.byteLength);
+  assert.equal(next.sha, 'png-1');
+  assert.equal(await cachedImage(db, 'owner/repo', 'assets/Site Log/shot.png'), null);
+  db.close();
+  await deleteDatabase(name);
+});
+
+test('a vault index remap drops old attachment paths', () => {
+  const next = remapVaultIndex({
+    paths: ['Site Log.md', 'assets/Site Log/shot.png', 'assets/Site Log/notes.pdf'],
+    shas: { 'Site Log.md': 'blob-note', 'assets/Site Log/shot.png': 'png-1', 'assets/Site Log/notes.pdf': 'pdf-1' },
+    sizes: { 'assets/Site Log/shot.png': 80, 'assets/Site Log/notes.pdf': 1200 },
+  }, {
+    'Site Log.md': 'Field Log.md',
+    'assets/Site Log/shot.png': 'assets/Field Log/shot.png',
+    'assets/Site Log/notes.pdf': 'assets/Field Log/notes.pdf',
+  });
+  assert.deepEqual(next.paths, ['Field Log.md', 'assets/Field Log/shot.png', 'assets/Field Log/notes.pdf']);
+  assert.equal(next.shas['assets/Field Log/shot.png'], 'png-1');
+  assert.equal(next.shas['assets/Site Log/shot.png'], undefined);
+  assert.equal(next.sizes['assets/Field Log/notes.pdf'], 1200);
 });

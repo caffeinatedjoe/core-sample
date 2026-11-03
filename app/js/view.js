@@ -40,7 +40,7 @@ import {
 import { fileFromRemote, fileFromRemoteAttachment, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
-import { embedImage, loadAttachmentBytes, loadEmbedBlob, OFFLINE_IMAGE_REASON, rememberImage, startImagePrefetch } from './images.js';
+import { embedImage, loadAttachmentBytes, loadEmbedBlob, moveImageCache, OFFLINE_IMAGE_REASON, rememberImage, remapImageIndex, startImagePrefetch } from './images.js';
 import { createAutoSync, loadConflictRemote, syncAlert, syncAlertFocus, syncAlertTone } from './github-sync.js';
 import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
@@ -574,6 +574,22 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     if (result.pathMap) {
       recent = recent.map((path) => result.pathMap[path] || path);
       setMeta(db, 'recent', recent).catch(() => {});
+      try {
+        const settings = await embedSettings();
+        for (const [from, to] of Object.entries(result.pathMap)) {
+          if (!to || to === from) continue;
+          await moveImageCache(db, { repo: settings.repo || '', from, to });
+        }
+      } catch {
+        // Sync still moves cache keys when a rename is queued.
+      }
+      try {
+        const index = await remapImageIndex(db, result.pathMap);
+        if (index && Array.isArray(index.paths)) vaultPaths = index.paths;
+      } catch {
+        // The next tree fetch rebuilds the list. Until then extraAttachmentFiles
+        // must not recreate the old paths from a stale index.
+      }
     }
     syncOpen(result.pathMap);
     renderList();
@@ -589,7 +605,16 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const prior = previous.find((file) => file.path === from);
       const next = (result.files || []).find((file) => file.path === to);
       if (!prior || (prior.kind !== 'markdown' && prior.kind !== 'binary') || !next) continue;
-      const base = typeof prior.baseSha === 'string' && prior.baseSha ? prior.baseSha : (prior.remoteSha || '');
+      let base = typeof prior.baseSha === 'string' && prior.baseSha ? prior.baseSha : (prior.remoteSha || '');
+      if (!base) {
+        try {
+          const index = await getMeta(db, 'githubVaultIndex');
+          const shas = index && index.shas ? index.shas : {};
+          base = shas[to] || shas[from] || '';
+        } catch {
+          base = '';
+        }
+      }
       await sync.noteRenamed({ from, to, baseSha: base, file: next });
     }
     for (const file of result.put || []) {

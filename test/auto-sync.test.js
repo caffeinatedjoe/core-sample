@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { deleteDatabase, getFile, getMeta, listFiles, listOps, openDatabase, putFile } from '../app/js/db.js';
 import { encodeBytesBase64, encodeUtf8Base64 } from '../app/js/github-api.js';
-import { rememberImage } from '../app/js/images.js';
+import { cachedImage, rememberImage } from '../app/js/images.js';
 import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
 import {
   backoffDelay,
@@ -18,6 +18,7 @@ import {
   RACE_RETRY_LIMIT,
   reconcileAttachments,
   reconcileNotes,
+  reuseBinaryBlobSha,
   refReadPath,
   refUpdateBody,
   refUpdatePath,
@@ -30,6 +31,7 @@ import {
   syncAlert,
   syncAlertFocus,
   syncAlertTone,
+  ATTACHMENT_BYTES_MISSING,
 } from '../app/js/github-sync.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
@@ -40,6 +42,24 @@ function note(path, content, extra = {}) {
     content,
     kind: 'markdown',
     encoding: 'utf-8',
+    createdAt: 1,
+    updatedAt: 2,
+    trashedAt: null,
+    remoteSha: null,
+    baseSha: null,
+    dirty: false,
+    conflict: false,
+    ...extra,
+  };
+}
+
+function attachment(path, extra = {}) {
+  return {
+    path,
+    content: '',
+    kind: 'binary',
+    encoding: 'binary',
+    bytes: extra.bytes || 0,
     createdAt: 1,
     updatedAt: 2,
     trashedAt: null,
@@ -357,6 +377,13 @@ test('status is never Synced before a confirmed write, and a conflict keeps both
     origin: '',
     trashedAt: null,
   }), false);
+  assert.equal(reuseBinaryBlobSha({ path: 'assets/Field Log/shot.png', kind: 'binary' }, [
+    { kind: 'rename', from: 'assets/Site Log/shot.png', to: 'assets/Field Log/shot.png', id: 'assets/Field Log/shot.png', baseSha: 'png-1' },
+  ]), 'png-1');
+  assert.equal(reuseBinaryBlobSha({ path: 'assets/Field Log/shot.png', kind: 'binary' }, [
+    { kind: 'rename', from: 'assets/Site Log/shot.png', to: 'assets/Field Log/shot.png', id: 'assets/Field Log/shot.png' },
+  ]), '');
+  assert.equal(ATTACHMENT_BYTES_MISSING.includes('still on this device'), false);
   assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', updatedAt: 2 }), { headSha: 'c2', headDate: 10 }), false);
   assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', syncedCommit: 'c1', syncedAt: 1 }), { headSha: 'c1', headDate: 10 }), false);
 
@@ -1270,6 +1297,111 @@ test('a local image stays queued offline and later uploads the original bytes', 
     assert.equal(saved.dirty, false);
     assert.ok(saved.remoteSha);
     assert.equal(box.git.state.files.has(path), true);
+  } finally {
+    await box.close();
+  }
+});
+
+test('renaming a note reuses attachment blob shas and drops the old paths in one commit', async () => {
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 8, 9]);
+  const box = await harness();
+  try {
+    const imageFrom = 'assets/Site Log/shot.png';
+    const pdfFrom = 'assets/Site Log/notes.pdf';
+    const imageTo = 'assets/Field Log/shot.png';
+    const pdfTo = 'assets/Field Log/notes.pdf';
+    box.git.state.files.delete('Field Notes.md');
+    box.git.state.files.set('Site Log.md', { sha: 'blob-note', text: '![[shot.png]]\n' });
+    box.git.state.files.set(imageFrom, { sha: 'png-1', text: '' });
+    box.git.state.files.set(pdfFrom, { sha: 'pdf-1', text: '' });
+    box.git.state.blobs.set('blob-note', '![[shot.png]]\n');
+    await putFile(box.db, note('Field Log.md', '![[shot.png]]\n', { dirty: true }));
+    await putFile(box.db, attachment(imageTo, { bytes: png.byteLength, dirty: true }));
+    await putFile(box.db, attachment(pdfTo, { bytes: 1200, dirty: true }));
+    await rememberImage(box.db, {
+      repo: 'owner/repo',
+      path: imageFrom,
+      data: png.buffer.slice(0),
+      type: 'image/png',
+      sha: 'png-1',
+    });
+    await box.sync.noteRenamed({
+      from: 'Site Log.md',
+      to: 'Field Log.md',
+      baseSha: 'blob-note',
+      file: note('Field Log.md', '![[shot.png]]\n', { dirty: true }),
+    });
+    await box.sync.noteRenamed({
+      from: imageFrom,
+      to: imageTo,
+      baseSha: 'png-1',
+      file: attachment(imageTo, { bytes: png.byteLength, dirty: true }),
+    });
+    await box.sync.noteRenamed({
+      from: pdfFrom,
+      to: pdfTo,
+      baseSha: 'pdf-1',
+      file: attachment(pdfTo, { bytes: 1200, dirty: true }),
+    });
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const trees = box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/trees'));
+    assert.equal(trees.length, 1);
+    const tree = trees[0].body.tree;
+    assert.equal(tree.some((entry) => entry.path === imageTo && entry.sha === 'png-1'), true);
+    assert.equal(tree.some((entry) => entry.path === pdfTo && entry.sha === 'pdf-1'), true);
+    assert.equal(tree.some((entry) => entry.path === imageFrom && entry.sha === null), true);
+    assert.equal(tree.some((entry) => entry.path === pdfFrom && entry.sha === null), true);
+    assert.equal(tree.some((entry) => entry.path === 'Site Log.md' && entry.sha === null), true);
+    const blobPosts = box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/blobs'));
+    assert.equal(blobPosts.some((item) => item.body && item.body.encoding === 'base64'), false);
+    assert.equal(box.git.state.files.has(imageFrom), false);
+    assert.equal(box.git.state.files.has(pdfFrom), false);
+    assert.equal(box.git.state.files.has('Site Log.md'), false);
+    assert.equal(box.git.state.files.get(imageTo).sha, 'png-1');
+    assert.equal(box.git.state.files.get(pdfTo).sha, 'pdf-1');
+    assert.equal(await getFile(box.db, imageFrom), undefined);
+    assert.equal(await getFile(box.db, pdfFrom), undefined);
+    assert.equal(await getFile(box.db, 'Site Log.md'), undefined);
+    const localImage = await getFile(box.db, imageTo);
+    const localPdf = await getFile(box.db, pdfTo);
+    assert.equal(localImage.dirty, false);
+    assert.equal(localImage.remoteSha, 'png-1');
+    assert.equal(localPdf.dirty, false);
+    assert.equal(localPdf.remoteSha, 'pdf-1');
+    const moved = await cachedImage(box.db, 'owner/repo', imageTo);
+    assert.ok(moved?.data);
+    assert.equal(moved.bytes, png.byteLength);
+    assert.equal(await cachedImage(box.db, 'owner/repo', imageFrom), null);
+    const files = await listFiles(box.db);
+    assert.equal(files.some((file) => file.path.startsWith('assets/Site Log/')), false);
+    assert.equal((await listOps(box.db)).length, 0);
+  } finally {
+    await box.close();
+  }
+});
+
+test('one unresolvable attachment does not block a note edit', async () => {
+  const box = await harness();
+  try {
+    const stuck = attachment('assets/Site Log/mystery.bin', { bytes: 40, dirty: true, origin: 'user' });
+    await putFile(box.db, note('Field Notes.md', 'edited\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    await putFile(box.db, stuck);
+    await box.sync.noteEdited(note('Field Notes.md', 'edited\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    await box.sync.noteEdited(stuck);
+    const result = await box.sync.runNow();
+    assert.equal(box.git.state.files.get('Field Notes.md').text, 'edited\n');
+    assert.equal(box.git.state.files.has(stuck.path), false);
+    const local = await getFile(box.db, stuck.path);
+    assert.equal(local.dirty, true);
+    assert.equal(result.status, SYNC_STATUS.failed);
+    assert.equal(result.detail, ATTACHMENT_BYTES_MISSING);
+    assert.equal(result.detail.includes('still on this device'), false);
+    const remaining = await listOps(box.db);
+    assert.equal(remaining.some((op) => op.path === stuck.path || op.id === stuck.path), true);
+    const noteFile = await getFile(box.db, 'Field Notes.md');
+    assert.equal(noteFile.dirty, false);
+    assert.equal(noteFile.content, 'edited\n');
   } finally {
     await box.close();
   }

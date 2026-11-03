@@ -13,7 +13,7 @@ import {
   selectAttachments,
   selectMarkdown,
 } from './github-api.js';
-import { cachedImage } from './images.js';
+import { cachedImage, moveImageCache } from './images.js';
 import { loadGithubSettings, recordAuthFailure } from './github-store.js';
 import { redact } from './github-redact.js';
 import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
@@ -42,6 +42,7 @@ export const RACE_RETRY_LIMIT = 4;
 const RACE_BASE_MS = 400;
 const RACE_CAP_MS = 4000;
 export const REMOTE_LOAD_TIMEOUT_MS = 15000;
+export const ATTACHMENT_BYTES_MISSING = "Couldn't upload this attachment because its bytes aren't on this device.";
 
 export function raceDelay(attempt, random = Math.random) {
   const n = Math.max(0, Number(attempt) || 0);
@@ -206,6 +207,22 @@ export function isAppGenerated(file) {
   if (file.localOnly === true || file.origin === 'app') return true;
   if (file.origin === 'user') return false;
   return file.path === 'Welcome.md' && !syncedBase(file) && !file.remoteSha;
+}
+
+export function renameOpFor(file, ops = []) {
+  if (!file || !file.path) return null;
+  return (ops || []).find((op) => (
+    op && op.kind === 'rename' && (op.to === file.path || op.id === file.path)
+  )) || null;
+}
+
+// An unchanged binary rename already has GitHub's blob. Reuse that sha in the
+// new tree entry so the push does not need bytes at the new path.
+export function reuseBinaryBlobSha(file, ops = []) {
+  if (!file || file.kind !== 'binary') return '';
+  const rename = renameOpFor(file, ops);
+  if (rename && typeof rename.baseSha === 'string' && rename.baseSha) return rename.baseSha;
+  return '';
 }
 
 export function shouldAutoUpload(file) {
@@ -786,6 +803,13 @@ export function createAutoSync({
   async function noteRenamed({ from, to, baseSha, file }) {
     if (!file || !to || isIgnoredPath(to) || (from && isIgnoredPath(from))) return;
     const settings = await loadGithubSettings(db);
+    if (from && to && from !== to) {
+      try {
+        await moveImageCache(db, { repo: settings.repo || '', from, to });
+      } catch {
+        // The file row still moved. Bytes may stay under the old key until the next view.
+      }
+    }
     if (!settings.token || !settings.repo || !settings.branch) return;
     await deleteOps(db, [from, to]);
     if (!baseSha) {
@@ -1524,28 +1548,67 @@ export function createAutoSync({
     const key = preparedKey(freshHead, pushFiles, deletions);
     let written = prepared && prepared.key === key ? prepared.written : null;
     let commitSha = written ? prepared.commitSha : '';
+    let skippedBinaries = prepared && prepared.key === key && Array.isArray(prepared.skipped) ? prepared.skipped : [];
     if (!written) {
       const entries = [];
       written = [];
+      const skipped = [];
+      const skipDeletes = new Set();
       for (const file of pushFiles) {
         if (isIgnoredPath(file.path)) continue;
-        let body;
         if (file.kind === 'binary') {
+          const reuse = reuseBinaryBlobSha(file, mineNow);
+          if (reuse) {
+            entries.push({
+              path: repoPath(settings.root, file.path),
+              mode: '100644',
+              type: 'blob',
+              sha: reuse,
+            });
+            written.push({ path: file.path, sha: reuse, content: fileFingerprint(file), kind: 'binary' });
+            continue;
+          }
           let hit = null;
+          const rename = renameOpFor(file, mineNow);
           try {
             hit = await cachedImage(db, settings.repo, file.path);
             if (!hit?.data) hit = await cachedImage(db, '', file.path);
+            if (!hit?.data && rename?.from) {
+              hit = await cachedImage(db, settings.repo, rename.from);
+              if (!hit?.data) hit = await cachedImage(db, '', rename.from);
+              if (hit?.data) {
+                try {
+                  await moveImageCache(db, { repo: settings.repo, from: rename.from, to: file.path });
+                } catch {
+                  // The bytes are still in hit and can be uploaded from here.
+                }
+              }
+            }
           } catch {
             hit = null;
           }
-          if (!hit?.data) return hold(settings, ops, { status: 0, message: 'The file is still on this device.' });
-          body = { content: encodeBytesBase64(hit.data), encoding: 'base64' };
-        } else {
-          body = { content: String(file.content ?? ''), encoding: 'utf-8' };
+          if (!hit?.data) {
+            skipped.push(file.path);
+            if (rename?.from) skipDeletes.add(rename.from);
+            continue;
+          }
+          const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
+            method: 'POST',
+            body: { content: encodeBytesBase64(hit.data), encoding: 'base64' },
+          });
+          if (!blob.ok || !blob.body || typeof blob.body.sha !== 'string') return hold(settings, ops, blob);
+          entries.push({
+            path: repoPath(settings.root, file.path),
+            mode: '100644',
+            type: 'blob',
+            sha: blob.body.sha,
+          });
+          written.push({ path: file.path, sha: blob.body.sha, content: fileFingerprint(file), kind: 'binary' });
+          continue;
         }
         const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
           method: 'POST',
-          body,
+          body: { content: String(file.content ?? ''), encoding: 'utf-8' },
         });
         if (!blob.ok || !blob.body || typeof blob.body.sha !== 'string') return hold(settings, ops, blob);
         entries.push({
@@ -1556,7 +1619,8 @@ export function createAutoSync({
         });
         written.push({ path: file.path, sha: blob.body.sha, content: fileFingerprint(file), kind: file.kind || 'markdown' });
       }
-      for (const item of deletions) {
+      const treeDeletions = deletions.filter((item) => !skipDeletes.has(item.path));
+      for (const item of treeDeletions) {
         if (isIgnoredPath(item.path)) continue;
         entries.push({
           path: repoPath(settings.root, item.path),
@@ -1565,6 +1629,31 @@ export function createAutoSync({
           sha: null,
         });
       }
+      deletions.length = 0;
+      deletions.push(...treeDeletions);
+      if (!entries.length) {
+        if (skipped.length) {
+          return finish({
+            configured: true,
+            failed: true,
+            syncing: false,
+            confirmed: false,
+            pending: true,
+            detail: ATTACHMENT_BYTES_MISSING,
+          });
+        }
+        const still = (await listOps(db)).some((op) => op.repo === settings.repo && op.branch === settings.branch);
+        return finish({
+          configured: true,
+          syncing: false,
+          conflict: conflicted,
+          pending: still && !conflicted,
+          confirmed: !conflicted && !still,
+          failed: false,
+          offline: false,
+        });
+      }
+      skippedBinaries = skipped;
       const treeWrite = await call(repoUrl(settings.repo, '/git/trees'), {
         method: 'POST',
         body: { base_tree: treeSha, tree: entries },
@@ -1586,6 +1675,7 @@ export function createAutoSync({
         key,
         commitSha,
         written,
+        skipped: skippedBinaries,
         treeSha: treeWrite.body.sha,
         headDate: commitDateMs(commitWrite.body, now()),
       };
@@ -1644,15 +1734,17 @@ export function createAutoSync({
     if (settled.length) onApplied(settled);
     const remaining = await listOps(db);
     const stillPending = remaining.some((op) => op.repo === settings.repo && op.branch === settings.branch);
+    const skippedLeft = skippedBinaries.some((path) => remaining.some((op) => op.path === path || op.id === path));
     const after = await listFiles(db);
     const stillConflict = after.some(openConflict);
     return finish({
       configured: true,
       syncing: false,
-      confirmed: !stillPending && !stillConflict,
+      confirmed: !stillPending && !stillConflict && !skippedLeft,
       pending: stillPending && !stillConflict,
       conflict: stillConflict,
-      failed: false,
+      failed: skippedLeft,
+      detail: skippedLeft ? ATTACHMENT_BYTES_MISSING : '',
       offline: false,
       copies: countCopies(after),
     });
