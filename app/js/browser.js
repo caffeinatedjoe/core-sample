@@ -1,3 +1,4 @@
+import { attachmentIcon, extraAttachmentFiles, isMarkdownPath, liveItems } from './attachments.js';
 import { noteTitle } from './notes.js';
 import { ancestorFolders, liveNotes, parentPath } from './organize.js';
 import { isIgnoredPath } from './vault-paths.js';
@@ -10,7 +11,7 @@ function byName(a, b) {
 
 function folderSet(files, folders) {
   const set = new Set((folders || []).filter((folder) => !isIgnoredPath(folder)));
-  for (const file of liveNotes(files)) {
+  for (const file of liveItems(files)) {
     for (const folder of ancestorFolders(file.path)) set.add(folder);
   }
   return set;
@@ -31,10 +32,21 @@ function appendTree(rows, files, folders, open, dir, depth, currentPath) {
     });
     if (isOpen) appendTree(rows, files, folders, open, path, depth + 1, currentPath);
   }
-  const notes = liveNotes(files)
+  const children = liveItems(files)
     .filter((file) => parentPath(file.path) === dir)
-    .sort((a, b) => byName(noteTitle(a), noteTitle(b)) || byName(a.path, b.path));
-  for (const file of notes) {
+    .sort((a, b) => byName(rowTitle(a), rowTitle(b)) || byName(a.path, b.path));
+  for (const file of children) {
+    if (file.kind === 'binary' || (!isMarkdownPath(file.path) && file.kind !== 'markdown')) {
+      rows.push({
+        type: 'attachment',
+        path: file.path,
+        title: String(file.path).split('/').pop(),
+        icon: attachmentIcon(file.path),
+        depth,
+        current: false,
+      });
+      continue;
+    }
     rows.push({
       type: 'note',
       path: file.path,
@@ -43,6 +55,11 @@ function appendTree(rows, files, folders, open, dir, depth, currentPath) {
       current: file.path === currentPath,
     });
   }
+}
+
+function rowTitle(file) {
+  if (file.kind === 'binary' || !isMarkdownPath(file.path)) return String(file.path).split('/').pop();
+  return noteTitle(file);
 }
 
 function folded(text, matchCase) {
@@ -64,12 +81,13 @@ export function searchNotes(files, query, { matchCase = false, content = true } 
   const q = folded(String(query ?? '').trim(), matchCase);
   if (!q) return [];
   const hits = [];
-  for (const file of liveNotes(files)) {
-    const title = noteTitle(file);
+  for (const file of liveItems(files)) {
+    const attachment = file.kind === 'binary' || !isMarkdownPath(file.path);
+    const title = attachment ? String(file.path).split('/').pop() : noteTitle(file);
     const nameHit = folded(title, matchCase).includes(q) || folded(file.path, matchCase).includes(q);
     if (nameHit) {
-      hits.push({ path: file.path, title, kind: 'name', snippet: '' });
-    } else if (content && folded(file.content, matchCase).includes(q)) {
+      hits.push({ path: file.path, title, kind: attachment ? 'attachment' : 'name', snippet: '' });
+    } else if (!attachment && content && folded(file.content, matchCase).includes(q)) {
       hits.push({
         path: file.path,
         title,
@@ -132,22 +150,34 @@ export function vaultSummary(files, folders, vaultPaths) {
   };
 }
 
-export function listBrowser({ files, folders, expanded, recent, query, currentPath, matchCase = false, searchContent = true }) {
+export function listBrowser({
+  files,
+  folders,
+  expanded,
+  recent,
+  query,
+  currentPath,
+  matchCase = false,
+  searchContent = true,
+  extraPaths,
+}) {
+  const all = [...(files || []), ...extraAttachmentFiles(files, extraPaths)];
   const q = String(query ?? '').trim();
   if (q) {
-    const hits = searchNotes(files, q, { matchCase, content: searchContent });
+    const hits = searchNotes(all, q, { matchCase, content: searchContent });
     if (!hits.length) return [{ type: 'empty', text: NO_MATCHES }];
     return hits.map((hit) => ({
-      type: 'note',
+      type: hit.kind === 'attachment' ? 'attachment' : 'note',
       path: hit.path,
       title: hit.title,
+      icon: hit.kind === 'attachment' ? attachmentIcon(hit.path) : '',
       depth: 0,
       current: hit.path === currentPath,
     }));
   }
 
   const rows = [];
-  const live = liveNotes(files);
+  const live = liveNotes(all);
   const recentPaths = (recent || []).filter((path) => live.some((file) => file.path === path)).slice(0, 8);
   if (recentPaths.length) {
     rows.push({ type: 'label', text: 'Recent' });
@@ -165,7 +195,7 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
   }
   rows.push({ type: 'label', text: 'Notes' });
   const open = new Set(expanded || []);
-  appendTree(rows, files, folderSet(files, folders), open, '', 0, currentPath);
+  appendTree(rows, all, folderSet(all, folders), open, '', 0, currentPath);
   const trash = (files || []).filter((file) => file.trashedAt && !isIgnoredPath(file.path));
   if (trash.length) {
     rows.push({ type: 'trash-label', text: 'Trash', count: trash.length });
@@ -173,7 +203,7 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
       rows.push({ type: 'trash', path: file.path, title: noteTitle(file), depth: 0 });
     }
   }
-  if (!live.length && !(folders || []).some((folder) => !isIgnoredPath(folder))) {
+  if (!liveItems(all).length && !(folders || []).some((folder) => !isIgnoredPath(folder))) {
     rows.push({ type: 'empty', text: 'No notes yet' });
   }
   return rows;

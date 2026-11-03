@@ -57,6 +57,10 @@
         <button type="button" data-format="link" aria-label="Link" class="format-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 13.5 8 15a3.2 3.2 0 0 1-4.5-4.5L5 9m9.5 1.5L16 9a3.2 3.2 0 0 1 4.5 4.5L19 15M9 12h6"></path></svg>
         </button>
+        <label class="format-btn format-image" aria-label="Image">
+          <input id="image-file" type="file" accept="image/*" aria-hidden="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="13" rx="2"></rect><circle cx="9" cy="10" r="1.4"></circle><path d="m8 16 3-3.2 2.2 2.2L16.5 12 19.5 16"></path></svg>
+        </label>
         <button type="button" data-format="heading" aria-label="Heading" class="format-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 5v14M6 12h12"></path></svg>
         </button>
@@ -276,6 +280,15 @@
       <div class="image-viewer-stage"></div>
       <button type="button" id="image-viewer-close" class="image-viewer-close">Close</button>
       <p id="image-viewer-count" class="image-viewer-count" aria-live="polite" hidden></p>
+    </div>
+    <div id="file-preview" class="file-preview" hidden role="dialog" aria-label="File">
+      <button type="button" class="file-preview-scrim" id="file-preview-scrim" aria-label="Close file"></button>
+      <div class="file-preview-card">
+        <p id="file-preview-name" class="file-preview-name"></p>
+        <p id="file-preview-size" class="file-preview-size"></p>
+        <p id="file-preview-note" class="file-preview-note">Can't preview this file type</p>
+        <button type="button" id="file-preview-close">Close</button>
+      </div>
     </div>
   </div>
   <noscript>

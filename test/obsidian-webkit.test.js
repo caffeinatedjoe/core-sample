@@ -92,7 +92,7 @@ async function routeGithub(context, git, gate = {}) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v34');
+  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.1');
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');
     request.onerror = () => resolve(false);
@@ -234,7 +234,10 @@ test('webkit phone edits land while Obsidian pushes a backup and a merge commit 
     await page.waitForFunction(() => document.getElementById('source')?.value === 'alpha\n');
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced', null, { timeout: 30000 });
     const pulled = (await readFiles(page)).map((row) => row.path).sort();
-    assert.deepEqual(pulled, ['Daily/2026-10-21.md', 'Notes/A.md', 'Notes/B.md']);
+    assert.deepEqual(pulled, ['Daily/2026-10-21.md', 'Notes/A.md', 'Notes/B.md', 'assets/pic.png']);
+    const pic = (await readFiles(page)).find((row) => row.path === 'assets/pic.png');
+    assert.equal(pic.kind, 'binary');
+    assert.equal(pic.content, '');
 
     const desktopBase = git.state.head;
     await watchStatus(page);

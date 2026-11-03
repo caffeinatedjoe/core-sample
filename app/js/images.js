@@ -1,4 +1,5 @@
 import { deleteImages, deleteMeta, getImage, getMeta, listFiles, listImages, putImage, setMeta } from './db.js';
+import { ATTACHMENT_FOLDER } from './attachments.js';
 import {
   basename,
   decodePath,
@@ -113,6 +114,75 @@ async function migrateImageBytes(db, row, bytes) {
   }
 }
 
+export async function moveImageCache(db, { repo = '', from, to } = {}) {
+  if (!from || !to || from === to) return 0;
+  let moved = 0;
+  const repos = [];
+  if (repo) repos.push(repo);
+  repos.push('');
+  for (const item of repos) {
+    let hit = null;
+    try {
+      hit = await cachedImage(db, item, from);
+    } catch {
+      hit = null;
+    }
+    if (!hit?.data) continue;
+    try {
+      const already = await cachedImage(db, item, to);
+      if (!already?.data) {
+        await rememberImage(db, {
+          repo: item,
+          path: to,
+          data: hit.data,
+          type: hit.type || '',
+          sha: hit.sha || '',
+          viewedAt: Date.now(),
+        });
+      }
+      await deleteImages(db, [cacheKey(item, from)]);
+      moved += 1;
+    } catch {
+      // The bytes remain under the old key if the move cannot finish.
+    }
+  }
+  return moved;
+}
+
+export function remapVaultIndex(index, pathMap = {}) {
+  if (!index || typeof index !== 'object') return index;
+  const map = pathMap && typeof pathMap === 'object' ? pathMap : {};
+  const remap = (path) => (map[path] && map[path] !== path ? map[path] : path);
+  const paths = [];
+  const seen = new Set();
+  for (const path of index.paths || []) {
+    const next = remap(path);
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    paths.push(next);
+  }
+  const shas = {};
+  for (const [path, sha] of Object.entries(index.shas || {})) {
+    const next = remap(path);
+    if (next) shas[next] = sha;
+  }
+  const sizes = {};
+  for (const [path, size] of Object.entries(index.sizes || {})) {
+    const next = remap(path);
+    if (next) sizes[next] = size;
+  }
+  return { ...index, paths, shas, sizes };
+}
+
+export async function remapImageIndex(db, pathMap) {
+  if (!pathMap || !Object.keys(pathMap).length) return null;
+  const saved = await getMeta(db, INDEX_KEY);
+  if (!saved) return null;
+  const next = remapVaultIndex(saved, pathMap);
+  await setMeta(db, INDEX_KEY, next);
+  return next;
+}
+
 // Read only. A view does not write the record. Last-viewed is not stored:
 // a referenced image is never evicted, so there is no least-recently-viewed list.
 export async function cachedImage(db, repo, path) {
@@ -159,6 +229,7 @@ function blankIndex(settings, extra = {}) {
     treeSha: '',
     truncated: false,
     shas: {},
+    sizes: {},
     status: 0,
     reason: githubStatusReason(0),
     fromCache: false,
@@ -244,8 +315,10 @@ export async function refreshVaultIndex(db, settings, fetchImpl, now = Date.now(
   }
   const paths = entries.map((entry) => entry.path);
   const shas = {};
+  const sizes = {};
   for (const entry of entries) {
     if (entry.sha) shas[entry.path] = entry.sha;
+    if (entry.size) sizes[entry.path] = entry.size;
   }
   const folderRead = await readAttachmentFolder(fetchImpl, settings, branch);
   if (folderRead.status === 401) {
@@ -258,6 +331,7 @@ export async function refreshVaultIndex(db, settings, fetchImpl, now = Date.now(
     root: settings.root || '',
     paths,
     shas,
+    sizes,
     attachmentFolderPath: folderRead.folder,
     fetchedAt: now,
     treeSha: listed.body && typeof listed.body.sha === 'string' ? listed.body.sha : '',
@@ -437,6 +511,7 @@ async function cachedReady(db, repo, path) {
   let hit = null;
   try {
     hit = await cachedImage(db, repo, path);
+    if (!hit?.data && repo) hit = await cachedImage(db, '', path);
   } catch {
     hit = { unreadable: true };
   }
@@ -676,15 +751,32 @@ async function readLocalEmbed(db, options) {
   const written = normalizeVaultPath(decodePath(link));
   add(links[pathLinkKey(written)]);
   let folder = attachmentFolderPath || '';
-  let list = Array.isArray(paths) ? paths : null;
-  if (!list) {
-    const index = await getMeta(db, INDEX_KEY);
-    if (index && samePlace(index, settings) && Array.isArray(index.paths)) {
-      list = index.paths;
-      if (!folder) folder = index.attachmentFolderPath || '';
-    }
+  const list = [];
+  const seen = new Set();
+  const addPath = (path) => {
+    const normal = normalizeVaultPath(path);
+    if (!normal || seen.has(normal)) return;
+    seen.add(normal);
+    list.push(normal);
+  };
+  if (Array.isArray(paths)) {
+    for (const path of paths) addPath(path);
   }
-  if (list) add(resolveEmbedPath(link, { notePath, paths: list, attachmentFolderPath: folder }));
+  const index = await getMeta(db, INDEX_KEY);
+  if (index && samePlace(index, settings) && Array.isArray(index.paths)) {
+    for (const path of index.paths) addPath(path);
+    if (!folder) folder = index.attachmentFolderPath || '';
+  }
+  try {
+    const notes = await listFiles(db);
+    for (const file of notes || []) {
+      if (file?.path && !file.trashedAt) addPath(file.path);
+    }
+  } catch {
+    // Local files still resolve from the list already collected.
+  }
+  if (!folder) folder = ATTACHMENT_FOLDER;
+  if (list.length) add(resolveEmbedPath(link, { notePath, paths: list, attachmentFolderPath: folder }));
   add(written);
   for (const path of candidates) {
     const cached = await cachedReady(db, repo, path);
@@ -854,6 +946,70 @@ export function startImagePrefetch(db, fetchImpl = globalThis.fetch) {
   });
   prefetchChain = run.then(() => {}, () => {});
   return run;
+}
+
+export async function loadAttachmentBytes(db, options = {}) {
+  const path = normalizeVaultPath(options.path || options.link || '');
+  const name = basename(path);
+  if (!path) return { status: 'missing', name: '', reason: 'Not found in vault' };
+  const repo = options.repo || '';
+  let local = null;
+  try {
+    local = await cachedImage(db, repo, path);
+    if (!local?.data) local = await cachedImage(db, '', path);
+  } catch {
+    local = null;
+  }
+  if (local?.data && (!options.fresh || offlineNow(options))) {
+    const type = local.type || mimeFor(path);
+    return {
+      status: 'ready',
+      name,
+      path,
+      data: local.data,
+      bytes: local.bytes,
+      type,
+      blob: new Blob([local.data], { type }),
+    };
+  }
+  if (offlineNow(options)) return { status: 'missing', name, path, reason: OFFLINE_IMAGE_REASON };
+  if (!options.token || !repo || !options.fetchImpl) {
+    return { status: 'error', name, path, reason: 'Sign in again' };
+  }
+  let file;
+  try {
+    file = await fetchRawBytes(options.fetchImpl, {
+      repo,
+      path: repoPath(options.root, path),
+      branch: options.branch,
+      token: options.token,
+    });
+  } catch (error) {
+    const status = Number(error && error.status) || 0;
+    return {
+      status: 'error',
+      name,
+      path,
+      fileStatus: status,
+      reason: githubStatusReason(status),
+    };
+  }
+  const raw = file.bytes instanceof ArrayBuffer ? file.bytes : new Uint8Array(file.bytes || []).buffer;
+  const type = mimeFor(path);
+  try {
+    await rememberImage(db, { repo, path, data: raw, type, sha: options.sha || '' });
+  } catch {
+    // The download can still be shown when IndexedDB rejects the record.
+  }
+  return {
+    status: 'ready',
+    name,
+    path,
+    data: raw,
+    bytes: raw.byteLength,
+    type,
+    blob: new Blob([raw], { type }),
+  };
 }
 
 export function embedImage(blob, { createObjectURL, createElement, width, height, name, type }) {

@@ -58,8 +58,17 @@ export function relayEndpoint(relayUrl, which) {
 
 export function encodeUtf8Base64(text) {
   const bytes = new TextEncoder().encode(String(text ?? ''));
+  return encodeBytesBase64(bytes);
+}
+
+export function encodeBytesBase64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer || []);
+  const chunk = 0x8000;
   let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    binary += String.fromCharCode.apply(null, slice);
+  }
   return btoa(binary);
 }
 
@@ -129,6 +138,7 @@ export function listVaultEntries(treeResponse, root, { allowTruncated = false } 
     entries.push({
       path: local,
       sha: typeof item.sha === 'string' ? item.sha : '',
+      size: Number(item.size) || 0,
     });
   }
   entries.sort((a, b) => a.path.localeCompare(b.path));
@@ -166,6 +176,33 @@ export async function fetchRawBytes(fetchImpl, { repo, path, branch, token }) {
   }
   const bytes = await response.arrayBuffer();
   return { bytes, url };
+}
+
+export function isMarkdownPath(path) {
+  return String(path || '').toLowerCase().endsWith('.md');
+}
+
+export function selectAttachments(treeResponse, root) {
+  return listVaultEntries(treeResponse, root)
+    .filter((entry) => entry.sha && !isMarkdownPath(entry.path))
+    .map((entry) => ({ localPath: entry.path, sha: entry.sha, size: entry.size || 0 }));
+}
+
+export function fileFromRemoteAttachment(entry, now = Date.now()) {
+  return {
+    path: entry.localPath,
+    content: '',
+    kind: 'binary',
+    encoding: 'binary',
+    bytes: Number(entry.size) || 0,
+    createdAt: now,
+    updatedAt: now,
+    trashedAt: null,
+    remoteSha: entry.sha,
+    baseSha: entry.sha,
+    dirty: false,
+    conflict: false,
+  };
 }
 
 export function selectMarkdown(treeResponse, root) {
@@ -596,6 +633,7 @@ export async function collectDownload(fetchImpl, { repo, branch, root, token }, 
   const listed = await githubRequest(fetchImpl, treeUrl(repo, branch), { token, secrets: [token] });
   if (!listed.ok) throw new Error(listed.message);
   const notes = selectMarkdown(listed.body, root);
+  const attachments = selectAttachments(listed.body, root);
   const loaded = [];
   for (let index = 0; index < notes.length; index += 1) {
     if (onProgress) onProgress(index + 1, notes.length);
@@ -610,5 +648,6 @@ export async function collectDownload(fetchImpl, { repo, branch, root, token }, 
       content: remote.content,
     });
   }
+  loaded.attachments = attachments;
   return loaded;
 }

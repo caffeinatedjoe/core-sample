@@ -7,12 +7,14 @@ import {
   cleanRelayUrl,
   collectDownload,
   contentsUrl,
+  encodeBytesBase64,
   encodeUtf8Base64,
   planDownload,
   pullFile,
   pushFile,
   pushRequest,
   readErrorMessage,
+  selectAttachments,
   selectMarkdown,
 } from '../app/js/github-api.js';
 
@@ -197,6 +199,41 @@ test('markdown download respects the notes root and stops when the listing is cu
   assert.equal(loaded[0].content, 'hello');
   assert.equal(loaded[0].sha, '2');
   assert.equal(cleanRelayUrl('https://relay.example/device/code'), 'https://relay.example');
+});
+
+test('download lists attachments from the tree without fetching their bytes', async () => {
+  const urls = [];
+  const tree = {
+    truncated: false,
+    tree: [
+      { path: 'Site Log.md', type: 'blob', sha: 'note-1', size: 12 },
+      { path: 'assets/Site Log/shot.png', type: 'blob', sha: 'png-1', size: 80 },
+      { path: 'assets/Site Log/notes.pdf', type: 'blob', sha: 'pdf-1', size: 40 },
+    ],
+  };
+  const listed = selectAttachments(tree, '');
+  assert.deepEqual(listed.map((item) => item.localPath), [
+    'assets/Site Log/notes.pdf',
+    'assets/Site Log/shot.png',
+  ]);
+  const loaded = await collectDownload(async (url) => {
+    urls.push(url);
+    if (url.includes('/git/trees/')) return jsonResponse(200, tree);
+    if (url.includes('/contents/Site%20Log.md')) {
+      return jsonResponse(200, { sha: 'note-1', encoding: 'base64', content: encodeUtf8Base64('# Site\n') });
+    }
+    return jsonResponse(500, { message: 'attachment bytes must stay lazy' });
+  }, { repo: 'owner/repo', branch: 'main', root: '', token: TOKEN });
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].localPath, 'Site Log.md');
+  assert.deepEqual(loaded.attachments.map((item) => item.localPath), [
+    'assets/Site Log/notes.pdf',
+    'assets/Site Log/shot.png',
+  ]);
+  assert.equal(loaded.attachments[1].size, 80);
+  assert.equal(urls.some((url) => url.includes('shot.png') || url.includes('notes.pdf')), false);
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  assert.equal(encodeBytesBase64(png), Buffer.from(png).toString('base64'));
 });
 
 test('a rename clears the blob SHA and an error never repeats a token', () => {

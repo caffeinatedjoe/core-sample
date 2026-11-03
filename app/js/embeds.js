@@ -1,6 +1,5 @@
 // Obsidian embed resolution. Exact vault path, then relative to the note,
-// then the attachment folder from .obsidian/app.json, then a filename match.
-// Several filename matches use the shortest path.
+// then a unique basename, then the file closest to the note.
 
 import { closesFence, parseFenceLine } from './checklist.js';
 
@@ -159,6 +158,21 @@ export function parseWikilinkImage(inner) {
   };
 }
 
+function dirDistance(fromNote, toFile) {
+  const from = parentDir(fromNote).split('/').filter(Boolean);
+  const to = parentDir(toFile).split('/').filter(Boolean);
+  let shared = 0;
+  while (shared < from.length && shared < to.length && from[shared].toLowerCase() === to[shared].toLowerCase()) {
+    shared += 1;
+  }
+  return (from.length - shared) + (to.length - shared);
+}
+
+function listedIgnoreCase(list, path) {
+  const want = String(path || '').toLowerCase();
+  return list.find((item) => item.toLowerCase() === want) || null;
+}
+
 export function resolveEmbedPath(link, { notePath = '', paths = [], attachmentFolderPath = '' } = {}) {
   const target = normalizeVaultPath(decodePath(link));
   if (!target) return null;
@@ -170,11 +184,10 @@ export function resolveEmbedPath(link, { notePath = '', paths = [], attachmentFo
     seen.add(normal);
     list.push(normal);
   }
-  const listed = (path) => (seen.has(path) ? path : null);
+  const listed = (path) => listedIgnoreCase(list, path);
   const base = basename(target);
   const noteDir = parentDir(notePath);
   const folder = attachmentFolderFor(notePath, attachmentFolderPath);
-  const inFolder = folder ? normalizeVaultPath(`${folder}/${base}`) : '';
 
   const exact = listed(target);
   if (exact) return exact;
@@ -184,16 +197,20 @@ export function resolveEmbedPath(link, { notePath = '', paths = [], attachmentFo
     if (relative) return relative;
   }
 
-  if (inFolder && listed(inFolder)) return inFolder;
-  if (folder && target !== base) {
-    const joined = listed(normalizeVaultPath(`${folder}/${target}`));
-    if (joined) return joined;
-  }
-
   const want = base.toLowerCase();
   const matches = list.filter((path) => basename(path).toLowerCase() === want);
-  if (matches.length) {
-    matches.sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    if (folder) {
+      const inFolder = listed(normalizeVaultPath(`${folder}/${base}`));
+      if (inFolder) return inFolder;
+    }
+    matches.sort((a, b) => {
+      const da = dirDistance(notePath, a);
+      const db = dirDistance(notePath, b);
+      if (da !== db) return da - db;
+      return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+    });
     return matches[0];
   }
   return null;

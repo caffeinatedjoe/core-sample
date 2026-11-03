@@ -22,7 +22,7 @@ const PATHS = [
   'assets/much-longer-folder/dup.png',
 ];
 
-test('resolution prefers an exact path, then the note, then the shortest filename', () => {
+test('resolution prefers an exact path, then a unique basename, then the closest file', () => {
   assert.equal(resolveEmbedPath('sub/folder/img.png', { notePath: 'Elsewhere.md', paths: PATHS }), 'sub/folder/img.png');
   assert.equal(resolveEmbedPath('photo.jpg', { notePath: 'Meetings/Weekly.md', paths: PATHS }), 'Meetings/photo.jpg');
   assert.equal(resolveEmbedPath('dup.png', { notePath: 'Notes.md', paths: PATHS }), 'short/dup.png');
@@ -87,7 +87,7 @@ test('a bare filename is requested from the attachment folder when the list omit
       paths: ['Assets/Field Notes/Image-1710000000000.PNG', 'zz/longer/image-1710000000000.png'],
       attachmentFolderPath: setting,
     }),
-    'zz/longer/image-1710000000000.png',
+    'Assets/Field Notes/Image-1710000000000.PNG',
   );
   assert.equal(
     resolveEmbedPath('n.png', {

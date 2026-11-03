@@ -324,6 +324,20 @@ html.is-keyboard .format-bar {
   color: inherit;
 }
 
+.format-image {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.format-image input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .format-dismiss {
   border-left: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 0 12px 12px 0;
@@ -1043,6 +1057,18 @@ html.viewer-scroll-lock body {
 .note-name {
   font-size: 16px;
   font-weight: 600;
+}
+
+.file-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .note-name,
@@ -1765,4 +1791,59 @@ html.viewer-scroll-lock body {
   background: transparent;
   color: var(--bg);
   font-weight: 700;
+}
+
+.file-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--safe-top) + 24px) 20px calc(var(--safe-bottom) + 24px);
+}
+
+.file-preview[hidden] {
+  display: none;
+}
+
+.file-preview-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: var(--dim);
+}
+
+.file-preview-card {
+  position: relative;
+  width: min(100%, 360px);
+  padding: 20px 18px 16px;
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 40px var(--shadow);
+}
+
+.file-preview-name {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.file-preview-size,
+.file-preview-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.file-preview-card button {
+  margin-top: 8px;
+  min-height: 44px;
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  background: var(--soft);
+  color: inherit;
+  font-weight: 600;
 }

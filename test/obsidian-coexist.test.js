@@ -134,17 +134,23 @@ test('dot-folders and dot-files are never notes', () => {
   assert.equal(remoteDeleteDecision({ path: '.trash/Old.md', baseSha: 'x', remoteSha: 'x', syncedCommit: 'c1' }, { headSha: 'c2' }), 'keep');
 });
 
-test('the first sync downloads notes only and leaves .obsidian and .trash on GitHub', async () => {
+test('the first sync downloads notes, indexes attachments, and leaves .obsidian and .trash on GitHub', async () => {
   const box = await harness();
   try {
     const result = await box.sync.runNow();
     assert.equal(result.status, SYNC_STATUS.synced);
-    const paths = (await listFiles(box.db)).map((file) => file.path).sort();
-    assert.deepEqual(paths, ['Daily/2026-10-21.md', 'Notes/A.md', 'Notes/B.md']);
+    const files = await listFiles(box.db);
+    const paths = files.map((file) => file.path).sort();
+    assert.deepEqual(paths, ['Daily/2026-10-21.md', 'Notes/A.md', 'Notes/B.md', 'assets/pic.png']);
+    const pic = files.find((file) => file.path === 'assets/pic.png');
+    assert.equal(pic.kind, 'binary');
+    assert.equal(pic.content, '');
     const cursor = await getMeta(box.db, 'githubSyncCursor');
     assert.equal(Object.keys(cursor.lastBlobs).some(isIgnoredPath), false);
     assert.equal(box.git.state.log.some((item) => /\/git\/blobs\/./.test(item.path) && item.method === 'GET'
       && [...box.git.entriesAt()].some(([path, entry]) => isIgnoredPath(path) && item.path.endsWith(entry.sha))), false);
+    assert.equal(box.git.state.log.some((item) => /\/git\/blobs\/./.test(item.path) && item.method === 'GET'
+      && item.path.endsWith(pic.remoteSha)), false);
   } finally {
     await box.close();
   }

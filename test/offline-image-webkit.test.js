@@ -173,7 +173,7 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
     await page.waitForFunction(() => {
       const url = new URL(window.location.href);
       return !url.searchParams.has('shell')
-        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v34';
+        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.1';
     }, null, { timeout: 30000 }).catch(() => {});
     try {
       await page.goto(origin, { waitUntil: 'domcontentloaded' });
@@ -188,7 +188,7 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
       const status = document.getElementById('save-status')?.textContent || '';
       return Boolean(navigator.serviceWorker?.controller)
         && status.includes('Saved')
-        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v34';
+        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.1';
     });
     await page.evaluate(async ({ note, image, link, now }) => {
       const db = await new Promise((resolve, reject) => {
