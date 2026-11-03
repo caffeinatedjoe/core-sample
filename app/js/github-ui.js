@@ -24,20 +24,29 @@ import {
 } from './github-api.js';
 import { startImagePrefetch } from './images.js';
 import {
+  appendAuthEvent,
+  claimDevicePoll,
   clearPendingFlow,
   completeDeviceSignIn,
   describeAuthFailure,
+  describeTokenMeta,
   disconnectGithub,
+  formatAuthLog,
   loadAuthFailure,
+  loadAuthLog,
   loadGithubSettings,
   loadPendingFlow,
   loadStorageFlag,
+  loadTokenMeta,
+  noteTokenRead,
   recordAuthFailure,
+  releaseDevicePoll,
   saveGithubConfig,
   saveGithubLogin,
   saveGithubTarget,
   savePendingFlow,
   storagePersistenceText,
+  tokenFingerprint,
 } from './github-store.js';
 
 const ACCESS_TTL = 10 * 60 * 1000;
@@ -66,7 +75,9 @@ export function mountGithub(doc, db, hooks) {
   const connectButton = doc.getElementById('github-connect');
   const signAgain = doc.getElementById('github-sign-in-again');
   const storageLine = doc.getElementById('github-storage');
+  const tokenLine = doc.getElementById('github-token-meta');
   const failureLine = doc.getElementById('github-auth-failure');
+  const copyLogButton = doc.getElementById('github-copy-auth-log');
   const fileBar = doc.getElementById('github-file-bar');
   const fileStatus = doc.getElementById('github-file-status');
   const view = doc.defaultView || globalThis;
@@ -87,6 +98,7 @@ export function mountGithub(doc, db, hooks) {
   let checkedAt = 0;
   let probeFlight = null;
   let probeGen = 0;
+  let readLogged = false;
 
   function rememberedConfig() {
     clientId = cleanClientId(clientInput.value);
@@ -144,8 +156,16 @@ export function mountGithub(doc, db, hooks) {
     if (fileBar) fileBar.hidden = !ready;
     if (!ready && fileStatus) fileStatus.textContent = '';
     if (storageLine) storageLine.textContent = storagePersistenceText(await loadStorageFlag(db));
+    if (tokenLine) {
+      const meta = signedIn ? await loadTokenMeta(db) : null;
+      const text = signedIn ? describeTokenMeta(meta) : '';
+      tokenLine.textContent = text;
+      tokenLine.hidden = !text;
+    }
     if (failureLine) {
-      const text = describeAuthFailure(await loadAuthFailure(db));
+      const text = describeAuthFailure(await loadAuthFailure(db), {
+        savedFingerprint: tokenFingerprint(settings.token),
+      });
       failureLine.textContent = text;
       failureLine.hidden = !text;
     }
@@ -177,8 +197,21 @@ export function mountGithub(doc, db, hooks) {
       if (gen !== probeGen) return access;
       lastAccess = access;
       userUnauthorized = access.state === 'unauthorized';
+      if (access.recheck) {
+        await appendAuthEvent(db, {
+          at: now(),
+          type: 'recheck',
+          fingerprint: tokenFingerprint(settings.token),
+          path: 'GET /user',
+          detail: access.recheck,
+        }, [settings.token]).catch(() => {});
+      }
       if (access.failure) {
-        await recordAuthFailure(db, { ...access.failure, at: now() }, [settings.token]).catch(() => {});
+        await recordAuthFailure(db, {
+          ...access.failure,
+          at: now(),
+          fingerprint: tokenFingerprint(settings.token),
+        }, [settings.token]).catch(() => {});
       }
       if (access.login) await saveGithubLogin(db, { token: settings.token, login: access.login });
       const fresh = await loadGithubSettings(db);
@@ -204,6 +237,10 @@ export function mountGithub(doc, db, hooks) {
     const pending = await loadPendingFlow(db);
     if (pending && !(now() < pending.expiresAt)) await clearPendingFlow(db);
     const settings = await loadGithubSettings(db);
+    if (!readLogged) {
+      readLogged = true;
+      await noteTokenRead(db, { path: 'startup', now: now() }).catch(() => {});
+    }
     await paint(settings);
     startProbe(settings);
     return settings;
@@ -270,7 +307,14 @@ export function mountGithub(doc, db, hooks) {
     loadPending: () => loadPendingFlow(db),
     savePending: (flow) => savePendingFlow(db, flow),
     clearPending: () => clearPendingFlow(db),
-    completeFlow: (token, flow) => completeDeviceSignIn(db, { token, deviceCode: flow.deviceCode }),
+    completeFlow: (token, flow, seq) => completeDeviceSignIn(db, {
+      token,
+      deviceCode: flow.deviceCode,
+      seq,
+      now: now(),
+    }),
+    claimPoll: (deviceCode) => claimDevicePoll(db, deviceCode, now()),
+    releasePoll: (deviceCode) => releaseDevicePoll(db, deviceCode),
     postToken: async (deviceCode) => {
       const settings = await loadGithubSettings(db);
       const id = settings.clientId || clientId;
@@ -499,7 +543,7 @@ export function mountGithub(doc, db, hooks) {
     busy = true;
     try {
       await signIn.cancel();
-      await disconnectGithub(db);
+      await disconnectGithub(db, { now: now() });
       hideChoices();
       hidePending();
       tryAgain.hidden = true;
@@ -509,6 +553,21 @@ export function mountGithub(doc, db, hooks) {
       showError(error);
     } finally {
       busy = false;
+    }
+  }
+
+  async function copyAuthLog() {
+    const text = formatAuthLog(await loadAuthLog(db));
+    const write = view.navigator?.clipboard?.writeText;
+    if (!write) {
+      setStatus("Couldn't copy the sign-in log.");
+      return;
+    }
+    try {
+      await write.call(view.navigator.clipboard, text);
+      setStatus('Copied the sign-in log.');
+    } catch {
+      setStatus("Couldn't copy the sign-in log.");
     }
   }
 
@@ -697,6 +756,11 @@ export function mountGithub(doc, db, hooks) {
   doc.getElementById('github-disconnect-yes').addEventListener('click', () => {
     disconnect();
   });
+  if (copyLogButton) {
+    copyLogButton.addEventListener('click', () => {
+      copyAuthLog().catch((error) => showError(error));
+    });
+  }
   doc.getElementById('github-erase').addEventListener('click', () => {
     eraseConfirm.hidden = false;
   });

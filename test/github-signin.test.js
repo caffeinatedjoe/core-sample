@@ -320,9 +320,13 @@ test('the github sheet names who is signed in, or that the repo cannot be read',
     await expiredApp.whenChecked();
     assert.equal(expired.nodes['github-login'].textContent, 'Sign in again');
     const failure = await getMeta(db, 'githubAuthFailure');
-    assert.deepEqual(failure, { at: 5_000, endpoint: 'GET /user', status: 401, message: 'Bad credentials' });
+    assert.deepEqual(failure, { at: 5_000, endpoint: 'GET /user', status: 401, message: 'Bad credentials', fingerprint: '3456' });
     assert.equal(expired.nodes['github-auth-failure'].hidden, false);
-    assert.match(expired.nodes['github-auth-failure'].textContent, /^Last sign-in problem, .+\. GET \/user HTTP 401: Bad credentials$/);
+    assert.match(expired.nodes['github-auth-failure'].textContent, /^Last sign-in problem, .+\. GET \/user HTTP 401: Bad credentials\. sent …3456, saved …3456$/);
+    assert.equal(expired.nodes['github-auth-failure'].textContent.includes(TOKEN), false);
+    assert.equal(expired.nodes['github-token-meta'].hidden, false);
+    assert.match(expired.nodes['github-token-meta'].textContent, /Token …3456/);
+    assert.equal(expired.nodes['github-token-meta'].textContent.includes(TOKEN), false);
     assert.equal(expired.nodes['github-sign-in-again'].hidden, false);
     assert.equal(expired.nodes['github-connect'].hidden, true);
     assert.equal(expired.nodes['github-target'].hidden, false);

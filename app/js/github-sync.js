@@ -14,7 +14,7 @@ import {
   selectMarkdown,
 } from './github-api.js';
 import { cachedImage, moveImageCache } from './images.js';
-import { loadGithubSettings, recordAuthFailure } from './github-store.js';
+import { appendAuthEvent, loadGithubSettings, recordAuthFailure, tokenFingerprint } from './github-store.js';
 import { redact } from './github-redact.js';
 import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
 import { isIgnoredPath } from './vault-paths.js';
@@ -1752,6 +1752,20 @@ export function createAutoSync({
 
   async function authOrFail(settings, ops) {
     const user = await readUser(fetchImpl, settings.token, { sleep, recheckMs: authRecheckMs });
+    const fingerprint = tokenFingerprint(settings.token);
+    if (user.authRecheck) {
+      try {
+        await appendAuthEvent(db, {
+          at: now(),
+          type: 'recheck',
+          fingerprint,
+          path: 'GET /user',
+          detail: user.authRecheck,
+        }, [settings.token]);
+      } catch {
+        // The recheck result is only a hint.
+      }
+    }
     if (user.status === 401) {
       try {
         await recordAuthFailure(db, {
@@ -1759,6 +1773,7 @@ export function createAutoSync({
           endpoint: 'GET /user',
           status: 401,
           message: user.message,
+          fingerprint,
         }, [settings.token]);
       } catch {
         // The sign-in state below still shows. The record is only a hint.

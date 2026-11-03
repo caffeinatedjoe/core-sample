@@ -199,7 +199,7 @@ async function mockGithub(context, state) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.1');
+  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.2');
   // start() records lastOpened and recent asynchronously; seeding before then gets overwritten.
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');

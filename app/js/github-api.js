@@ -523,11 +523,13 @@ function pause(ms) {
 // that holds on every try means the saved token no longer works.
 export async function readUser(fetchImpl, token, { sleep = pause, recheckMs = AUTH_RECHECK_MS } = {}) {
   let user = await githubRequest(fetchImpl, USER_URL, { token, secrets: [token] });
+  const firstStatus = user.status;
   for (const ms of recheckMs) {
     if (user.status !== 401) break;
     await sleep(ms);
     user = await githubRequest(fetchImpl, USER_URL, { token, secrets: [token] });
   }
+  if (firstStatus === 401) user.authRecheck = user.status === 401 ? 'still-401' : 'ok';
   return user;
 }
 
@@ -545,24 +547,28 @@ async function readAccess(fetchImpl, { token, repo }, recheck) {
       state: 'unauthorized',
       login: '',
       message: 'Sign in again',
+      recheck: user.authRecheck || '',
       failure: { endpoint: 'GET /user', status: 401, message: user.message },
     };
   }
-  if (!user.ok) return { state: 'signed-in', login: '', message: githubStatusReason(user.status) };
+  if (!user.ok) {
+    return { state: 'signed-in', login: '', message: githubStatusReason(user.status), recheck: user.authRecheck || '' };
+  }
   const login = loginName(user.body);
   const who = login ? `Signed in as ${login}` : 'Signed in.';
-  if (!repo) return { state: 'signed-in', login, message: who };
+  const recovered = { recheck: user.authRecheck || '' };
+  if (!repo) return { state: 'signed-in', login, message: who, ...recovered };
   let found;
   try {
     found = await githubRequest(fetchImpl, repoUrl(repo), { token, secrets: [token] });
   } catch {
-    return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(0)}` };
+    return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(0)}`, ...recovered };
   }
   if (found.status === 404) {
-    return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(404, { missingRepo: true })}` };
+    return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(404, { missingRepo: true })}`, ...recovered };
   }
-  if (!found.ok) return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(found.status)}` };
-  return { state: 'signed-in', login, message: who };
+  if (!found.ok) return { state: 'signed-in', login, message: `${who}. ${githubStatusReason(found.status)}`, ...recovered };
+  return { state: 'signed-in', login, message: who, ...recovered };
 }
 
 // Plain words for the GitHub sheet. The token is never part of the text.

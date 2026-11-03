@@ -10,17 +10,26 @@ import { mountGithub } from '../app/js/github-ui.js';
 import {
   AUTH_FAILURE_KEY,
   authFailureRecord,
+  authLogLeaksSecret,
+  claimDevicePoll,
   clearPendingFlow,
   completeDeviceSignIn,
   describeAuthFailure,
+  describeTokenMeta,
+  formatAuthLog,
   loadAuthFailure,
+  loadAuthLog,
   loadGithubSettings,
   loadPendingFlow,
+  loadTokenMeta,
+  recordAuthFailure,
+  releaseDevicePoll,
   saveGithubConfig,
   saveGithubLogin,
   saveGithubSession,
   saveGithubTarget,
   savePendingFlow,
+  tokenFingerprint,
 } from '../app/js/github-store.js';
 import { createFakeDevice } from './helpers/fake-device.js';
 import { createFakeGit } from './helpers/fake-git.js';
@@ -312,7 +321,7 @@ test('sync rechecks a 401 before it shows Authentication required, and records o
     assert.equal(result.status, SYNC_STATUS.auth);
     assert.deepEqual(lasting.waits, [...AUTH_RECHECK_MS]);
     const record = await getMeta(lasting.db, AUTH_FAILURE_KEY);
-    assert.deepEqual(record, { at: 1_700_000_000_000, endpoint: 'GET /user', status: 401, message: 'Bad credentials' });
+    assert.deepEqual(record, { at: 1_700_000_000_000, endpoint: 'GET /user', status: 401, message: 'Bad credentials', fingerprint: '0001' });
     assert.equal(JSON.stringify(record).includes(lasting.token), false);
     assert.equal((await loadGithubSettings(lasting.db)).token, lasting.token);
   } finally {
@@ -354,11 +363,166 @@ test('the failure record keeps only time, endpoint, status, and a short redacted
     message: `Bad   credentials Bearer abc.def ${'x'.repeat(400)}`,
     token: 'fake-oauth-value-0001',
   }, ['fake-oauth-value-0001']);
-  assert.deepEqual(Object.keys(record), ['at', 'endpoint', 'status', 'message']);
+  assert.deepEqual(Object.keys(record), ['at', 'endpoint', 'status', 'message', 'fingerprint']);
   assert.equal(record.endpoint, 'GitHub');
+  assert.equal(record.fingerprint, '0001');
   assert.equal(record.message.includes('abc.def'), false);
   assert.ok(record.message.length <= 160);
   const line = describeAuthFailure({ ...record, endpoint: 'GET /user', message: 'Bad credentials' }, { locale: 'en-US', timeZone: 'UTC' });
-  assert.equal(line, 'Last sign-in problem, Nov 3, 5:05 PM. GET /user HTTP 401: Bad credentials');
+  assert.equal(line, 'Last sign-in problem, Nov 3, 5:05 PM. GET /user HTTP 401: Bad credentials. sent …0001, saved …0001');
   assert.equal(describeAuthFailure(null), '');
 });
+
+test('an older in-flight poll cannot overwrite the last token GitHub returned', async () => {
+  const { db, done } = await freshDb();
+  try {
+    const savedNew = await completeDeviceSignIn(db, {
+      token: 'fake-oauth-value-0002',
+      deviceCode: 'fake-device-code-0001',
+      seq: 2,
+      now: 2_000,
+    });
+    assert.equal(savedNew, true);
+    const savedOld = await completeDeviceSignIn(db, {
+      token: 'fake-oauth-value-0001',
+      deviceCode: 'fake-device-code-0001',
+      seq: 1,
+      now: 1_000,
+    });
+    assert.equal(savedOld, false);
+    const saved = await loadGithubSettings(db);
+    assert.equal(saved.token, 'fake-oauth-value-0002');
+    const meta = await loadTokenMeta(db);
+    assert.equal(meta.fingerprint, '0002');
+    assert.equal(meta.seq, 2);
+    assert.equal(meta.source, 'device-flow');
+  } finally {
+    await done();
+  }
+});
+
+test('two overlapping polls keep the last GitHub token, not the first', async () => {
+  const { db, done } = await freshDb();
+  const device = createFakeDevice();
+  try {
+    await approvedFlow(db, device);
+    const gates = [gate(), gate()];
+    let polls = 0;
+    const post = async (deviceCode) => {
+      const index = polls;
+      polls += 1;
+      await gates[index].promise;
+      return relayPost(device.fetchImpl, RELAY, 'token', tokenPollRequest(CLIENT, deviceCode), [CLIENT, deviceCode]);
+    };
+    const hangFirst = gate();
+    const first = createDeviceSignIn({
+      loadPending: () => loadPendingFlow(db),
+      savePending: (flow) => savePendingFlow(db, flow),
+      clearPending: () => clearPendingFlow(db),
+      claimPoll: (code) => claimDevicePoll(db, code, 1_000, { holdMs: 0 }),
+      releasePoll: (code) => releaseDevicePoll(db, code),
+      completeFlow: async (token, flow, seq) => {
+        if (seq === 1) await hangFirst.promise;
+        return completeDeviceSignIn(db, { token, deviceCode: flow.deviceCode, seq, now: 1_000 + seq });
+      },
+      postToken: post,
+      sleep: () => Promise.resolve(),
+      now: () => 1_000,
+    });
+    const second = createDeviceSignIn({
+      loadPending: () => loadPendingFlow(db),
+      savePending: (flow) => savePendingFlow(db, flow),
+      clearPending: () => clearPendingFlow(db),
+      claimPoll: (code) => claimDevicePoll(db, code, 2_000, { holdMs: 0 }),
+      releasePoll: (code) => releaseDevicePoll(db, code),
+      completeFlow: (token, flow, seq) => completeDeviceSignIn(db, {
+        token,
+        deviceCode: flow.deviceCode,
+        seq,
+        now: 2_000,
+      }),
+      postToken: post,
+      sleep: () => Promise.resolve(),
+      now: () => 2_000,
+    });
+    const runningFirst = first.resume();
+    await until(() => polls === 1);
+    const runningSecond = second.resume();
+    await until(() => polls === 2);
+    gates[0].open();
+    gates[1].open();
+    await runningSecond;
+    hangFirst.open();
+    await runningFirst;
+    const saved = await loadGithubSettings(db);
+    assert.equal(device.state.pollsAfterApproval, 2);
+    assert.equal(saved.token, device.state.issued[1]);
+    assert.equal(device.works(saved.token), true);
+    assert.equal(device.works(device.state.issued[0]), false);
+    assert.equal(await loadPendingFlow(db), null);
+  } finally {
+    await done();
+  }
+});
+
+test('the sign-in log never contains more than the last 4 characters of a token', async () => {
+  const { db, done } = await freshDb();
+  const token = 'fake-oauth-value-0001';
+  const deviceCode = 'fake-device-code-0001';
+  const userCode = 'WXYZ-0001';
+  try {
+    await completeDeviceSignIn(db, { token, deviceCode, seq: 1, now: 1_000 });
+    await recordAuthFailure(db, {
+      at: 2_000,
+      endpoint: 'GET /user',
+      status: 401,
+      message: `Bad credentials ${token} for ${deviceCode}`,
+      token,
+    }, [token, deviceCode]);
+    const seen = page(async () => jsonResponse({ login: 'octocat' }));
+    const app = mountGithub(seen.doc, db, {
+      now: () => 3_000,
+      sleep: () => Promise.resolve(),
+      recheckSleep: () => Promise.resolve(),
+    });
+    await app.refresh();
+    await app.whenChecked();
+    assert.equal(seen.nodes['github-token-meta'].hidden, false);
+    assert.match(seen.nodes['github-token-meta'].textContent, /Token …0001/);
+    assert.match(seen.nodes['github-token-meta'].textContent, /from device flow/);
+    seen.nodes['github-copy-auth-log'].click();
+    await until(() => seen.copies.length > 0);
+    const log = seen.copies[0];
+    const secrets = [token, deviceCode, userCode];
+    assert.equal(authLogLeaksSecret(log, secrets), false);
+    assert.equal(log.includes(token.slice(-4)), true);
+    assert.equal(log.includes(token.slice(-5)), false);
+    assert.equal(formatAuthLog(await loadAuthLog(db)).includes(token), false);
+    assert.equal(describeTokenMeta(await loadTokenMeta(db)).includes(token), false);
+    assert.equal(tokenFingerprint(token), '0001');
+    assert.equal(domText(seen.nodes).includes(token), false);
+    assert.equal(domText(seen.nodes).includes(deviceCode), false);
+    assert.match(seen.nodes['github-auth-failure'].textContent, /sent …0001, saved …0001/);
+  } finally {
+    await done();
+  }
+});
+
+test('a 401 that names a different sent fingerprint than the saved token is shown that way', async () => {
+  const { db, done } = await freshDb();
+  try {
+    await saveGithubSession(db, { token: 'fake-oauth-value-0002', login: 'octocat', now: 2_000 });
+    const line = describeAuthFailure({
+      at: Date.UTC(2026, 10, 3, 23, 14),
+      endpoint: 'GET /user',
+      status: 401,
+      message: 'Bad credentials',
+      fingerprint: '0001',
+    }, { locale: 'en-US', timeZone: 'UTC', savedFingerprint: '0002' });
+    assert.equal(line, 'Last sign-in problem, Nov 3, 11:14 PM. GET /user HTTP 401: Bad credentials. sent …0001, saved …0002');
+    assert.equal(line.includes('fake-oauth-value'), false);
+  } finally {
+    await done();
+  }
+});
+

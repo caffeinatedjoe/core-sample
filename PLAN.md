@@ -83,7 +83,7 @@ Implemented as core-sample-shell-v34. A ` ```dataview ` TASK block in Live Previ
 
 ## v35 — Attachments
 
-Implemented as core-sample-shell-v35, with the rename/sync fix in core-sample-shell-v35.1. See [docs/attachments.md](docs/attachments.md).
+Implemented as core-sample-shell-v35, with the rename/sync fix in core-sample-shell-v35.1 and the sign-in token race fix plus diagnostics in core-sample-shell-v35.2. See [docs/attachments.md](docs/attachments.md).
 
 - Sidebar lists non-Markdown files from the GitHub tree (`kind: 'binary'` stubs, no byte download at startup). Images open the existing viewer; other types show name, size, and "Can't preview this file type".
 - Bytes are fetched on first view or embed render and cached in the `images` store.

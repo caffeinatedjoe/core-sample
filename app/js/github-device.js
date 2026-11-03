@@ -141,6 +141,8 @@ export function createDeviceSignIn({
   savePending,
   clearPending,
   completeFlow,
+  claimPoll,
+  releasePoll,
   postToken,
   sleep,
   now = () => Date.now(),
@@ -152,6 +154,7 @@ export function createDeviceSignIn({
   let stop = false;
   let wake = null;
   let pollNow = false;
+  let localSeq = 0;
   const consumed = new Set();
 
   function checkNow() {
@@ -193,28 +196,42 @@ export function createDeviceSignIn({
       skip = false;
       if (stop) return { done: true, cancelled: true };
       if (now() >= flow.expiresAt) break;
+      let claim = { ok: true, seq: ++localSeq };
+      if (claimPoll) {
+        claim = await claimPoll(flow.deviceCode);
+        if (!claim || claim.idle) return { done: true, idle: true };
+        if (!claim.ok) {
+          pollNow = false;
+          continue;
+        }
+      }
       let body;
+      let held = Boolean(claimPoll && claim && claim.ok);
       try {
-        body = await postToken(flow.deviceCode);
-      } catch (error) {
-        return {
-          done: true,
-          failure: 'The sign-in request failed.',
-          detail: redact(error && error.message ? error.message : '', [flow.deviceCode]),
-        };
-      }
-      const step = interpretPoll(body, interval);
-      if (step.token) {
-        consumed.add(flow.deviceCode);
+        try {
+          body = await postToken(flow.deviceCode);
+        } catch (error) {
+          return {
+            done: true,
+            failure: 'The sign-in request failed.',
+            detail: redact(error && error.message ? error.message : '', [flow.deviceCode]),
+          };
+        }
+        const step = interpretPoll(body, interval);
+        if (step.token) {
+          consumed.add(flow.deviceCode);
+          held = false;
+          return { ...step, flow, seq: claim.seq };
+        }
         if (stop) return { done: true, cancelled: true };
-        return { ...step, flow };
-      }
-      if (stop) return { done: true, cancelled: true };
-      if (step.done) return { ...step, detail: redact(step.detail || '', [flow.deviceCode]) };
-      if (step.wait !== interval) {
-        interval = step.wait;
-        flow = { ...flow, interval };
-        await savePending(flow);
+        if (step.done) return { ...step, detail: redact(step.detail || '', [flow.deviceCode]) };
+        if (step.wait !== interval) {
+          interval = step.wait;
+          flow = { ...flow, interval };
+          await savePending(flow);
+        }
+      } finally {
+        if (held && releasePoll) await releasePoll(flow.deviceCode);
       }
     }
     return { done: true, failure: 'The code expired. Start again.' };
@@ -224,7 +241,7 @@ export function createDeviceSignIn({
     if (!result || result.cancelled || result.idle) return result;
     if (result.token) {
       try {
-        if (completeFlow) await completeFlow(result.token, result.flow);
+        if (completeFlow) await completeFlow(result.token, result.flow, result.seq);
         else await clearPending();
       } catch {
         await Promise.resolve().then(clearPending).catch(() => {});
