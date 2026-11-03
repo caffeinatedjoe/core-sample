@@ -1,6 +1,7 @@
 import { closesFence, parseFenceLine } from './checklist.js';
 import { parseWikilink } from './markdown.js';
-import { resolveWikilink } from './notes.js';
+import { DOT_NAME_ERROR, resolveWikilink } from './notes.js';
+import { isIgnoredPath } from './vault-paths.js';
 
 export function parentPath(path) {
   const parts = String(path ?? '').split('/');
@@ -19,6 +20,7 @@ export function cleanSegment(name) {
   const raw = String(name ?? '').trim();
   if (!raw || raw === '.' || raw === '..') throw new Error('Use a name.');
   if (/[\\/\u0000-\u001f]/.test(raw)) throw new Error('Use a name without slashes.');
+  if (raw.startsWith('.')) throw new Error(DOT_NAME_ERROR);
   return raw;
 }
 
@@ -324,7 +326,7 @@ export function planEmptyTrash(files) {
 }
 
 export function liveNotes(files) {
-  return (files || []).filter((file) => file && file.kind === 'markdown' && !file.trashedAt);
+  return (files || []).filter((file) => file && file.kind === 'markdown' && !file.trashedAt && !isIgnoredPath(file.path));
 }
 
 export function notesInFolder(files, folder) {

@@ -1,4 +1,5 @@
 // Three-way merge and the resolve plans. No DOM, so node tests can import it.
+import { isIgnoredPath } from './vault-paths.js';
 
 export const GITHUB_DELETED_TEXT = 'GitHub no longer has this note. The copy on this device was kept.\n';
 
@@ -412,7 +413,7 @@ function inferReason(file, sibling) {
 }
 
 export function listConflicts(files) {
-  const live = (files || []).filter((file) => file && file.kind === 'markdown' && !file.trashedAt && !file.backup);
+  const live = (files || []).filter((file) => file && file.kind === 'markdown' && !file.trashedAt && !file.backup && !isIgnoredPath(file.path));
   const siblings = live.filter((file) => file.conflictCopy);
   const notes = live.filter((file) => file.conflict === true && !file.conflictCopy);
   const items = [];

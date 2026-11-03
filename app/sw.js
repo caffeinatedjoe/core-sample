@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v27';
+const CACHE = 'core-sample-shell-v28';
 
 const SHELL = [
   './',
@@ -33,6 +33,7 @@ const SHELL = [
   './js/github-sync.js',
   './js/conflicts.js',
   './js/conflict-ui.js',
+  './js/vault-paths.js',
   './js/github-store.js',
   './js/github-ui.js',
   './icons/icon-v11-180.png',

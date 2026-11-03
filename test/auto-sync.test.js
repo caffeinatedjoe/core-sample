@@ -14,6 +14,7 @@ import {
   isLocalCopyName,
   loadConflictRemote,
   presentSyncStatus,
+  RACE_RETRY_LIMIT,
   reconcileNotes,
   refReadPath,
   refUpdateBody,
@@ -197,6 +198,7 @@ async function harness(extra = {}) {
   const git = gitServer();
   const clock = timers();
   const history = [];
+  const sleeps = [];
   let pulled = 0;
   const sync = createAutoSync({
     db,
@@ -205,6 +207,9 @@ async function harness(extra = {}) {
     random: () => 0,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
+    async sleep(ms) {
+      sleeps.push(ms);
+    },
     offline: () => Boolean(extra.isOffline ? extra.isOffline() : extra.offline),
     onStatus(text) {
       history.push(text);
@@ -219,6 +224,7 @@ async function harness(extra = {}) {
     git,
     clock,
     history,
+    sleeps,
     sync,
     pulled: () => pulled,
     async close() {
@@ -359,18 +365,25 @@ test('a batch push checks the remote head first and confirms the ref before Sync
   }
 });
 
-test('a moved head is not written', async () => {
+test('a head that moves before the write is read again and never written on', async () => {
   const box = await harness();
   try {
     box.git.state.moveOnSecondRef = true;
     await putFile(box.db, note('Field Notes.md', 'changed\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
     const result = await box.sync.runNow();
-    assert.notEqual(result.status, SYNC_STATUS.synced);
-    assert.equal(box.git.log.some((item) => item.method === 'POST' || item.method === 'PATCH'), false);
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const moved = box.git.log.findIndex((item) => item.method === 'GET' && item.url.endsWith('/git/ref/heads/main') && box.git.log.indexOf(item) > 0);
+    const firstWrite = box.git.log.findIndex((item) => item.method === 'POST');
+    assert.equal(firstWrite > moved, true);
+    const commits = box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/commits'));
+    assert.equal(commits.length, 1);
+    assert.deepEqual(commits[0].body.parents, ['commit-1']);
+    assert.deepEqual(box.sleeps.length, 1);
     const saved = await getFile(box.db, 'Field Notes.md');
     assert.equal(saved.content, 'changed\n');
-    assert.equal(saved.dirty, true);
-    assert.equal((await listOps(box.db)).length, 1);
+    assert.equal(saved.dirty, false);
+    assert.equal(box.history.includes(SYNC_STATUS.failed), false);
+    assert.equal(box.history.includes(SYNC_STATUS.conflict), false);
   } finally {
     await box.close();
   }
@@ -801,20 +814,29 @@ test('non-overlapping edits auto-merge into one push', async () => {
   }
 });
 
-test('a ref update that keeps failing becomes a conflict after three retries', async () => {
+test('a ref update that keeps losing the race stays pending with bounded backoff, never a conflict', async () => {
   const box = await harness();
   try {
     box.git.state.notForward = 'recommit';
     box.git.state.stickNotForward = true;
     await putFile(box.db, note('Field Notes.md', 'from the phone\n', { dirty: true, baseSha: 'blob-1', remoteSha: 'blob-1' }));
     const result = await box.sync.runNow();
-    assert.equal(result.status, SYNC_STATUS.conflict);
+    assert.equal(result.status, SYNC_STATUS.pending);
+    assert.equal(box.history.includes(SYNC_STATUS.conflict), false);
+    assert.equal(box.history.includes(SYNC_STATUS.failed), false);
     const patches = box.git.log.filter((item) => item.method === 'PATCH');
-    assert.equal(patches.length, 4);
+    assert.equal(patches.length, RACE_RETRY_LIMIT + 1);
     assert.equal(patches.every((item) => item.body.force === false), true);
+    assert.equal(box.sleeps.length, RACE_RETRY_LIMIT);
+    for (let i = 1; i < box.sleeps.length; i += 1) assert.equal(box.sleeps[i] > box.sleeps[i - 1], true);
+    assert.equal(box.sleeps.every((ms) => ms <= 4000), true);
+    assert.equal(box.clock.scheduled.some((item) => item.ms > 0 && item.ms !== SYNC_POLL_MS), true);
     const saved = await getFile(box.db, 'Field Notes.md');
     assert.equal(saved.content, 'from the phone\n');
-    assert.equal(saved.conflictReason, 'stale');
+    assert.equal(saved.dirty, true);
+    assert.equal(saved.conflict, false);
+    assert.equal((await listFiles(box.db)).some((file) => file.conflictCopy), false);
+    assert.equal((await listOps(box.db)).length, 1);
   } finally {
     await box.close();
   }

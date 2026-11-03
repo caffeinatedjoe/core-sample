@@ -1,5 +1,6 @@
 import { noteSnippet, noteTitle } from './notes.js';
 import { ancestorFolders, liveNotes, parentPath } from './organize.js';
+import { isIgnoredPath } from './vault-paths.js';
 
 const SEARCH_LIMIT = 40;
 
@@ -8,7 +9,7 @@ function byName(a, b) {
 }
 
 function folderSet(files, folders) {
-  const set = new Set(folders || []);
+  const set = new Set((folders || []).filter((folder) => !isIgnoredPath(folder)));
   for (const file of liveNotes(files)) {
     for (const folder of ancestorFolders(file.path)) set.add(folder);
   }
@@ -129,14 +130,14 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
   rows.push({ type: 'label', text: 'Notes' });
   const open = new Set(expanded || []);
   appendTree(rows, files, folderSet(files, folders), open, '', 0, currentPath);
-  const trash = (files || []).filter((file) => file.trashedAt);
+  const trash = (files || []).filter((file) => file.trashedAt && !isIgnoredPath(file.path));
   if (trash.length) {
     rows.push({ type: 'trash-label', text: 'Trash', count: trash.length });
     for (const file of [...trash].sort((a, b) => byName(a.path, b.path))) {
       rows.push({ type: 'trash', path: file.path, title: noteTitle(file), depth: 0 });
     }
   }
-  if (!live.length && !(folders || []).length) {
+  if (!live.length && !(folders || []).some((folder) => !isIgnoredPath(folder))) {
     rows.push({ type: 'empty', text: 'No notes yet' });
   }
   return rows;

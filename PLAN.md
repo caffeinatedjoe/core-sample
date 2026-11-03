@@ -57,12 +57,12 @@ Implemented in core-sample-shell-v23. Conflict resolution is Stage 5.
 
 ## Stage 5 — Conflicts
 
-Implemented in core-sample-shell-v25. Vault safety fixes for Welcome uploads, trash restore, rename ghosts, and leftover conflict copies shipped in core-sample-shell-v26. Exact conflict-copy matching, GitHub text for pre-v26 conflicts, the empty-save guard, ancestry-based remote deletes, and an undo toast that no longer covers rows shipped in core-sample-shell-v27. The screen is described in [docs/conflict-ui.md](docs/conflict-ui.md).
+Implemented in core-sample-shell-v25. Vault safety fixes for Welcome uploads, trash restore, rename ghosts, and leftover conflict copies shipped in core-sample-shell-v26. Exact conflict-copy matching, GitHub text for pre-v26 conflicts, the empty-save guard, ancestry-based remote deletes, and an undo toast that no longer covers rows shipped in core-sample-shell-v27. Coexisting with Obsidian Git on a computer (race retries rebuilt on the new head, dot-folders left alone, merge-safe deletes), a busy Resolve button, a 15 second limit on loading GitHub's text, and an honest offline state for pre-v26 conflicts shipped in core-sample-shell-v28. The screen is described in [docs/conflict-ui.md](docs/conflict-ui.md).
 
 - Keep base, local, and remote. Three-way merge.
 - Local-only pushes. Remote-only pulls. Non-overlapping edits auto-merge. Identical edits collapse.
 - Overlapping edits keep both sides (markers or a conflict copy). A screen to inspect and resolve.
-- Stale SHA: refresh and retry a limited number of times, then show the error.
+- Stale SHA: refresh, merge on the new head, and retry a limited number of times with backoff; then stay pending and retry later. A race alone is never an error or a conflict.
 - Never overwrite a local change that the remote did not include.
 
 ## Stage 6 — Polish

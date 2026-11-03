@@ -11,6 +11,7 @@ import {
 import { loadGithubSettings } from './github-store.js';
 import { redact } from './github-redact.js';
 import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
+import { isIgnoredPath } from './vault-paths.js';
 
 export const SYNC_DEBOUNCE_MS = 3000;
 export const SYNC_POLL_MS = 60 * 1000;
@@ -29,7 +30,23 @@ export const SYNC_STATUS = {
 };
 
 const DELETED_COPY = GITHUB_DELETED_TEXT;
-export const STALE_RETRY_LIMIT = 3;
+// A rejected ref update means another client (Obsidian Git on a computer)
+// pushed first. Each retry rebuilds on the new head after a short wait.
+export const RACE_RETRY_LIMIT = 4;
+const RACE_BASE_MS = 400;
+const RACE_CAP_MS = 4000;
+export const REMOTE_LOAD_TIMEOUT_MS = 15000;
+
+export function raceDelay(attempt, random = Math.random) {
+  const n = Math.max(0, Number(attempt) || 0);
+  const exp = Math.min(RACE_CAP_MS, RACE_BASE_MS * (2 ** n));
+  const roll = Math.min(1, Math.max(0, Number(random()) || 0));
+  return Math.round(exp * (0.5 + roll * 0.5));
+}
+
+function openConflict(file) {
+  return Boolean(file && file.conflict === true && !file.conflictCopy && !file.trashedAt && !isIgnoredPath(file.path));
+}
 
 export function presentSyncStatus(state = {}) {
   if (!state.configured) return '';
@@ -155,29 +172,45 @@ export function isAppGenerated(file) {
 }
 
 export function shouldAutoUpload(file) {
-  if (!file || file.kind !== 'markdown') return false;
+  if (!file || file.kind !== 'markdown' || isIgnoredPath(file.path)) return false;
   if (file.trashedAt || file.conflictCopy || file.backup || file.conflict === true) return false;
   if (file.localOnly === true || isAppGenerated(file) || isLocalCopyName(file.path)) return false;
   if (file.origin === 'user') return true;
   return file.dirty === true;
 }
 
+// The commit a missing note was last seen at with the phone's exact blob: the
+// previous synced head when the cursor recorded that blob there, otherwise
+// the note's own synced commit. Empty when the phone cannot say.
+export function deleteAncestor(file, context = {}) {
+  if (!file) return '';
+  const base = typeof file.baseSha === 'string' ? file.baseSha : '';
+  const lastBlobs = context.lastBlobs;
+  if (lastBlobs && typeof lastBlobs === 'object') {
+    if (lastBlobs[file.path] !== base) return '';
+    return context.cursorHead || file.syncedCommit || '';
+  }
+  return file.syncedCommit || '';
+}
+
 // A note GitHub no longer lists is removed only when the head that dropped it
-// descends from the commit this note was last synced at, and the phone still
-// holds exactly the blob GitHub had. Commit dates are never compared: a slow
-// clock on another computer must not decide whether text is kept.
+// descends from the commit where the phone last saw exactly its blob. History
+// is walked through every parent, so a merge commit whose first parent never
+// had the note cannot remove it, and commit dates are never compared.
 export function remoteDeleteDecision(file, context = {}) {
   if (!file || file.trashedAt || file.conflict || file.conflictCopy || file.dirty) return 'keep';
+  if (isIgnoredPath(file.path)) return 'keep';
   const base = typeof file.baseSha === 'string' ? file.baseSha : '';
   const remote = typeof file.remoteSha === 'string' ? file.remoteSha : '';
   if (!base) return 'keep';
   const headSha = context.headSha || '';
   const synced = file.syncedCommit || '';
   if (synced && headSha && synced === headSha) return 'keep';
-  if (base !== remote || !synced || !headSha) return 'conflict';
-  const lastBlobs = context.lastBlobs;
-  if (lastBlobs && typeof lastBlobs === 'object' && lastBlobs[file.path] !== base) return 'conflict';
-  const descends = context.descends instanceof Map ? context.descends.get(synced) : undefined;
+  if (base !== remote || !headSha) return 'conflict';
+  const ancestor = deleteAncestor(file, context);
+  if (!ancestor) return 'conflict';
+  if (ancestor === headSha) return 'keep';
+  const descends = context.descends instanceof Map ? context.descends.get(ancestor) : undefined;
   if (descends === true) return 'remove';
   if (descends === false) return 'conflict';
   return 'keep';
@@ -219,7 +252,7 @@ export async function commitDescendsFrom(readCommit, headSha, ancestor, limit = 
 }
 
 function countCopies(files) {
-  return (files || []).filter((file) => file && file.conflictCopy && !file.backup && !file.trashedAt).length;
+  return (files || []).filter((file) => file && file.conflictCopy && !file.backup && !file.trashedAt && !isIgnoredPath(file.path)).length;
 }
 
 function commitDateMs(body, fallback) {
@@ -238,7 +271,8 @@ function blockedCreatePaths(ops) {
 }
 
 export function reconcileNotes(files, remoteNotes, context = {}) {
-  const remote = new Map((remoteNotes || []).map((note) => [note.localPath, note]));
+  const listed = (remoteNotes || []).filter((note) => note && !isIgnoredPath(note.localPath));
+  const remote = new Map(listed.map((note) => [note.localPath, note]));
   const localPaths = new Set((files || []).map((file) => file && file.path));
   const pushes = [];
   const pulls = [];
@@ -247,7 +281,7 @@ export function reconcileNotes(files, remoteNotes, context = {}) {
   const removals = [];
   const blocked = blockedCreatePaths(context.ops);
   for (const file of files || []) {
-    if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy) continue;
+    if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy || isIgnoredPath(file.path)) continue;
     const found = remote.get(file.path);
     const base = syncedBase(file);
     if (file.conflict === true) {
@@ -282,7 +316,7 @@ export function reconcileNotes(files, remoteNotes, context = {}) {
       pulls.push({ file, remote: found });
     }
   }
-  for (const note of remoteNotes || []) {
+  for (const note of listed) {
     if (localPaths.has(note.localPath) || blocked.has(note.localPath)) continue;
     creates.push(note);
   }
@@ -371,9 +405,10 @@ function commitParents(body) {
 
 // GitHub's current text for one path: ref, commit, tree, blob. Null when the
 // branch no longer has the note or GitHub could not answer.
-export async function fetchRemoteBlob(fetchImpl, settings, path) {
+export async function fetchRemoteBlob(fetchImpl, settings, path, { signal } = {}) {
   if (!settings || !settings.token || !settings.repo || !settings.branch || !path) return null;
-  const call = (url) => request(fetchImpl, settings.token, url);
+  if (isIgnoredPath(path)) return null;
+  const call = (url) => request(fetchImpl, settings.token, url, signal ? { signal } : {});
   const ref = await call(repoUrl(settings.repo, refReadPath(settings.branch)));
   const headSha = ref.ok ? readRef(ref.body, settings.branch) : '';
   if (!headSha) return null;
@@ -395,46 +430,83 @@ export async function fetchRemoteBlob(fetchImpl, settings, path) {
   return { sha: found.sha, text: blobText(blob.body) };
 }
 
+export const REMOTE_TEXT = {
+  offline: { title: "GitHub's version isn't available offline", hint: "Connect to the internet and tap Try again, or keep this phone's text." },
+  timeout: { title: 'GitHub took too long to answer', hint: 'Check the connection and tap Try again.' },
+  failed: { title: "GitHub's version couldn't be loaded", hint: "Tap Try again, or keep this phone's text." },
+};
+
+function unavailable(file, state) {
+  const text = REMOTE_TEXT[state] || REMOTE_TEXT.failed;
+  return { file, source: '', state, title: text.title, hint: text.hint, reason: `${text.title}. ${text.hint}` };
+}
+
+class RemoteTimeout extends Error {}
+
+// Gives up after `timeoutMs` even if the request ignores the abort signal.
+async function withTimeout(run, { timeoutMs, setTimer, clearTimer }) {
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  let timer = null;
+  const expired = new Promise((resolve, reject) => {
+    timer = setTimer(() => {
+      if (controller) controller.abort();
+      reject(new RemoteTimeout('GitHub took too long to answer.'));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([run(controller ? controller.signal : undefined), expired]);
+  } finally {
+    clearTimer(timer);
+  }
+}
+
 // The GitHub side for a conflict recorded before v26, which has no stored text.
-// Online it is GitHub's current blob for that path; offline it is the exactly
-// matched conflict copy. Neither leaves `reason` set and the file unchanged.
+// Online it is GitHub's current blob for that path; otherwise the exactly
+// matched conflict copy. Neither leaves `reason` and `state` set and the file
+// unchanged, so the screen can offer Try again instead of a guessed diff.
 export async function loadConflictRemote({
   db,
   file,
   sibling = null,
   fetchImpl = globalThis.fetch,
   offline = () => false,
+  timeoutMs = REMOTE_LOAD_TIMEOUT_MS,
+  setTimer = (fn, ms) => setTimeout(fn, ms),
+  clearTimer = (id) => clearTimeout(id),
 } = {}) {
-  if (!file) return { file: null, source: '', reason: 'That note is not on this device.' };
-  if (hasConflictRemote(file)) return { file, source: 'stored', reason: '' };
-  if (!offline()) {
+  if (!file) return { file: null, source: '', state: 'missing', reason: 'That note is not on this device.' };
+  if (hasConflictRemote(file)) return { file, source: 'stored', state: '', reason: '' };
+  let state = offline() ? 'offline' : '';
+  if (!state) {
     try {
-      const fetched = await fetchRemoteBlob(fetchImpl, await loadGithubSettings(db), file.path);
+      const settings = await loadGithubSettings(db);
+      const fetched = await withTimeout((signal) => fetchRemoteBlob(fetchImpl, settings, file.path, { signal }), {
+        timeoutMs,
+        setTimer,
+        clearTimer,
+      });
       if (fetched) {
         return {
           file: { ...file, conflictRemote: fetched.text, conflictRemoteSha: fetched.sha, conflictRemoteKnown: true },
           source: 'github',
+          state: '',
           reason: '',
         };
       }
-    } catch {
-      // Fall back to the matched copy below.
+      state = 'failed';
+    } catch (error) {
+      state = error instanceof RemoteTimeout ? 'timeout' : 'failed';
     }
   }
   if (sibling && typeof sibling.content === 'string') {
     return {
       file: { ...file, conflictRemote: sibling.content, conflictRemoteKnown: true, conflictCopyPath: sibling.path },
       source: 'copy',
+      state: '',
       reason: '',
     };
   }
-  return {
-    file,
-    source: '',
-    reason: offline()
-      ? "Keep GitHub is off: this phone is offline and has no copy of GitHub's version."
-      : "Keep GitHub is off: GitHub's version of this note could not be loaded.",
-  };
+  return unavailable(file, offline() ? 'offline' : state);
 }
 
 async function request(fetchImpl, token, url, options = {}) {
@@ -456,6 +528,7 @@ export function createAutoSync({
   setTimer = (fn, ms) => setTimeout(fn, ms),
   clearTimer = (id) => clearTimeout(id),
   offline = () => false,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   beforeSync = async () => {},
   onStatus = () => {},
   onApplied = () => {},
@@ -517,7 +590,7 @@ export function createAutoSync({
   }
 
   async function noteEdited(file) {
-    if (!file || !file.path || file.conflictCopy || file.backup || file.trashedAt) return;
+    if (!file || !file.path || file.conflictCopy || file.backup || file.trashedAt || isIgnoredPath(file.path)) return;
     if (file.localOnly || isAppGenerated(file) || isLocalCopyName(file.path)) return;
     const settings = await loadGithubSettings(db);
     if (!settings.token || !settings.repo || !settings.branch) return;
@@ -527,7 +600,7 @@ export function createAutoSync({
   }
 
   async function noteTrashed({ file, baseSha }) {
-    if (!file || !file.path || file.conflictCopy || file.backup) return;
+    if (!file || !file.path || file.conflictCopy || file.backup || isIgnoredPath(file.path)) return;
     const settings = await loadGithubSettings(db);
     if (!settings.token || !settings.repo || !settings.branch) return;
     if (!baseSha) {
@@ -550,7 +623,7 @@ export function createAutoSync({
   }
 
   async function noteRenamed({ from, to, baseSha, file }) {
-    if (!file || !to) return;
+    if (!file || !to || isIgnoredPath(to) || (from && isIgnoredPath(from))) return;
     const settings = await loadGithubSettings(db);
     if (!settings.token || !settings.repo || !settings.branch) return;
     await deleteOps(db, [from, to]);
@@ -591,7 +664,7 @@ export function createAutoSync({
   }
 
   async function noteRestored(file) {
-    if (!file || !file.path) return;
+    if (!file || !file.path || isIgnoredPath(file.path)) return;
     const settings = await loadGithubSettings(db);
     const ops = await listOps(db);
     const queuedDelete = ops.find((op) => (op.id === file.path || op.path === file.path) && op.kind === 'delete');
@@ -673,11 +746,16 @@ export function createAutoSync({
     onPoll: () => queue('poll'),
   });
 
-  async function perform(settings, ops, reason, finish, stalePass = 0) {
+  async function perform(settings, ops, reason, finish, racePass = 0) {
     const token = settings.token;
     const call = (url, options) => request(fetchImpl, token, url, options);
+    const ignored = ops.filter((op) => isIgnoredPath(op.path) || (op.from && isIgnoredPath(op.from)));
+    if (ignored.length) {
+      await deleteOps(db, ignored.map((op) => op.id));
+      ops = ops.filter((op) => !ignored.includes(op));
+    }
     const localNotes = await listFiles(db);
-    const dirtyFiles = localNotes.filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown');
+    const dirtyFiles = localNotes.filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown' && !isIgnoredPath(file.path));
     for (const file of dirtyFiles) {
       if (!ops.some((op) => op.id === file.path)) ops.push(await ensureOp(file, settings));
     }
@@ -687,6 +765,7 @@ export function createAutoSync({
     const samePlace = cursor && cursor.repo === settings.repo && cursor.branch === settings.branch && (cursor.root || '') === (settings.root || '');
     const savedEtag = samePlace ? cursor.etag || '' : '';
     const previousBlobs = samePlace && cursor.lastBlobs && typeof cursor.lastBlobs === 'object' ? cursor.lastBlobs : null;
+    const previousHead = samePlace && previousBlobs ? cursor.headSha || '' : '';
     const parentsOf = new Map();
 
     let ref = await call(refUrl, { etag: savedEtag });
@@ -753,7 +832,7 @@ export function createAutoSync({
       if (unsentLocal) {
         // A user-created note that has never been synced still needs the tree, not a 304 stop.
       } else {
-      const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+      const conflicted = files.some(openConflict);
       await setMeta(db, CURSOR_KEY, {
         repo: settings.repo,
         branch: settings.branch,
@@ -789,25 +868,32 @@ export function createAutoSync({
     const files = await listFiles(db);
     const listed = new Set(remoteNotes.map((note) => note.localPath));
     const descends = new Map();
+    let unreadCommit = null;
     const readCommit = async (sha) => {
       if (parentsOf.has(sha)) return parentsOf.get(sha);
       const read = await call(repoUrl(settings.repo, `/git/commits/${encodeURIComponent(sha)}`));
-      if (!read.ok) return null;
+      if (!read.ok) {
+        unreadCommit = read;
+        return null;
+      }
       const parents = commitParents(read.body);
       parentsOf.set(sha, parents);
       return parents;
     };
+    const deleteContext = { headSha, lastBlobs: previousBlobs, cursorHead: previousHead };
     for (const file of files) {
       if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy || file.conflict || file.dirty) continue;
-      if (listed.has(file.path) || !syncedBase(file)) continue;
-      const synced = file.syncedCommit || '';
-      if (!synced || synced === headSha || descends.has(synced)) continue;
-      const answer = await commitDescendsFrom(readCommit, headSha, synced);
-      if (answer !== null) descends.set(synced, answer);
+      if (listed.has(file.path) || !syncedBase(file) || isIgnoredPath(file.path)) continue;
+      const ancestor = deleteAncestor(file, deleteContext);
+      if (!ancestor || ancestor === headSha || descends.has(ancestor)) continue;
+      const answer = await commitDescendsFrom(readCommit, headSha, ancestor);
+      // Without an answer nothing is removed and the cursor is not moved, so
+      // the next sync asks again from the same place.
+      if (answer === null) return hold(settings, ops, unreadCommit || { status: 0 });
+      descends.set(ancestor, answer);
     }
     const plan = reconcileNotes(files, remoteNotes, {
-      headSha,
-      lastBlobs: previousBlobs,
+      ...deleteContext,
       descends,
       ops: mine,
     });
@@ -1090,20 +1176,25 @@ export function createAutoSync({
       });
     }
 
+    // Another client moved the branch. Nothing was written yet; wait and run
+    // the whole pass again on the new head, so each note merges against it.
+    async function raced() {
+      prepared = null;
+      const queued = await listOps(db);
+      if (racePass >= RACE_RETRY_LIMIT) {
+        const attempt = queued.reduce((max, op) => Math.max(max, op.attempts || 0), 0);
+        return scheduleRetry(settings, queued, backoffDelay(attempt, random));
+      }
+      await sleep(raceDelay(racePass, random));
+      return perform(settings, queued, reason, finish, racePass + 1);
+    }
+
     const again = await call(refUrl);
     if (again.status === 401) return authOrFail(settings, ops);
     if (!again.ok) return hold(settings, ops, again);
     const freshHead = readRef(again.body, settings.branch);
-    if (!freshHead || freshHead !== headSha) {
-      return finish({
-        configured: true,
-        syncing: false,
-        pending: true,
-        confirmed: false,
-        failed: false,
-        conflict: conflicted,
-      });
-    }
+    if (!freshHead) return hold(settings, ops, again);
+    if (freshHead !== headSha) return raced();
 
     const key = preparedKey(freshHead, pushFiles, deletions);
     let written = prepared && prepared.key === key ? prepared.written : null;
@@ -1112,6 +1203,7 @@ export function createAutoSync({
       const entries = [];
       written = [];
       for (const file of pushFiles) {
+        if (isIgnoredPath(file.path)) continue;
         const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
           method: 'POST',
           body: { content: String(file.content ?? ''), encoding: 'utf-8' },
@@ -1126,6 +1218,7 @@ export function createAutoSync({
         written.push({ path: file.path, sha: blob.body.sha, content: String(file.content ?? '') });
       }
       for (const item of deletions) {
+        if (isIgnoredPath(item.path)) continue;
         entries.push({
           path: repoPath(settings.root, item.path),
           mode: '100644',
@@ -1163,36 +1256,7 @@ export function createAutoSync({
       return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: true });
     }
     const patched = await call(updateUrl, { method: 'PATCH', body: update });
-    if ((patched.status === 422 || patched.status === 409) && stalePass < STALE_RETRY_LIMIT) {
-      return perform(settings, await listOps(db), reason, finish, stalePass + 1);
-    }
-    if (patched.status === 422 || patched.status === 409) {
-      for (const file of pushFiles) {
-        const remoteNote = remoteNotes.find((note) => note.localPath === file.path);
-        let remoteText = '';
-        if (remoteNote && remoteNote.sha) {
-          const remoteBlob = await call(repoUrl(settings.repo, `/git/blobs/${remoteNote.sha}`));
-          if (remoteBlob.ok) remoteText = blobText(remoteBlob.body);
-        }
-        const fresh = await getFile(db, file.path);
-        if (fresh && !fresh.conflict) {
-          await keepConflict(fresh, {
-            reason: 'stale',
-            copy: remoteText || String(fresh.content ?? ''),
-            remoteSha: remoteNote ? remoteNote.sha : '',
-            baseText: '',
-          });
-        }
-      }
-      return finish({
-        configured: true,
-        syncing: false,
-        conflict: true,
-        pending: true,
-        confirmed: false,
-        failed: false,
-      });
-    }
+    if (patched.status === 422 || patched.status === 409) return raced();
     const patchedSha = patched.body && patched.body.object && patched.body.object.sha;
     if (!patched.ok || patchedSha !== commitSha) return hold(settings, ops, patched);
     const writtenTreeSha = prepared && prepared.treeSha ? prepared.treeSha : treeSha;
@@ -1242,7 +1306,7 @@ export function createAutoSync({
     const remaining = await listOps(db);
     const stillPending = remaining.some((op) => op.repo === settings.repo && op.branch === settings.branch);
     const after = await listFiles(db);
-    const stillConflict = after.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+    const stillConflict = after.some(openConflict);
     return finish({
       configured: true,
       syncing: false,
@@ -1315,7 +1379,7 @@ export function createAutoSync({
 
   async function hasConflict() {
     const files = await listFiles(db);
-    return files.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+    return files.some(openConflict);
   }
 
   async function refreshStatus() {
@@ -1324,7 +1388,7 @@ export function createAutoSync({
     if (!configured) return publish({ configured: false, syncing: false, confirmed: false, copies: 0 });
     const pending = (await listOps(db)).some((op) => op.repo === settings.repo && op.branch === settings.branch);
     const files = await listFiles(db);
-    const conflicted = files.some((file) => file && file.conflict === true && !file.conflictCopy && !file.trashedAt);
+    const conflicted = files.some(openConflict);
     const copies = countCopies(files);
     return publish({
       configured: true,
