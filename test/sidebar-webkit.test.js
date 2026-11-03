@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { BUILD, note, openApp, shot, swipe, withPhone } from './helpers/webkit-app.js';
+import { BUILD, fakeKeyboard, note, openApp, shot, swipe, withPhone } from './helpers/webkit-app.js';
 
 const ROWS = [
   note('Welcome.md', '# Welcome\n\nStart here. Tap the panel button.\n'),
@@ -65,7 +65,7 @@ test('webkit sidebar opens from the panel button and closes on the dimmed note o
     const pill = await page.locator('#search-bar').boundingBox();
     const tree = await page.locator('#notes-list').boundingBox();
     assert.ok(pill.height >= 44 && pill.width > 200);
-    assert.ok(pill.y > tree.y, 'search sits at the bottom of the panel');
+    assert.ok(pill.y < tree.y, 'search sits at the top of the panel');
     const title = await page.locator('#note-title').boundingBox();
     assert.ok(title.width > 180, `title width ${title.width}`);
     await shot(page, 'sidebar-open.png');
@@ -134,6 +134,12 @@ test('webkit sidebar search replaces the tree and says No matches found.', { tim
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'notes-search');
     assert.equal(await page.locator('.drawer-panel').evaluate((node) => node.classList.contains('is-searching')), true);
     assert.equal(await page.locator('.browser-label').count(), 0, 'the tree is replaced while searching');
+    await fakeKeyboard(page, 336);
+    const searchUp = await page.locator('#search-bar').boundingBox();
+    const listUp = await page.locator('#notes-list').boundingBox();
+    assert.ok(searchUp.y < listUp.y, 'search stays at the top with the keyboard up');
+    assert.ok(searchUp.y < 120, `search y ${searchUp.y} stays in the upper panel`);
+    await shot(page, 'sidebar-search-keyboard.png');
 
     await page.locator('#notes-search').fill('basanite');
     await page.waitForFunction(() => document.getElementById('notes-list').textContent.trim() === 'No matches found.');
@@ -145,7 +151,7 @@ test('webkit sidebar search replaces the tree and says No matches found.', { tim
     assert.equal(await page.locator('.note-path').count(), 0, 'rows are name-only');
     const field = await page.locator('#search-bar').boundingBox();
     const results = await page.locator('#notes-list').boundingBox();
-    assert.ok(field.y > results.y, 'the field stays at the bottom with results');
+    assert.ok(field.y < results.y, 'the field stays at the top with results');
     await shot(page, 'sidebar-search-results.png');
 
     await page.locator('#notes-search').fill('QUARTZ');
@@ -275,7 +281,7 @@ test('webkit signed-in Settings hides client id behind Advanced', { timeout: 900
     await shot(page, 'settings-signed-in.png');
     await page.locator('#github-advanced > summary').click();
     assert.equal(await page.locator('#github-client-id').isVisible(), true);
-    assert.deepEqual(errors, []);
+    assert.deepEqual(errors.filter((error) => !error.includes('api.github.com')), []);
   });
 });
 

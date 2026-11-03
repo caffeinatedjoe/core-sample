@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v31';
+export const BUILD = 'core-sample-shell-v32';
 
 const TYPES = {
   '.html': 'text/html',
@@ -155,6 +155,14 @@ export async function openApp(page, url, rows, lastOpened, meta) {
 export async function shot(page, name) {
   await mkdir(SHOTS, { recursive: true });
   await page.screenshot({ path: join(SHOTS, name) });
+}
+
+// Playwright WebKit does not raise the iOS keyboard. Shrink the shell the
+// way visualViewport does on a phone so screenshots match that layout.
+export async function fakeKeyboard(page, inset = 336) {
+  await page.evaluate((inset) => {
+    document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
+  }, inset);
 }
 
 // Synthetic touches. Playwright WebKit has no touch-drag API and refuses
