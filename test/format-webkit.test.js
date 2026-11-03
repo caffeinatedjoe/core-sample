@@ -52,6 +52,7 @@ test('webkit format toolbar sits above the keyboard and scrolls sideways', { tim
     assert.ok(layout.bar.height >= 44, `toolbar height ${layout.bar.height}`);
     assert.ok(layout.bar.y > layout.htmlHeight / 2, 'toolbar is in the lower half, above the keyboard');
     assert.ok(Math.abs(layout.editorBottom - layout.bar.y) < 24 || layout.editorBottom <= layout.bar.y + 8, 'toolbar sits under the editor');
+    assert.ok(Math.abs(layout.bar.bottom - layout.htmlHeight) < 3, `toolbar sits flush on the keyboard edge (bottom ${layout.bar.bottom}, html ${layout.htmlHeight})`);
     assert.ok(layout.dismiss.width >= 44 && layout.dismiss.height >= 44);
     for (const button of layout.buttons) {
       assert.ok(button.width >= 44 && button.height >= 44, `${button.action} is ${button.width}x${button.height}`);
@@ -75,6 +76,74 @@ test('webkit format toolbar sits above the keyboard and scrolls sideways', { tim
     await page.waitForFunction(() => document.getElementById('format-bar').hidden);
     assert.deepEqual(errors, []);
   });
+});
+
+test('webkit the sync flag is a 44pt dot and the toolbar sits flush in dark mode', { timeout: 90000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await page.evaluate(() => {
+      const node = document.getElementById('sync-status');
+      node.textContent = 'Synced · 12 conflict copies';
+      node.hidden = false;
+      node.setAttribute('aria-disabled', 'false');
+      node.setAttribute('data-alert', 'copies');
+      node.setAttribute('data-tone', 'attention');
+    });
+    const header = await page.evaluate(() => {
+      const notes = document.getElementById('notes-button').getBoundingClientRect();
+      const flag = document.getElementById('sync-status').getBoundingClientRect();
+      const style = getComputedStyle(document.getElementById('sync-status'));
+      const dot = getComputedStyle(document.getElementById('sync-status'), '::after');
+      return {
+        notes: { y: notes.y, height: notes.height },
+        flag: { x: flag.x, y: flag.y, width: flag.width, height: flag.height },
+        background: style.backgroundColor,
+        overflow: style.overflow,
+        fontSize: style.fontSize,
+        dot: { width: parseFloat(dot.width), height: parseFloat(dot.height), radius: dot.borderRadius },
+      };
+    });
+    assert.ok(Math.abs(header.flag.width - 44) < 1, `flag width ${header.flag.width}`);
+    assert.ok(Math.abs(header.flag.height - 44) < 1, `flag height ${header.flag.height}`);
+    assert.ok(Math.abs(header.flag.y - header.notes.y) < 2, 'flag aligns with the sidebar button');
+    assert.equal(['rgba(0, 0, 0, 0)', 'transparent'].includes(header.background), true, header.background);
+    assert.equal(header.overflow, 'hidden');
+    assert.ok(Math.abs(header.dot.width - 10) < 1);
+    assert.ok(Math.abs(header.dot.height - 10) < 1);
+    await shot(page, 'v33-header-dot-dark.png');
+
+    await caretAt(page, TEXT.indexOf('sentence'));
+    await fakeKeyboard(page, 336);
+    await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
+    const flush = await page.evaluate(() => {
+      const bar = document.getElementById('format-bar').getBoundingClientRect();
+      const html = document.documentElement.getBoundingClientRect();
+      return { barBottom: bar.bottom, htmlHeight: html.height, htmlBottom: html.bottom };
+    });
+    assert.ok(Math.abs(flush.barBottom - flush.htmlHeight) < 3, `toolbar bottom ${flush.barBottom} html ${flush.htmlHeight}`);
+    await shot(page, 'v33-toolbar-keyboard-dark.png');
+
+    await page.evaluate(() => {
+      const node = document.getElementById('sync-status');
+      node.textContent = 'Synced · 12 conflict copies';
+      node.hidden = false;
+      node.setAttribute('aria-disabled', 'false');
+      node.setAttribute('data-alert', 'copies');
+      node.setAttribute('data-tone', 'attention');
+      node.click();
+    });
+    await page.waitForSelector('#settings-sheet:not([hidden])');
+    const target = await page.evaluate(() => {
+      const heading = document.getElementById('settings-sync-heading');
+      const body = document.querySelector('.settings-body');
+      if (!heading || !body) return null;
+      const h = heading.getBoundingClientRect();
+      const b = body.getBoundingClientRect();
+      return { headingTop: h.top, bodyTop: b.top, visible: h.bottom > b.top && h.top < b.bottom };
+    });
+    assert.equal(target.visible, true, 'Settings is scrolled to Sync');
+    assert.deepEqual(errors, []);
+  }, { colorScheme: 'dark' });
 });
 
 test('webkit Enter continues a task and ends an empty item', { timeout: 90000 }, async (t) => {

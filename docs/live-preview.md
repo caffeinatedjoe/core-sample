@@ -127,7 +127,11 @@ navigation bar.
 - **Layout.** A heading line has the same size with the cursor on or off it.
   Only the hidden marks reflow. Images keep their place while their source is
   revealed. Text uses the iOS body text style, so Dynamic Type still applies.
-  The keyboard and safe-area handling in `viewport.js` is unchanged.
+  The keyboard overlap is still `innerHeight − visualViewport.height −
+  offsetTop`. While the keyboard is down the shell is `100lvh` in standalone
+  (or `100%` in a tab). While it is up, `html` is pinned to
+  `visualViewport.offsetTop + visualViewport.height` (`--shell-h`) so the
+  format toolbar sits flush on whatever is directly above the keyboard.
 
 - **Navigation.** The notes live in an Obsidian-style left sidebar. Search
   sits at the top of the panel, next to Aa and the options button, so the
@@ -136,14 +140,16 @@ navigation bar.
   only. Rename, move and delete are on a long-press menu. See Navigation and
   Settings in [DECISIONS.md](../DECISIONS.md).
 - **Format toolbar.** While the editor is focused, a rounded dark pill sits
-  at the bottom of the shell, which already shrinks by `--keyboard-inset`,
-  so the bar tracks the iOS keyboard. It is a horizontally scrolling row of
-  44pt buttons with no visible scrollbar. Hide keyboard is pinned on the
-  right and is the only control that blurs the editor. Every other action
-  is a CodeMirror transaction from `format.js`: it wraps or toggles the
-  selection or inserts at the caret, `preventDefault`s `pointerdown` so
-  focus stays in the note, and goes through the history so undo still
-  works. The order is the everyday Markdown on a phone, most used first:
+  at the bottom of the shell. With the keyboard up the shell height is the
+  visual viewport's bottom and the bar's bottom margin is 0, so it sits
+  flush on the accessory bar (or on the keys if iOS is not drawing one).
+  It is a horizontally scrolling row of 44pt buttons with no visible
+  scrollbar. Hide keyboard is pinned on the right and is the only control
+  that blurs the editor. Every other action is a CodeMirror transaction
+  from `format.js`: it wraps or toggles the selection or inserts at the
+  caret, `preventDefault`s `pointerdown` so focus stays in the note, and
+  goes through the history so undo still works. The order is the everyday
+  Markdown on a phone, most used first:
 
   1. Task checkbox — Joe's notes are checklists.
   2. Bullet list, then numbered list — the other list starts.
@@ -170,6 +176,51 @@ navigation bar.
   `\r` on every touched line, and bytes elsewhere stay identical. The
   rules live in `list-continue.js` and are unit tested without a DOM.
 
+## iOS form accessory bar
+
+Joe's home-screen PWA on current iOS still draws Safari's form accessory
+(the Prev / Next arrows and the checkmark / Done control) between the
+format toolbar and the keyboard. Core Sample cannot hide that bar.
+
+The bar is not a web element. It is `UIWebFormAccessory`, owned by
+WebKit's private `WKContentView` as `inputAccessoryView`, and hosted in
+the keyboard window (`UIRemoteKeyboardWindow`) *above* the page. A Safari
+tab and a Home Screen PWA are still Safari; the page does not get a
+`WKWebView` subclass to override.
+
+A native `WKWebView` host can return `nil` from `inputAccessoryView`
+(public API since iOS 13, WebKit r246229 / bugs.webkit.org/show_bug.cgi?id=198631).
+Capacitor's `Keyboard.setAccessoryBarVisible({ isVisible: false })` is that
+native override. Core Sample has no native wrapper, and the spec forbids
+one.
+
+The HTML attribute proposed in rdar://27763084 (`-apple-accessory-bar="none"`)
+was never shipped. That radar has been Open since 9 August 2016. Ionic's
+keyboard guide states the same limit: in a mobile browser or a PWA there is
+no way to hide the accessory bar.
+
+Tried and rejected:
+
+| Trick | What happens on iOS Safari / PWA |
+| --- | --- |
+| `inputmode` on the CodeMirror `contenteditable` | `inputmode` is a hint for which keyboard to show. On iOS it is read from the editing host, not from children (WHATWG html#5322). It does not hide the accessory. `inputmode="none"` is meant to suppress the virtual keyboard entirely (and is unreliable on iOS besides: WebKit bug 200361). |
+| `enterkeyhint` | Labels the software Return key (`enter`, `done`, `go`, …). On iOS the accessory's Done/checkmark is a separate dismiss control, not that Return key. Ignored for this purpose. |
+| `interactive-widget=resizes-content` | Already in the viewport meta. Safari does not implement it; iOS stays `resizes-visual`. It would only change how the layout viewport resizes, not the accessory. |
+| VirtualKeyboard API | Chromium-only. Safari does not implement `navigator.virtualKeyboard` or `virtualkeyboardpolicy`. |
+| `readonly` + focus, blur/refocus, a hidden `<textarea>` | Breaks typing, autocorrect, dictation, and native selection on a `contenteditable`. CodeMirror 6 needs the browser to own those. |
+| Guessing a 44px accessory height and adding it to `--keyboard-inset` | Would park the toolbar *above* the accessory with a permanent gap, which is the opposite of sitting flush on whatever is directly above the keyboard. |
+
+CodeMirror, ProseMirror, and Obsidian-in-Safari cannot hide it either.
+Obsidian's iOS app can, because it is native.
+
+What we do instead: pin `html` to the visual viewport's bottom while the
+keyboard is up (`layoutFrame.shell` → `--shell-h`, class `is-keyboard`)
+and drop the format bar's bottom margin. `visualViewport` already excludes
+the keys and the accessory, so the toolbar sits flush on the accessory.
+The 30px gap on v32 was the 8px bottom margin plus shrinking `100lvh` by
+an overlap computed from `innerHeight` (status-bar short of the screen)
+instead of pinning to `offsetTop + height`.
+
 ## Left out on purpose
 
 - A Properties editor. Frontmatter is shown as a muted monospace block.
@@ -193,3 +244,10 @@ navigation bar.
 - davidmyersdev/ink-mde: https://github.com/davidmyersdev/ink-mde
 - fedoup/markdown-editor (one CM6 view, per-line reveal, stable heading height): https://github.com/fedoup/markdown-editor
 - @yuya296/cm6-live-preview-core (per-element rich and raw states): https://www.npmjs.com/package/@yuya296/cm6-live-preview-core
+- rdar://27763084, still Open, requesting a way to disable or replace WKWebView's default input accessory (proposed HTML attribute never shipped): https://openradar.appspot.com/27763084
+- WebKit r246229 / bug 198631, iOS 13+: native clients may override `-[WKWebView inputAccessoryView]`: https://trac.webkit.org/changeset/246229/webkit and https://bugs.webkit.org/show_bug.cgi?id=198631
+- Capacitor `Keyboard.setAccessoryBarVisible` (native WKWebView only; iPhone): https://capacitorjs.com/docs/apis/keyboard
+- Ionic keyboard guide: a PWA or Safari tab cannot hide the accessory bar: https://ionicframework.com/docs/developing/keyboard
+- WHATWG HTML issue 5322, `inputmode` / `enterkeyhint` apply to the editing host: https://github.com/whatwg/html/issues/5322
+- WebKit bug 200361 / MDN BCD 7186, `inputmode=none` not implemented as specced on iOS Safari: https://bugs.webkit.org/show_bug.cgi?id=200361 and https://github.com/mdn/browser-compat-data/issues/7186
+- Stack Overflow, the iOS accessory Done control is not the `enterkeyhint` Return key: https://stackoverflow.com/questions/72405834/combine-numeric-virtual-keyboard-and-enterkeyhint-on-mobile-safari

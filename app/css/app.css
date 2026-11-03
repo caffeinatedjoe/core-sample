@@ -22,6 +22,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --keyboard-inset: 0px;
+  --shell-h: 100%;
   --scroll-pad: var(--safe-bottom);
   color-scheme: light;
 }
@@ -70,6 +71,10 @@ html {
   height: calc(100% - var(--keyboard-inset));
 }
 
+html.is-keyboard {
+  height: var(--shell-h);
+}
+
 body,
 #app {
   height: 100%;
@@ -78,10 +83,15 @@ body,
 
 /* In standalone, 100lvh is the full screen. The layout viewport stops at
    the status bar. A fixed root is clipped to that short viewport, so the
-   shell fills its parent instead. */
+   shell fills its parent instead. When the keyboard is up, --shell-h is
+   the visual viewport's bottom so the format toolbar sits flush on it. */
 @media (display-mode: standalone) {
   html {
     height: calc(100lvh - var(--keyboard-inset));
+  }
+
+  html.is-keyboard {
+    height: var(--shell-h);
   }
 }
 
@@ -274,6 +284,10 @@ a:focus-visible {
   background: #2c2c2c;
   color: #ececec;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+html.is-keyboard .format-bar {
+  margin-bottom: 0;
 }
 
 .format-bar[hidden] {
@@ -1233,31 +1247,47 @@ html.viewer-scroll-lock body {
 
 ::selection { background: #e4c9a4; color: #2b251f; }
 
-/* A 44pt target that reads as a small flag. The words stay in the DOM for
-   VoiceOver and the tests; they are clipped so they cannot squeeze the title. */
+/* A 44pt transparent hit area. The words stay in the DOM for VoiceOver
+   and the tests; they are clipped so they cannot stretch the box into a
+   pill. The visible mark is a 10px circle, centered with the sidebar
+   button. */
 .sync-status {
   grid-column: 3;
   justify-self: end;
+  align-self: center;
+  display: grid;
+  place-items: center;
   width: 44px;
+  height: 44px;
+  min-width: 44px;
   min-height: 44px;
+  max-width: 44px;
+  max-height: 44px;
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 0;
   overflow: hidden;
-  background: var(--chip);
+  background: transparent;
   color: transparent;
   font-size: 1px;
   line-height: 44px;
+  white-space: nowrap;
 }
 
 .sync-status::after {
   content: "";
-  display: block;
+  grid-area: 1 / 1;
   width: 10px;
   height: 10px;
-  margin: 17px auto;
+  margin: 0;
   border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.sync-status[data-alert="failed"]::after,
+.sync-status[data-alert="auth"]::after {
   background: var(--danger);
 }
 

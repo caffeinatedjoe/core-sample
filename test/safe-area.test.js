@@ -50,6 +50,17 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(css, /html \{\s*height:\s*calc\(100% - var\(--keyboard-inset\)\)/);
   assert.match(css, /body,\s*#app \{\s*height:\s*100%/);
   assert.match(css, /@media \(display-mode:\s*standalone\) \{\s*html \{\s*height:\s*calc\(100lvh - var\(--keyboard-inset\)\)/);
+  assert.match(css, /html\.is-keyboard \{\s*height:\s*var\(--shell-h\)/);
+  assert.match(css, /html\.is-keyboard \.format-bar \{\s*margin-bottom:\s*0/);
+  const flag = rule(css, '.sync-status');
+  assert.match(flag, /width:\s*44px/);
+  assert.match(flag, /height:\s*44px/);
+  assert.match(flag, /max-height:\s*44px/);
+  assert.match(flag, /background:\s*transparent/);
+  assert.match(flag, /align-self:\s*center/);
+  assert.equal(flag.includes('var(--chip)'), false);
+  assert.match(css, /\.sync-status\[data-alert="failed"\]::after/);
+  assert.match(css, /\.sync-status\[data-alert="auth"\]::after/);
   const rootBox = rule(css, 'html,\nbody');
   assert.equal(rootBox.includes('overflow'), false);
   assert.equal(rootBox.includes('position'), false);
@@ -85,6 +96,9 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(html, /id="probe-dvh"/);
   assert.match(html, /id="probe-svh"/);
   assert.match(css, /padding:\s*var\(--safe-top\)/);
+  const liveEditor = read('app/js/live-editor.js');
+  assert.equal(liveEditor.includes('inputmode'), false);
+  assert.equal(liveEditor.includes('enterkeyhint'), false);
   const viewport = read('app/js/viewport.js');
   assert.match(viewport, /KEYBOARD_THRESHOLD = 80/);
   assert.match(viewport, /overlap > KEYBOARD_THRESHOLD/);
@@ -94,6 +108,9 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(main, /layoutFrame/);
   assert.match(main, /--scroll-pad/);
   assert.match(main, /--keyboard-inset/);
+  assert.match(main, /--shell-h/);
+  assert.match(main, /is-keyboard/);
+  assert.match(viewport, /shell:/);
   assert.equal(main.includes('--app-h'), false);
   assert.match(main, /orientationchange/);
   assert.match(main, /innerHeight/);

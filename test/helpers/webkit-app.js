@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v32';
+export const BUILD = 'core-sample-shell-v33';
 
 const TYPES = {
   '.html': 'text/html',
@@ -161,7 +161,11 @@ export async function shot(page, name) {
 // way visualViewport does on a phone so screenshots match that layout.
 export async function fakeKeyboard(page, inset = 336) {
   await page.evaluate((inset) => {
-    document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
+    const root = document.documentElement;
+    const height = Math.max(0, Math.round(root.getBoundingClientRect().height - inset));
+    root.style.setProperty('--keyboard-inset', `${inset}px`);
+    root.style.setProperty('--shell-h', `${height}px`);
+    root.classList.add('is-keyboard');
   }, inset);
 }
 

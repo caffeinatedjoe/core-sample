@@ -603,11 +603,24 @@ export function mountGithub(doc, db, hooks) {
     }
   }
 
-  function openSettings() {
+  function scrollToProblem(problem) {
+    const kind = typeof problem === 'string' ? problem : '';
+    const id = kind === 'github' || kind === 'auth'
+      ? 'settings-github-heading'
+      : kind
+        ? 'settings-sync-heading'
+        : '';
+    if (!id) return;
+    doc.getElementById(id)?.scrollIntoView({ block: 'start' });
+  }
+
+  function openSettings(problem) {
     hooks.opened?.();
     sheet.hidden = false;
+    scrollToProblem(problem);
     refresh().then(() => {
       kick();
+      scrollToProblem(problem);
     }).catch((error) => showError(error));
   }
 
