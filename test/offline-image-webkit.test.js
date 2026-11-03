@@ -208,7 +208,7 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
         });
         const meta = tx.objectStore('meta');
         meta.put({ key: 'lastOpened', value: note });
-        meta.put({ key: 'editorMode', value: 'preview' });
+        meta.put({ key: 'editorMode', value: 'preview' }); // left by builds before v30
         meta.put({ key: 'githubToken', value: 'gho_testtokenvalue123456' });
         meta.put({ key: 'githubRepo', value: 'owner/repo' });
         meta.put({ key: 'githubBranch', value: 'main' });
@@ -251,34 +251,41 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
-      return Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#preview .embed-fallback'));
+      const img = document.querySelector('#source img.embed-image');
+      return Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#source .embed-fallback'));
     }, null, { timeout: 20000 });
     assertKept(await imageRows(page), 'first view');
     const firstFetches = await page.evaluate(() => JSON.parse(sessionStorage.getItem('core-sample-test-fetches') || '[]'));
     assert.equal(firstFetches.filter((url) => url.includes('/contents/') && url.includes('plate.png')).length, 1);
 
-    await page.locator('#mode-source').click();
-    await page.locator('#mode-preview').click();
+    await page.evaluate(async () => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+      view.focus();
+      view.dispatch({ selection: { anchor: 1 } });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      view.contentDOM.blur();
+    });
+    await page.waitForFunction(() => !document.querySelector('#source .cm-image-source'));
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
-      return Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#preview .embed-fallback'));
+      const img = document.querySelector('#source img.embed-image');
+      return Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#source .embed-fallback'));
     }, null, { timeout: 20000 });
     assertKept(await imageRows(page), 'second view');
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
-      return Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#preview .embed-fallback'));
+      const img = document.querySelector('#source img.embed-image');
+      return Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#source .embed-fallback'));
     }, null, { timeout: 20000 });
     assertKept(await imageRows(page), 'reloaded');
 
     await context.setOffline(true);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
+      const img = document.querySelector('#source img.embed-image');
       const offline = navigator.onLine === false;
-      return offline && Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#preview .embed-fallback'));
+      return offline && Boolean(img && img.complete && img.naturalWidth > 0 && !document.querySelector('#source .embed-fallback'));
     }, null, { timeout: 20000 });
     assertKept(await imageRows(page), 'offline');
     const fetches = await page.evaluate(() => JSON.parse(sessionStorage.getItem('core-sample-test-fetches') || '[]'));

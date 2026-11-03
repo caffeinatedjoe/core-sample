@@ -61,6 +61,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let current = null;
   let erasing = false;
   let holding = false;
+  let booting = true;
 
   let sync = null;
   const syncStatus = doc.getElementById('sync-status');
@@ -142,6 +143,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     hydrate: hydrateEmbed,
   });
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
+  // Text typed before the last note loads would be replaced by it.
+  source.readOnly = true;
 
   function revokeEmbed(url) {
     if (!url || !embedUrls.has(url)) return;
@@ -277,9 +280,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   // One load per image link per open note. Widgets are redrawn as the caret
   // moves, so they share the blob and its object URL instead of refetching.
+  // A miss is not kept: the next draw asks again, after a sign-in or a pull.
   function cachedEmbed(link, fresh = false) {
     if (!fresh && embedCache.has(link)) return embedCache.get(link);
-    const entry = fetchEmbed(link, fresh);
+    const entry = fetchEmbed(link, fresh).then((result) => {
+      if (result.status !== 'ready' && embedCache.get(link) === entry) embedCache.delete(link);
+      return result;
+    });
     embedCache.set(link, entry);
     return entry;
   }
@@ -317,6 +324,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     const entry = await cachedEmbed(link, fresh);
     if (ticket !== embedTicket) return;
     fillEmbed(node, entry);
+  }
+
+  function refreshEmbeds() {
+    for (const node of source.embedNodes()) {
+      if (node.dataset.embed && !node.querySelector('img')) hydrateEmbed(node);
+    }
   }
 
   function retryEmbed(node) {
@@ -1113,7 +1126,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function holdEditor(held) {
     holding = Boolean(held);
-    source.readOnly = holding;
+    source.readOnly = holding || booting;
   }
 
   async function replaceFile(file) {
@@ -1173,6 +1186,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     syncOpen();
     renderList();
     startImagePrefetch(db);
+    refreshEmbeds();
     return { downloaded: writes.length, skipped: plan.skipped.length, empty: false };
   }
 
@@ -1314,7 +1328,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     },
     onApplied: applySyncedFiles,
     onRemoved: applyRemoved,
-    onPulled: () => startImagePrefetch(db),
+    onPulled: () => {
+      startImagePrefetch(db);
+      refreshEmbeds();
+    },
   });
 
   const conflictScreen = mountConflictScreen(doc, {
@@ -1356,7 +1373,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     else sync?.visible();
   });
   window.addEventListener('pagehide', hideFlush);
-  window.addEventListener('online', () => sync?.online());
+  window.addEventListener('online', () => {
+    refreshEmbeds();
+    sync?.online();
+  });
 
   return {
     flush: flushNow,
@@ -1376,6 +1396,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         recent = rememberRecent(recent, session.current.path);
         await setMeta(db, 'recent', recent);
       }
+      booting = false;
+      holdEditor(holding);
       await github.refresh();
       github.resume();
       setStatus('saved');

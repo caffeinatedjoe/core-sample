@@ -100,11 +100,13 @@ function draw(spec, view, hooks) {
 }
 
 class LiveWidget extends WidgetType {
-  constructor(spec, hooks) {
+  // `placement` is part of the key, so an image redraws (and retries a miss)
+  // when the caret moves onto or off its line.
+  constructor(spec, hooks, placement) {
     super();
     this.spec = spec;
     this.hooks = hooks;
-    this.key = JSON.stringify(spec);
+    this.key = `${placement} ${JSON.stringify(spec)}`;
   }
 
   eq(other) {
@@ -137,8 +139,8 @@ function decorate(view, hooks) {
     if (spec.type === 'line') out.push(Decoration.line({ class: spec.cls }).range(spec.at));
     else if (spec.type === 'mark') out.push(Decoration.mark({ class: spec.cls }).range(spec.from, spec.to));
     else if (spec.type === 'hide') out.push(hidden.range(spec.from, spec.to));
-    else if (spec.type === 'replace') out.push(Decoration.replace({ widget: new LiveWidget(spec.widget, hooks) }).range(spec.from, spec.to));
-    else if (spec.type === 'widget') out.push(Decoration.widget({ widget: new LiveWidget(spec.widget, hooks), side: 1 }).range(spec.at));
+    else if (spec.type === 'replace') out.push(Decoration.replace({ widget: new LiveWidget(spec.widget, hooks, 'inline') }).range(spec.from, spec.to));
+    else if (spec.type === 'widget') out.push(Decoration.widget({ widget: new LiveWidget(spec.widget, hooks, 'after'), side: 1 }).range(spec.at));
   }
   return Decoration.set(out, true);
 }

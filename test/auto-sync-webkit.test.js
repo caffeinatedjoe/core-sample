@@ -273,7 +273,7 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
       return document.getElementById('note-title')?.textContent === 'Field Notes'
         && document.getElementById('source')?.value === 'Local line\n';
     });
-    await page.locator('#source').fill('Local line\nfrom the phone\n');
+    await page.locator('#source .cm-content').fill('Local line\nfrom the phone\n');
     await savedLocally();
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced');
     assert.equal(commits, 1);
@@ -288,7 +288,7 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     assert.equal(commits, 1);
 
     await context.setOffline(true);
-    await page.locator('#source').fill('From GitHub\nqueued\n');
+    await page.locator('#source .cm-content').fill('From GitHub\nqueued\n');
     await savedLocally();
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Offline');
     assert.equal(commits, 1);
@@ -302,7 +302,7 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
 
     state.failPatch = true;
     const patchesBefore = patches;
-    await page.locator('#source').fill('kept on the phone\n');
+    await page.locator('#source .cm-content').fill('kept on the phone\n');
     await savedLocally();
     const patchStarted = Date.now();
     while (patches === patchesBefore && Date.now() - patchStarted < 15000) {
