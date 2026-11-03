@@ -43,9 +43,12 @@ export function serve() {
   });
 }
 
-// `serviceWorkers: 'block'` lets context.route() see image loads: WebKit
-// sends a controlled page's subresources past Playwright's router.
-export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers = 'allow' } = {}) {
+// The service worker is blocked by default. Its first activate navigates
+// every window onto the new shell, which can land after openApp's reload
+// and pull the page out from under a test. Blocking also lets
+// context.route() see image loads, which WebKit otherwise sends past
+// Playwright's router. The worker has its own tests.
+export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers = 'block' } = {}) {
   let playwright;
   try {
     playwright = await import('playwright');
@@ -59,12 +62,7 @@ export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers 
   const context = await browser.newContext({ ...devices['iPhone 13'], colorScheme, serviceWorkers });
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', (error) => {
-    // WebKit sometimes rejects the launch-time registration.update() when
-    // openApp reloads mid-check. The app catches it; the page still reports it.
-    if (/sw\.js due to access control checks/.test(String(error))) return;
-    errors.push(String(error));
-  });
+  page.on('pageerror', (error) => errors.push(String(error)));
   try {
     const { port } = server.address();
     await run({ page, context, url: `http://127.0.0.1:${port}/`, errors });

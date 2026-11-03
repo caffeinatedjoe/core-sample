@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import { note, openApp, readNote, shot, withPhone } from './helpers/webkit-app.js';
 
 const NOTE = 'Field Notes.md';
-const IMAGES = { serviceWorkers: 'block' };
 const TEXT = [
   '# Basalt survey',
   '',
@@ -116,7 +115,7 @@ test('webkit renders a note in place and shows raw Markdown only where the caret
     const stored = await readNote(page, NOTE);
     assert.equal(stored.content, TEXT);
     assert.deepEqual(errors, []);
-  }, IMAGES);
+  });
 });
 
 test('webkit task toggle saves without focusing the editor', { timeout: 90000 }, async (t) => {
@@ -151,8 +150,7 @@ test('webkit inline image sits in the text and opens the viewer on tap', { timeo
     await routeImage(context);
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
     const img = page.locator('#source img.embed-image');
-    await img.waitFor();
-    await page.waitForFunction(() => document.querySelector('#source img.embed-image')?.naturalWidth > 0);
+    await page.waitForFunction(() => document.querySelector('#source img.embed-image')?.naturalWidth > 0, null, { timeout: 60000 });
     const rect = await img.boundingBox();
     assert.ok(rect.width > 200 && rect.width <= 390, `image width ${rect.width}`);
     await img.scrollIntoViewIfNeeded();
@@ -162,7 +160,7 @@ test('webkit inline image sits in the text and opens the viewer on tap', { timeo
     await page.locator('#image-viewer-close').click();
     await page.waitForSelector('#image-viewer', { state: 'hidden' });
     assert.deepEqual(errors, []);
-  }, IMAGES);
+  });
 });
 
 test('webkit scrolls a 3,000-line note smoothly and keeps the text', { timeout: 120000 }, async (t) => {
