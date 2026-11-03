@@ -107,9 +107,10 @@ navigation bar.
   plain list of decorations from the editor state and is unit tested without
   a DOM.
 - **Taps.** Links, wiki-links, checkboxes and images are small non-editable
-  islands. A tap on one is handled on `mousedown` with `preventDefault`, so
-  the caret does not move and the keyboard stays down. A tap anywhere else
-  places the cursor. Links and images reuse `preview-tap.js`. Internal links
+  islands. A tap on one is handled on `touchend` with `preventDefault` (on
+  `click` with a mouse), so the caret does not move and the keyboard stays
+  down. A long press puts the caret inside it to edit the syntax, as in
+  Obsidian. A tap anywhere else places the cursor. Links and images reuse `preview-tap.js`. Internal links
   go through the same wiki-link rules as before. External links open in the
   browser, and `javascript:` URLs get no link.
 - **Images.** `![[image]]` and `![](path)` use the same `embeds.js` and
@@ -128,6 +129,10 @@ navigation bar.
   revealed. Text uses the iOS body text style, so Dynamic Type still applies.
   The keyboard and safe-area handling in `viewport.js` is unchanged.
 
+- **Navigation.** The notes moved into an Obsidian-style left sidebar with
+  search at the top and the vault name and a Settings gear at the bottom. See
+  Navigation and Settings in [DECISIONS.md](../DECISIONS.md).
+
 ## Left out on purpose
 
 - The mobile editing toolbar. Undo and redo use the iOS gestures (shake,
@@ -138,6 +143,11 @@ navigation bar.
 - Syntax colors inside code blocks.
 - List continuation on Enter. Enter inserts a plain new line, as the old
   text box did.
+- The sidebar's Search pill does not switch between views the way
+  Obsidian's does (its up and down chevron cycles Files, Search, Bookmarks
+  and others). Core Sample has one panel, so the pill focuses the search
+  field. Bookmarks, tags and the vault switcher are not built; the vault name
+  opens Settings.
 
 ## Sources
 

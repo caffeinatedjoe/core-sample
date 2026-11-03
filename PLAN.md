@@ -8,7 +8,7 @@ This stage.
 
 - App shell and iPhone layout: safe areas, keyboard, light and dark from the system, earthy palette.
 - Web manifest and a service worker that caches the shell so the installed app can launch offline.
-- Local editor with source and rendered preview.
+- Local editor with source and rendered preview. (core-sample-shell-v30 replaced both with one Live Preview surface, and moved the notes into an Obsidian-style sidebar with a separate Settings screen. See [docs/live-preview.md](docs/live-preview.md).)
 - IndexedDB. Save as you type (debounced) and flush when the page hides. Request persistent storage.
 - Create a note, open a note, restore the last opened note.
 - Checklist taps in the preview update the source without moving the cursor or opening the keyboard.

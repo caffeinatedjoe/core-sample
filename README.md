@@ -7,15 +7,15 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 ## Stage 1
 
 - Home-screen install (manifest, icons, service worker for the app shell only).
-- Source and preview editor. Light and dark follow the system.
+- One Live Preview editor, as in Obsidian: Markdown renders as you type, and the syntax shows only where the caret is. Light and dark follow the system.
 - Notes save as you type. The last opened note comes back after a reload.
 - Create and open notes. `[[wikilinks]]` open a local note, or create it if it is not there yet. Web links open outside the app.
-- Tap a checklist in Preview and the Markdown updates in place.
-- Folders, rename, move, and Trash. Search by name or text. Export and import a backup of this device.
+- Tap a checkbox and the Markdown updates in place, without raising the keyboard.
+- A left sidebar like Obsidian's (panel button, or swipe from the left edge): folders, rename, move, and Trash, and search by name or text. The gear opens Settings: GitHub, sync, backup export and import, and the build id.
 
 ## GitHub
 
-Notes → GitHub stores a client id and a relay URL on this phone. Both start empty. The steps to create the Cloudflare Worker and the GitHub OAuth app are in [worker/README.md](worker/README.md) and [DECISIONS.md](DECISIONS.md). The token stays in IndexedDB. Repository calls go to `api.github.com`. Disconnect leaves notes on the phone. Automatic sync is not built. Sign-in, download, and pull also save the images embedded in those notes onto this phone. A saved image opens with no network. When GitHub turns the token down, the sheet shows the last sign-in problem: when it happened, which call, the HTTP status, and GitHub's words. It never shows the token.
+Settings → GitHub (the gear at the bottom of the sidebar) stores a client id and a relay URL on this phone. Both start empty. The steps to create the Cloudflare Worker and the GitHub OAuth app are in [worker/README.md](worker/README.md) and [DECISIONS.md](DECISIONS.md). The token stays in IndexedDB. Repository calls go to `api.github.com`. Disconnect leaves notes on the phone. After a repo and branch are saved, edits sync on their own. Sign-in, download, and pull also save the images embedded in those notes onto this phone. A saved image opens with no network. When GitHub turns the token down, Settings shows the last sign-in problem: when it happened, which call, the HTTP status, and GitHub's words. It never shows the token.
 
 ## Develop
 
@@ -35,4 +35,4 @@ Icons are built from `app/icons/source/core-sample-icon-source-v2.jpg`. After re
 2. Share → Add to Home Screen.
 3. Open Core Sample from the home screen. It should launch without Safari's toolbar.
 
-Notes live in this install. The line under the status bar is the shell build. After an update, check that build id and reload Core Sample from the home screen. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. Export a backup before you ever remove the icon. Import with Add to this device brings the notes, folders, and Trash back.
+Notes live in this install. Settings → About shows the shell build. After an update, check that build id and reload Core Sample from the home screen. Removing the Home Screen icon deletes that web app's data on iOS, including these notes. Clearing website data does the same. Export a backup before you ever remove the icon. Import with Add to this device brings the notes, folders, and Trash back.
