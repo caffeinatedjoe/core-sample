@@ -400,6 +400,17 @@ export function createLiveEditor(host, hooks = {}) {
     }),
     editable.of([EditorState.readOnly.of(false), EditorView.editable.of(true)]),
     livePlugin(hooks, live),
+    EditorView.domEventHandlers({
+      paste(event) {
+        const list = event.clipboardData && event.clipboardData.files;
+        if (!list || !list.length) return false;
+        const images = [...list].filter((file) => file.type && file.type.startsWith('image/'));
+        if (!images.length) return false;
+        event.preventDefault();
+        hooks.onPasteFiles?.(images);
+        return true;
+      },
+    }),
     EditorView.updateListener.of((update) => {
       if (update.docChanged && !quiet) hooks.onChange?.();
       if (update.focusChanged) {
@@ -577,6 +588,17 @@ export function createLiveEditor(host, hooks = {}) {
       if (action === 'redo') return redo(view);
       const { from, to } = view.state.selection.main;
       return runChange(view, formatChange(view.state.doc.toString(), from, to, action), 'input.format');
+    },
+    insert(text) {
+      if (view.state.readOnly) return false;
+      const value = String(text ?? '');
+      const { from, to } = view.state.selection.main;
+      view.dispatch({
+        changes: { from, to, insert: value },
+        selection: { anchor: from + value.length },
+        userEvent: 'input.paste',
+      });
+      return true;
     },
     measure() {
       view.requestMeasure();

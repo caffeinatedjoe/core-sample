@@ -1,4 +1,5 @@
 import { deleteImages, deleteMeta, getImage, getMeta, listFiles, listImages, putImage, setMeta } from './db.js';
+import { ATTACHMENT_FOLDER } from './attachments.js';
 import {
   basename,
   decodePath,
@@ -159,6 +160,7 @@ function blankIndex(settings, extra = {}) {
     treeSha: '',
     truncated: false,
     shas: {},
+    sizes: {},
     status: 0,
     reason: githubStatusReason(0),
     fromCache: false,
@@ -244,8 +246,10 @@ export async function refreshVaultIndex(db, settings, fetchImpl, now = Date.now(
   }
   const paths = entries.map((entry) => entry.path);
   const shas = {};
+  const sizes = {};
   for (const entry of entries) {
     if (entry.sha) shas[entry.path] = entry.sha;
+    if (entry.size) sizes[entry.path] = entry.size;
   }
   const folderRead = await readAttachmentFolder(fetchImpl, settings, branch);
   if (folderRead.status === 401) {
@@ -258,6 +262,7 @@ export async function refreshVaultIndex(db, settings, fetchImpl, now = Date.now(
     root: settings.root || '',
     paths,
     shas,
+    sizes,
     attachmentFolderPath: folderRead.folder,
     fetchedAt: now,
     treeSha: listed.body && typeof listed.body.sha === 'string' ? listed.body.sha : '',
@@ -437,6 +442,7 @@ async function cachedReady(db, repo, path) {
   let hit = null;
   try {
     hit = await cachedImage(db, repo, path);
+    if (!hit?.data && repo) hit = await cachedImage(db, '', path);
   } catch {
     hit = { unreadable: true };
   }
@@ -676,15 +682,32 @@ async function readLocalEmbed(db, options) {
   const written = normalizeVaultPath(decodePath(link));
   add(links[pathLinkKey(written)]);
   let folder = attachmentFolderPath || '';
-  let list = Array.isArray(paths) ? paths : null;
-  if (!list) {
-    const index = await getMeta(db, INDEX_KEY);
-    if (index && samePlace(index, settings) && Array.isArray(index.paths)) {
-      list = index.paths;
-      if (!folder) folder = index.attachmentFolderPath || '';
-    }
+  const list = [];
+  const seen = new Set();
+  const addPath = (path) => {
+    const normal = normalizeVaultPath(path);
+    if (!normal || seen.has(normal)) return;
+    seen.add(normal);
+    list.push(normal);
+  };
+  if (Array.isArray(paths)) {
+    for (const path of paths) addPath(path);
   }
-  if (list) add(resolveEmbedPath(link, { notePath, paths: list, attachmentFolderPath: folder }));
+  const index = await getMeta(db, INDEX_KEY);
+  if (index && samePlace(index, settings) && Array.isArray(index.paths)) {
+    for (const path of index.paths) addPath(path);
+    if (!folder) folder = index.attachmentFolderPath || '';
+  }
+  try {
+    const notes = await listFiles(db);
+    for (const file of notes || []) {
+      if (file?.path && !file.trashedAt) addPath(file.path);
+    }
+  } catch {
+    // Local files still resolve from the list already collected.
+  }
+  if (!folder) folder = ATTACHMENT_FOLDER;
+  if (list.length) add(resolveEmbedPath(link, { notePath, paths: list, attachmentFolderPath: folder }));
   add(written);
   for (const path of candidates) {
     const cached = await cachedReady(db, repo, path);
@@ -854,6 +877,70 @@ export function startImagePrefetch(db, fetchImpl = globalThis.fetch) {
   });
   prefetchChain = run.then(() => {}, () => {});
   return run;
+}
+
+export async function loadAttachmentBytes(db, options = {}) {
+  const path = normalizeVaultPath(options.path || options.link || '');
+  const name = basename(path);
+  if (!path) return { status: 'missing', name: '', reason: 'Not found in vault' };
+  const repo = options.repo || '';
+  let local = null;
+  try {
+    local = await cachedImage(db, repo, path);
+    if (!local?.data) local = await cachedImage(db, '', path);
+  } catch {
+    local = null;
+  }
+  if (local?.data && (!options.fresh || offlineNow(options))) {
+    const type = local.type || mimeFor(path);
+    return {
+      status: 'ready',
+      name,
+      path,
+      data: local.data,
+      bytes: local.bytes,
+      type,
+      blob: new Blob([local.data], { type }),
+    };
+  }
+  if (offlineNow(options)) return { status: 'missing', name, path, reason: OFFLINE_IMAGE_REASON };
+  if (!options.token || !repo || !options.fetchImpl) {
+    return { status: 'error', name, path, reason: 'Sign in again' };
+  }
+  let file;
+  try {
+    file = await fetchRawBytes(options.fetchImpl, {
+      repo,
+      path: repoPath(options.root, path),
+      branch: options.branch,
+      token: options.token,
+    });
+  } catch (error) {
+    const status = Number(error && error.status) || 0;
+    return {
+      status: 'error',
+      name,
+      path,
+      fileStatus: status,
+      reason: githubStatusReason(status),
+    };
+  }
+  const raw = file.bytes instanceof ArrayBuffer ? file.bytes : new Uint8Array(file.bytes || []).buffer;
+  const type = mimeFor(path);
+  try {
+    await rememberImage(db, { repo, path, data: raw, type, sha: options.sha || '' });
+  } catch {
+    // The download can still be shown when IndexedDB rejects the record.
+  }
+  return {
+    status: 'ready',
+    name,
+    path,
+    data: raw,
+    bytes: raw.byteLength,
+    type,
+    blob: new Blob([raw], { type }),
+  };
 }
 
 export function embedImage(blob, { createObjectURL, createElement, width, height, name, type }) {

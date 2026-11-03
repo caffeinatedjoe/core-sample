@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { deleteDatabase, getFile, getMeta, listFiles, listOps, openDatabase, putFile } from '../app/js/db.js';
-import { encodeUtf8Base64 } from '../app/js/github-api.js';
+import { encodeBytesBase64, encodeUtf8Base64 } from '../app/js/github-api.js';
+import { rememberImage } from '../app/js/images.js';
 import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
 import {
   backoffDelay,
@@ -15,6 +16,7 @@ import {
   loadConflictRemote,
   presentSyncStatus,
   RACE_RETRY_LIMIT,
+  reconcileAttachments,
   reconcileNotes,
   refReadPath,
   refUpdateBody,
@@ -341,6 +343,20 @@ test('status is never Synced before a confirmed write, and a conflict keeps both
   assert.equal(isAppGenerated(note('Welcome.md', '# Welcome\n')), true);
   assert.equal(shouldAutoUpload(note('Welcome.md', '# Welcome\n')), false);
   assert.equal(shouldAutoUpload(note('Draft.md', 'new\n', { origin: 'user' })), true);
+  assert.equal(shouldAutoUpload({
+    path: 'assets/Site Log/shot.png',
+    kind: 'binary',
+    dirty: true,
+    origin: 'user',
+    trashedAt: null,
+  }), true);
+  assert.equal(shouldAutoUpload({
+    path: 'assets/Site Log/shot.png',
+    kind: 'binary',
+    dirty: false,
+    origin: '',
+    trashedAt: null,
+  }), false);
   assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', updatedAt: 2 }), { headSha: 'c2', headDate: 10 }), false);
   assert.equal(shouldRemoveLocal(note('Field Notes.md', 'x\n', { baseSha: 'a', remoteSha: 'a', syncedCommit: 'c1', syncedAt: 1 }), { headSha: 'c1', headDate: 10 }), false);
 
@@ -1189,5 +1205,72 @@ test('an offline delete stays queued until the phone is online again', async () 
     db.close();
   } finally {
     await deleteDatabase(name);
+  }
+});
+
+test('sync stores attachment stubs from the tree without fetching bytes', async () => {
+  const box = await harness();
+  try {
+    await putFile(box.db, note('Field Notes.md', 'Local line\n', { baseSha: 'blob-1', remoteSha: 'blob-1' }));
+    box.git.state.files.set('assets/Site Log/shot.png', { sha: 'png-1', text: '' });
+    const remote = [{ localPath: 'assets/Site Log/shot.png', sha: 'png-1', size: 80 }];
+    const plan = reconcileAttachments([
+      { path: 'Field Notes.md', kind: 'markdown', trashedAt: null },
+    ], remote);
+    assert.equal(plan.stubs.length, 1);
+    assert.equal(plan.pushes.length, 0);
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const stub = await getFile(box.db, 'assets/Site Log/shot.png');
+    assert.equal(stub.kind, 'binary');
+    assert.equal(stub.content, '');
+    assert.equal(stub.remoteSha, 'png-1');
+    assert.equal(box.git.log.some((item) => item.method === 'GET' && String(item.url).includes('/git/blobs/png-1')), false);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a local image stays queued offline and later uploads the original bytes', async () => {
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 8, 9]);
+  let offline = true;
+  const box = await harness({ isOffline: () => offline });
+  try {
+    const path = 'assets/Site Log/image-20260102030405006.png';
+    const file = {
+      path,
+      content: '',
+      kind: 'binary',
+      encoding: 'binary',
+      bytes: png.byteLength,
+      createdAt: 1,
+      updatedAt: 2,
+      trashedAt: null,
+      remoteSha: null,
+      baseSha: null,
+      dirty: true,
+      conflict: false,
+      origin: 'user',
+    };
+    await putFile(box.db, note('Site Log.md', '![[image-20260102030405006.png]]\n', { origin: 'user', dirty: true }));
+    await putFile(box.db, file);
+    await rememberImage(box.db, { repo: 'owner/repo', path, data: png.buffer.slice(0), type: 'image/png' });
+    await box.sync.noteEdited(file);
+    const queued = await box.sync.runNow();
+    assert.equal(queued.status, SYNC_STATUS.offline);
+    assert.equal(box.git.log.length, 0);
+    offline = false;
+    const result = await box.sync.runNow();
+    assert.equal(result.status, SYNC_STATUS.synced);
+    const posted = box.git.log.filter((item) => item.method === 'POST' && item.url.endsWith('/git/blobs'));
+    const binary = posted.find((item) => item.body && item.body.encoding === 'base64');
+    assert.ok(binary);
+    assert.equal(binary.body.content, encodeBytesBase64(png));
+    const saved = await getFile(box.db, path);
+    assert.equal(saved.dirty, false);
+    assert.ok(saved.remoteSha);
+    assert.equal(box.git.state.files.has(path), true);
+  } finally {
+    await box.close();
   }
 });

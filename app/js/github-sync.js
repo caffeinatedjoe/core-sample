@@ -1,15 +1,19 @@
 // Automatic sync. The local-save clock is separate and must already have
 // written the note before a debounced run pushes it.
-import { commitFiles, deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteImages, deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta } from './db.js';
 import {
   decodeUtf8Base64,
+  encodeBytesBase64,
+  fileFromRemoteAttachment,
   githubRequest,
   AUTH_RECHECK_MS,
   githubStatusReason,
   readUser,
   repoPath,
+  selectAttachments,
   selectMarkdown,
 } from './github-api.js';
+import { cachedImage } from './images.js';
 import { loadGithubSettings, recordAuthFailure } from './github-store.js';
 import { redact } from './github-redact.js';
 import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
@@ -173,10 +177,15 @@ export function refUpdatePath(branch) {
   return `/git/refs/heads/${encodeURIComponent(branch)}`;
 }
 
+function fileFingerprint(file) {
+  if (file && file.kind === 'binary') return `bin:${file.bytes || 0}:${file.updatedAt || 0}`;
+  return String(file && file.content != null ? file.content : '');
+}
+
 function preparedKey(parent, files, deletions = []) {
   return JSON.stringify([
     parent,
-    (files || []).map((file) => [file.path, String(file.content ?? '')]),
+    (files || []).map((file) => [file.path, fileFingerprint(file)]),
     (deletions || []).map((item) => item.path),
   ]);
 }
@@ -200,7 +209,12 @@ export function isAppGenerated(file) {
 }
 
 export function shouldAutoUpload(file) {
-  if (!file || file.kind !== 'markdown' || isIgnoredPath(file.path)) return false;
+  if (!file || isIgnoredPath(file.path)) return false;
+  if (file.kind === 'binary') {
+    if (file.trashedAt || file.conflictCopy || file.backup || file.conflict === true) return false;
+    return file.dirty === true || file.origin === 'user';
+  }
+  if (file.kind !== 'markdown') return false;
   if (file.trashedAt || file.conflictCopy || file.backup || file.conflict === true) return false;
   if (file.localOnly === true || isAppGenerated(file) || isLocalCopyName(file.path)) return false;
   if (file.origin === 'user') return true;
@@ -349,6 +363,60 @@ export function reconcileNotes(files, remoteNotes, context = {}) {
     creates.push(note);
   }
   return { pushes, pulls, creates, conflicts, removals };
+}
+
+export function reconcileAttachments(files, remoteAttachments, context = {}) {
+  const listed = (remoteAttachments || []).filter((entry) => entry && (entry.localPath || entry.path) && !isIgnoredPath(entry.localPath || entry.path));
+  const remote = new Map(listed.map((entry) => [entry.localPath || entry.path, entry]));
+  const localPaths = new Set((files || []).map((file) => file && file.path));
+  const pushes = [];
+  const stubs = [];
+  const updates = [];
+  const conflicts = [];
+  const removals = [];
+  const blocked = blockedCreatePaths(context.ops);
+  for (const file of files || []) {
+    if (!file || file.kind !== 'binary' || file.trashedAt || file.conflictCopy || isIgnoredPath(file.path)) continue;
+    const found = remote.get(file.path);
+    const base = syncedBase(file);
+    if (file.conflict === true) {
+      conflicts.push({ path: file.path, reason: file.conflictReason || 'existing', remote: found || null });
+      continue;
+    }
+    const dirty = file.dirty === true;
+    if (dirty) {
+      if (!found) {
+        if (base) conflicts.push({ path: file.path, reason: 'deleted', remote: null });
+        else if (shouldAutoUpload(file)) pushes.push(file);
+      } else if (base && found.sha === base) {
+        pushes.push(file);
+      } else if (!base && shouldAutoUpload(file) && found.sha) {
+        conflicts.push({ path: file.path, reason: 'both', remote: found });
+      } else if (!base && shouldAutoUpload(file)) {
+        pushes.push(file);
+      } else {
+        conflicts.push({ path: file.path, reason: 'both', remote: found });
+      }
+      continue;
+    }
+    if (!found) {
+      if (base) {
+        const decision = remoteDeleteDecision(file, context);
+        if (decision === 'remove') removals.push(file.path);
+        else if (decision === 'conflict') conflicts.push({ path: file.path, reason: 'deleted', remote: null });
+      } else if (shouldAutoUpload(file)) {
+        pushes.push(file);
+      }
+      continue;
+    }
+    if (found.sha !== (file.remoteSha || base)) updates.push({ file, remote: found });
+  }
+  for (const entry of listed) {
+    const path = entry.localPath || entry.path;
+    if (localPaths.has(path) || blocked.has(path)) continue;
+    stubs.push(entry);
+  }
+  return { pushes, stubs, updates, conflicts, removals };
 }
 
 function arm(setTimer, fn, ms) {
@@ -906,7 +974,11 @@ export function createAutoSync({
       ops = ops.filter((op) => !ignored.includes(op));
     }
     const localNotes = await listFiles(db);
-    const dirtyFiles = localNotes.filter((file) => file && file.dirty && !file.trashedAt && !file.conflictCopy && file.kind === 'markdown' && !isIgnoredPath(file.path));
+    const dirtyFiles = localNotes.filter((file) => (
+      file && file.dirty && !file.trashedAt && !file.conflictCopy
+      && (file.kind === 'markdown' || file.kind === 'binary')
+      && !isIgnoredPath(file.path)
+    ));
     for (const file of dirtyFiles) {
       if (!ops.some((op) => op.id === file.path)) ops.push(await ensureOp(file, settings));
     }
@@ -998,13 +1070,18 @@ export function createAutoSync({
     if (tree.status === 401) return authOrFail(settings, ops);
     if (!tree.ok) return hold(settings, ops, tree);
     let remoteNotes = [];
+    let remoteAttachments = [];
     try {
       remoteNotes = selectMarkdown(tree.body, settings.root);
+      remoteAttachments = selectAttachments(tree.body, settings.root);
     } catch {
       return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: mine.length > 0 });
     }
     const files = await listFiles(db);
-    const listed = new Set(remoteNotes.map((note) => note.localPath));
+    const listed = new Set([
+      ...remoteNotes.map((note) => note.localPath),
+      ...remoteAttachments.map((entry) => entry.localPath),
+    ]);
     const descends = new Map();
     let unreadCommit = null;
     const readCommit = async (sha) => {
@@ -1020,7 +1097,7 @@ export function createAutoSync({
     };
     const deleteContext = { headSha, lastBlobs: previousBlobs, cursorHead: previousHead };
     for (const file of files) {
-      if (!file || file.kind !== 'markdown' || file.trashedAt || file.conflictCopy || file.conflict || file.dirty) continue;
+      if (!file || (file.kind !== 'markdown' && file.kind !== 'binary') || file.trashedAt || file.conflictCopy || file.conflict || file.dirty) continue;
       if (listed.has(file.path) || !syncedBase(file) || isIgnoredPath(file.path)) continue;
       const ancestor = deleteAncestor(file, deleteContext);
       if (!ancestor || ancestor === headSha || descends.has(ancestor)) continue;
@@ -1035,7 +1112,12 @@ export function createAutoSync({
       descends,
       ops: mine,
     });
-    const seenBlobs = blobsFromNotes(remoteNotes);
+    const attachPlan = reconcileAttachments(files, remoteAttachments, {
+      ...deleteContext,
+      descends,
+      ops: mine,
+    });
+    const seenBlobs = blobsFromNotes([...remoteNotes, ...remoteAttachments]);
     await setMeta(db, CURSOR_KEY, {
       repo: settings.repo,
       branch: settings.branch,
@@ -1098,6 +1180,41 @@ export function createAutoSync({
       pulled = true;
     }
 
+    for (const entry of attachPlan.stubs) {
+      const created = fileFromRemoteAttachment(entry, now());
+      const already = await getFile(db, created.path);
+      if (already) continue;
+      await putFile(db, created);
+      applied.push(created);
+    }
+    for (const item of attachPlan.updates) {
+      const fresh = await getFile(db, item.file.path);
+      if (!fresh || fresh.dirty || fresh.conflict || fresh.kind !== 'binary') continue;
+      const next = {
+        ...fresh,
+        remoteSha: item.remote.sha,
+        baseSha: item.remote.sha,
+        bytes: Number(item.remote.size) || fresh.bytes || 0,
+        dirty: false,
+        updatedAt: now(),
+        syncedAt: headDate || now(),
+        syncedCommit: headSha,
+      };
+      await putFile(db, next);
+      try {
+        await deleteImages(db, [`${settings.repo}\n${fresh.path}`, `\n${fresh.path}`]);
+      } catch {
+        // A stale cache entry is overwritten on the next view.
+      }
+      applied.push(next);
+    }
+    for (const path of attachPlan.removals || []) {
+      if (!plan.removals.includes(path)) plan.removals.push(path);
+    }
+    for (const file of attachPlan.pushes) {
+      plan.pushes.push(file);
+    }
+
     const removed = [];
     for (const path of plan.removals || []) {
       await commitFiles(db, { remove: [path] });
@@ -1149,7 +1266,7 @@ export function createAutoSync({
     }
     for (const item of plan.conflicts) {
       const fresh = await getFile(db, item.path);
-      if (!fresh) continue;
+      if (!fresh || fresh.kind === 'binary') continue;
       if (fresh.conflict === true) {
         conflicted = true;
         continue;
@@ -1207,6 +1324,25 @@ export function createAutoSync({
         baseText,
       });
     }
+    for (const item of attachPlan.conflicts) {
+      const fresh = await getFile(db, item.path);
+      if (!fresh || fresh.kind !== 'binary') continue;
+      if (fresh.conflict === true) {
+        conflicted = true;
+        continue;
+      }
+      const marked = {
+        ...fresh,
+        conflict: true,
+        dirty: true,
+        conflictAt: now(),
+        conflictReason: item.reason,
+      };
+      await putFile(db, marked);
+      await ensureOp(marked, settings);
+      applied.push(marked);
+      conflicted = true;
+    }
 
     const deletions = [];
     const mineNow = (await listOps(db)).filter((op) => op.repo === settings.repo && op.branch === settings.branch);
@@ -1218,7 +1354,8 @@ export function createAutoSync({
           await deleteOps(db, [op.path]);
           continue;
         }
-        const remoteNote = remoteNotes.find((note) => note.localPath === op.path);
+        const remoteNote = remoteNotes.find((note) => note.localPath === op.path)
+          || remoteAttachments.find((entry) => entry.localPath === op.path);
         if (!remoteNote) {
           await deleteOps(db, [op.path]);
           const forgotten = await forgetRemote(op.path);
@@ -1227,6 +1364,22 @@ export function createAutoSync({
         }
         if (remoteNote.sha === op.baseSha) {
           deletions.push({ path: op.path });
+          continue;
+        }
+        const freshDelete = await getFile(db, op.path);
+        if (freshDelete && freshDelete.kind === 'binary') {
+          const marked = {
+            ...freshDelete,
+            trashedAt: null,
+            conflict: true,
+            dirty: true,
+            conflictAt: now(),
+            conflictReason: 'delete',
+          };
+          await putFile(db, marked);
+          applied.push(marked);
+          conflicted = true;
+          await deleteOps(db, [op.path]);
           continue;
         }
         const blob = await call(repoUrl(settings.repo, `/git/blobs/${remoteNote.sha}`));
@@ -1244,10 +1397,44 @@ export function createAutoSync({
         continue;
       }
       if (op.kind === 'rename') {
-        const remoteNote = op.baseSha ? remoteNotes.find((note) => note.localPath === op.from) : null;
+        const remoteNote = op.baseSha
+          ? (remoteNotes.find((note) => note.localPath === op.from)
+            || remoteAttachments.find((entry) => entry.localPath === op.from))
+          : null;
         if (!op.baseSha || !remoteNote) continue;
         if (remoteNote.sha === op.baseSha) {
           deletions.push({ path: op.from });
+          continue;
+        }
+        const destFile = await getFile(db, op.to);
+        if (destFile && destFile.kind === 'binary') {
+          const restoredBin = {
+            path: op.from,
+            content: '',
+            kind: 'binary',
+            encoding: 'binary',
+            bytes: destFile.bytes || 0,
+            createdAt: now(),
+            updatedAt: now(),
+            trashedAt: null,
+            remoteSha: remoteNote.sha,
+            baseSha: remoteNote.sha,
+            dirty: false,
+            conflict: false,
+          };
+          await putFile(db, restoredBin);
+          applied.push(restoredBin);
+          const marked = {
+            ...destFile,
+            conflict: true,
+            dirty: true,
+            conflictAt: now(),
+            conflictReason: 'rename',
+          };
+          await putFile(db, marked);
+          applied.push(marked);
+          conflicted = true;
+          await deleteOps(db, [op.id]);
           continue;
         }
         const blob = await call(repoUrl(settings.repo, `/git/blobs/${remoteNote.sha}`));
@@ -1342,9 +1529,23 @@ export function createAutoSync({
       written = [];
       for (const file of pushFiles) {
         if (isIgnoredPath(file.path)) continue;
+        let body;
+        if (file.kind === 'binary') {
+          let hit = null;
+          try {
+            hit = await cachedImage(db, settings.repo, file.path);
+            if (!hit?.data) hit = await cachedImage(db, '', file.path);
+          } catch {
+            hit = null;
+          }
+          if (!hit?.data) return hold(settings, ops, { status: 0, message: 'The file is still on this device.' });
+          body = { content: encodeBytesBase64(hit.data), encoding: 'base64' };
+        } else {
+          body = { content: String(file.content ?? ''), encoding: 'utf-8' };
+        }
         const blob = await call(repoUrl(settings.repo, '/git/blobs'), {
           method: 'POST',
-          body: { content: String(file.content ?? ''), encoding: 'utf-8' },
+          body,
         });
         if (!blob.ok || !blob.body || typeof blob.body.sha !== 'string') return hold(settings, ops, blob);
         entries.push({
@@ -1353,7 +1554,7 @@ export function createAutoSync({
           type: 'blob',
           sha: blob.body.sha,
         });
-        written.push({ path: file.path, sha: blob.body.sha, content: String(file.content ?? '') });
+        written.push({ path: file.path, sha: blob.body.sha, content: fileFingerprint(file), kind: file.kind || 'markdown' });
       }
       for (const item of deletions) {
         if (isIgnoredPath(item.path)) continue;
@@ -1418,7 +1619,7 @@ export function createAutoSync({
     for (const item of written) {
       const fresh = await getFile(db, item.path);
       if (!fresh) continue;
-      if (String(fresh.content ?? '') !== item.content) {
+      if (fileFingerprint(fresh) !== item.content) {
         await ensureOp(fresh, settings);
         continue;
       }

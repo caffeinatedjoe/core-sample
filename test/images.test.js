@@ -10,6 +10,7 @@ import {
   dropStaleVaultIndex,
   embedImage,
   imagePayload,
+  loadAttachmentBytes,
   loadEmbedBlob,
   prefetchEmbeddedImages,
   pruneUnreferencedImages,
@@ -53,6 +54,44 @@ test('a raw image request keeps the token out of the url', async () => {
   const withoutHeader = { ...seen.options, headers: { ...seen.options.headers, Authorization: '' } };
   assert.equal(JSON.stringify(withoutHeader).includes(TOKEN), false);
   assert.equal(header.startsWith('Bearer '), true);
+});
+
+test('attachment bytes are fetched once and then served from the cache', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  let fetches = 0;
+  const fetchImpl = async (url, options) => {
+    fetches += 1;
+    assert.equal(String(url).includes(TOKEN), false);
+    assert.equal(options.headers.Authorization, `Bearer ${TOKEN}`);
+    return rawResponse(PNG.buffer);
+  };
+  const first = await loadAttachmentBytes(db, {
+    path: IMAGE,
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+    fetchImpl,
+  });
+  assert.equal(first.status, 'ready');
+  assert.equal(first.bytes, PNG.byteLength);
+  assert.equal(fetches, 1);
+  const stored = await getImage(db, `owner/repo\n${IMAGE}`);
+  assert.ok(stored);
+  const second = await loadAttachmentBytes(db, {
+    path: IMAGE,
+    repo: 'owner/repo',
+    branch: 'main',
+    root: '',
+    token: TOKEN,
+    fetchImpl,
+    offline: true,
+  });
+  assert.equal(second.status, 'ready');
+  assert.equal(fetches, 1);
+  db.close();
+  await deleteDatabase(name);
 });
 
 test('a cached image loads offline and the src is an object url', async () => {

@@ -331,5 +331,7 @@ export function liveNotes(files) {
 
 export function notesInFolder(files, folder) {
   const prefix = `${folder}/`;
-  return liveNotes(files).filter((file) => file.path.startsWith(prefix));
+  return (files || []).filter((file) => (
+    file && !file.trashedAt && !isIgnoredPath(file.path) && file.path.startsWith(prefix)
+  ));
 }

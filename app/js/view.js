@@ -25,14 +25,26 @@ import {
   planRestore,
   planTrash,
 } from './organize.js';
-import { fileFromRemote, folderList, planDownload } from './github-api.js';
+import {
+  ATTACHMENT_FOLDER,
+  attachmentDestination,
+  embedLinkFor,
+  extraAttachmentFiles,
+  formatByteSize,
+  isImagePath,
+  makeBinaryFile,
+  mergePlans,
+  noteAttachmentFolder,
+  planRenameAttachmentFolder,
+} from './attachments.js';
+import { fileFromRemote, fileFromRemoteAttachment, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
-import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
+import { embedImage, loadAttachmentBytes, loadEmbedBlob, OFFLINE_IMAGE_REASON, rememberImage, startImagePrefetch } from './images.js';
 import { createAutoSync, loadConflictRemote, syncAlert, syncAlertFocus, syncAlertTone } from './github-sync.js';
 import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
-import { basename } from './embeds.js';
+import { basename, extensionOf, mimeFor } from './embeds.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
 import { createLiveEditor } from './live-editor.js';
@@ -234,6 +246,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     dataview: (query, lang) => dataviewResult(query, lang, taskIndex),
     onDataviewToggle: dataviewToggle,
     onDataviewOpen: dataviewOpen,
+    onPasteFiles: (images) => insertImages(images, { pasted: true }),
   });
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
   // Text typed before the last note loads would be replaced by it.
@@ -256,6 +269,20 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       source.format?.(action);
     });
   }
+  const imageInput = doc.getElementById('image-file');
+  if (imageInput) {
+    imageInput.addEventListener('change', async () => {
+      const picked = [...(imageInput.files || [])];
+      imageInput.value = '';
+      if (picked.length) await insertImages(picked, { pasted: true });
+    });
+  }
+  const filePreview = doc.getElementById('file-preview');
+  const closeFilePreview = () => {
+    if (filePreview) filePreview.hidden = true;
+  };
+  doc.getElementById('file-preview-close')?.addEventListener('click', closeFilePreview);
+  doc.getElementById('file-preview-scrim')?.addEventListener('click', closeFilePreview);
 
   function revokeEmbed(url) {
     if (!url || !embedUrls.has(url)) return;
@@ -281,10 +308,25 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     }
   }
 
-  async function loadEmbedSrc(embed) {
+  function embedPathList() {
+    const seen = new Set();
+    const list = [];
+    const add = (path) => {
+      if (!path || seen.has(path)) return;
+      seen.add(path);
+      list.push(path);
+    };
+    for (const file of files) {
+      if (file && !file.trashedAt) add(file.path);
+    }
+    for (const path of vaultPaths || []) add(path);
+    return list;
+  }
+
+  async function embedQuery(link, extra = {}) {
     const settings = await embedSettings();
-    const result = await loadEmbedBlob(db, {
-      link: embed,
+    return {
+      link,
       notePath: current && current.path ? current.path : '',
       repo: settings.repo,
       branch: settings.branch,
@@ -292,7 +334,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       token: settings.token,
       fetchImpl: globalThis.fetch.bind(globalThis),
       offline: browserOffline(),
-    });
+      attachmentFolderPath: ATTACHMENT_FOLDER,
+      ...extra,
+    };
+  }
+
+  async function loadEmbedSrc(embed) {
+    const result = await loadEmbedBlob(db, await embedQuery(embed));
     if (result.status !== 'ready' || !result.blob) return '';
     const url = URL.createObjectURL(result.blob);
     if (!photos.isOpen()) {
@@ -370,20 +418,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   }
 
   async function fetchEmbed(link, fresh) {
-    const settings = await embedSettings();
     try {
-      const result = await loadEmbedBlob(db, {
-        link,
-        notePath: current && current.path ? current.path : '',
-        repo: settings.repo,
-        branch: settings.branch,
-        root: settings.root,
-        token: settings.token,
-        fetchImpl: globalThis.fetch.bind(globalThis),
-        offline: browserOffline(),
-        ...(fresh ? { fresh: true } : {}),
-      });
-      return { ...result, repo: settings.repo || '', url: '' };
+      const options = await embedQuery(link, fresh ? { fresh: true } : {});
+      const result = await loadEmbedBlob(db, options);
+      return { ...result, repo: options.repo || '', url: '' };
     } catch {
       return { status: 'error', reason: browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)" };
     }
@@ -550,12 +588,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (!to || to === from) continue;
       const prior = previous.find((file) => file.path === from);
       const next = (result.files || []).find((file) => file.path === to);
-      if (!prior || prior.kind !== 'markdown' || !next) continue;
+      if (!prior || (prior.kind !== 'markdown' && prior.kind !== 'binary') || !next) continue;
       const base = typeof prior.baseSha === 'string' && prior.baseSha ? prior.baseSha : (prior.remoteSha || '');
       await sync.noteRenamed({ from, to, baseSha: base, file: next });
     }
     for (const file of result.put || []) {
-      if (!file || file.kind !== 'markdown' || destinations.has(file.path)) continue;
+      if (!file || (file.kind !== 'markdown' && file.kind !== 'binary') || destinations.has(file.path)) continue;
       const prior = previous.find((item) => item.path === file.path);
       if (file.trashedAt && !prior?.trashedAt) {
         const base = (prior && (prior.baseSha || prior.remoteSha)) || '';
@@ -566,6 +604,101 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         await sync.noteEdited(file);
       }
     }
+  }
+
+  async function insertImages(blobs, { pasted = true } = {}) {
+    if (!current || source.readOnly || !blobs?.length) return;
+    if (!(await flushEditing())) return;
+    const settings = await embedSettings();
+    const existing = files.map((file) => file.path);
+    const put = [];
+    let tick = Date.now();
+    for (const blob of blobs) {
+      const bytes = await blob.arrayBuffer();
+      const dest = attachmentDestination(current.path, {
+        mime: blob.type || '',
+        filename: blob.name || '',
+        existingPaths: existing,
+        pasted,
+        now: new Date(tick),
+      });
+      tick += 1;
+      existing.push(dest.path);
+      const file = makeBinaryFile(dest.path, {
+        bytes: bytes.byteLength,
+        dirty: true,
+        origin: 'user',
+        now: Date.now(),
+      });
+      try {
+        await rememberImage(db, {
+          repo: settings.repo || '',
+          path: dest.path,
+          data: bytes,
+          type: blob.type || mimeFor(dest.path),
+        });
+      } catch {
+        // The bytes stay in memory for this insert; the next view can store them.
+      }
+      put.push(file);
+    }
+    if (!put.length) return;
+    await commitFiles(db, { put });
+    files.push(...put);
+    for (const file of put) {
+      for (const folder of ancestorFolders(file.path)) {
+        if (!folders.includes(folder)) folders.push(folder);
+        expanded.add(folder);
+      }
+    }
+    await setMeta(db, 'folders', folders);
+    await setMeta(db, 'expanded', [...expanded]);
+    const links = put.map((file) => embedLinkFor(file.path, embedPathList())).join('\n');
+    source.insert(links);
+    current.content = source.value;
+    current.dirty = true;
+    current.updatedAt = Date.now();
+    await saver.flush();
+    for (const file of put) await sync?.noteEdited(file);
+    renderList();
+    refreshEmbeds();
+  }
+
+  function showFilePreview(path, file) {
+    if (!filePreview) return;
+    const name = doc.getElementById('file-preview-name');
+    const size = doc.getElementById('file-preview-size');
+    if (name) name.textContent = basename(path);
+    if (size) size.textContent = formatByteSize(file?.bytes || 0);
+    filePreview.hidden = false;
+  }
+
+  async function openAttachment(path) {
+    closeSheet();
+    closeFilePreview();
+    const file = files.find((item) => item.path === path && !item.trashedAt)
+      || extraAttachmentFiles(files, vaultPaths).find((item) => item.path === path);
+    if (!file) return;
+    if (isImagePath(path)) {
+      const settings = await embedSettings();
+      const result = await loadAttachmentBytes(db, {
+        path,
+        repo: settings.repo,
+        branch: settings.branch,
+        root: settings.root,
+        token: settings.token,
+        fetchImpl: globalThis.fetch.bind(globalThis),
+        offline: browserOffline(),
+        sha: file.remoteSha || file.baseSha || '',
+      });
+      if (result.status === 'ready' && result.blob) {
+        const url = URL.createObjectURL(result.blob);
+        viewerUrls.add(url);
+        photos.open({ slides: [{ src: url, blob: result.blob, alt: basename(path) }], index: 0 });
+        return;
+      }
+    }
+    showFilePreview(path, file);
   }
 
   async function openPath(path, { heading = '', line } = {}) {
@@ -615,6 +748,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         currentPath: current ? current.path : '',
         matchCase,
         searchContent: searchContent ? searchContent.checked !== false : true,
+        extraPaths: vaultPaths,
       });
       list.replaceChildren();
       for (const row of rows) list.append(renderRow(row));
@@ -630,10 +764,30 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     try {
       const index = await getMeta(db, 'githubVaultIndex');
       vaultPaths = index && Array.isArray(index.paths) ? index.paths : null;
+      const extras = extraAttachmentFiles(files, vaultPaths);
+      if (extras.length) {
+        const now = Date.now();
+        const shas = index && index.shas ? index.shas : {};
+        const sizes = index && index.sizes ? index.sizes : {};
+        const stubs = extras.map((row) => fileFromRemoteAttachment({
+          localPath: row.path,
+          sha: shas[row.path] || '',
+          size: sizes[row.path] || 0,
+        }, now));
+        await commitFiles(db, { put: stubs });
+        files.push(...stubs);
+        for (const file of stubs) {
+          for (const folder of ancestorFolders(file.path)) {
+            if (!folders.includes(folder)) folders.push(folder);
+          }
+        }
+        await setMeta(db, 'folders', folders);
+      }
     } catch {
       vaultPaths = null;
     }
     if (vaultCount) vaultCount.textContent = vaultSummary(files, folders, vaultPaths).text;
+    renderList();
   }
 
   function renderRow(row) {
@@ -671,6 +825,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       openBtn.addEventListener('click', () => toggleFolder(row.path));
     } else {
       if (row.current) openBtn.classList.add('is-current');
+      if (row.type === 'attachment') openBtn.append(fileTypeIcon(row.icon));
       const name = doc.createElement('span');
       name.className = 'note-name';
       name.textContent = row.title;
@@ -681,12 +836,28 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         detail.textContent = row.detail;
         openBtn.append(detail);
       }
-      openBtn.addEventListener('click', () => openPath(row.path));
+      openBtn.addEventListener('click', () => {
+        if (row.type === 'attachment') openAttachment(row.path);
+        else openPath(row.path);
+      });
     }
     item.className = 'browser-row';
     item.append(openBtn);
-    bindRowMenu(item, row.path, row.type === 'folder' ? 'folder' : 'note');
+    bindRowMenu(item, row.path, row.type === 'folder' ? 'folder' : row.type === 'attachment' ? 'attachment' : 'note');
     return item;
+  }
+
+  function fileTypeIcon(kind) {
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.classList.add('file-icon');
+    if (kind === 'image') {
+      svg.innerHTML = '<rect x="4.5" y="5.5" width="15" height="13" rx="2"></rect><circle cx="9" cy="10" r="1.3"></circle><path d="m8 16 3-3.2 2.2 2.2L16.5 12 19.5 16"></path>';
+    } else {
+      svg.innerHTML = '<path d="M7 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 5.5 20v-15A1.5 1.5 0 0 1 7 3.5z"></path><path d="M14 3.5V9h5.5"></path>';
+    }
+    return svg;
   }
 
   function bindRowMenu(item, path, kind) {
@@ -789,8 +960,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         panelButton('New folder', () => { panel = { type: 'new-folder', parent: panel.path }; renderPanel(); }),
       );
     }
+    if (panel.kind !== 'attachment') {
+      panelBox.append(panelButton('Rename', () => { panel = { ...panel, type: 'rename' }; renderPanel(); }));
+    }
     panelBox.append(
-      panelButton('Rename', () => { panel = { ...panel, type: 'rename' }; renderPanel(); }),
       panelButton('Move', () => { panel = { ...panel, type: 'move' }; renderPanel(); }),
       panelButton('Delete', () => askDelete(panel.path, panel.kind)),
       panelButton('Cancel', closePanel),
@@ -820,7 +993,11 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function renderTrashPanel() {
     const message = doc.createElement('p');
-    const name = panel.kind === 'folder' ? panel.path : panel.path.replace(/\.md$/i, '');
+    const name = panel.kind === 'folder'
+      ? panel.path
+      : panel.kind === 'attachment'
+        ? panel.path.split('/').pop()
+        : panel.path.replace(/\.md$/i, '');
     message.textContent = panel.kind === 'folder'
       ? `Move every note in “${name}” to Trash? You can restore them later.`
       : `Move “${name}” to Trash? You can restore it later.`;
@@ -926,6 +1103,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       } else {
         const to = noteDestination(parent, name, files.map((file) => file.path).filter((path) => path !== panel.path));
         result = planFileRename(files, panel.path, to, Date.now());
+        const moved = planRenameAttachmentFolder(result.files, result.folders || folders, panel.path, to, Date.now());
+        if (moved) {
+          const fromFolder = noteAttachmentFolder(panel.path);
+          const toFolder = noteAttachmentFolder(to);
+          result = mergePlans(result, moved);
+          if (fromFolder && toFolder) remapExpanded(fromFolder, toFolder);
+        }
       }
       await persistPlan(result);
       closePanel();
@@ -1170,7 +1354,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   });
 
   function overlayOpen() {
-    return ['settings-sheet', 'conflict-sheet', 'image-viewer'].some((id) => {
+    return ['settings-sheet', 'conflict-sheet', 'image-viewer', 'file-preview'].some((id) => {
       const node = doc.getElementById(id);
       return node && !node.hidden;
     });
@@ -1445,17 +1629,30 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       throw new Error("Couldn't save the open note. Nothing was replaced.");
     }
     const plan = planDownload(files, loaded, mode);
-    if (!plan.writes.length) {
-      startImagePrefetch(db);
-      return { downloaded: 0, skipped: plan.skipped.length, empty: loaded.length === 0 };
-    }
     const now = Date.now();
-    const writes = plan.writes.map((note) => fileFromRemote(
+    const notes = plan.writes.map((note) => fileFromRemote(
       { localPath: note.localPath },
       note.content,
       note.sha,
       now,
     ));
+    const taken = new Set(mode === 'replace' ? [] : files.map((file) => file.path));
+    for (const note of notes) taken.add(note.path);
+    const stubs = [];
+    for (const entry of loaded.attachments || []) {
+      if (!entry || taken.has(entry.localPath)) continue;
+      stubs.push(fileFromRemoteAttachment(entry, now));
+      taken.add(entry.localPath);
+    }
+    const writes = [...notes, ...stubs];
+    if (!writes.length) {
+      startImagePrefetch(db);
+      return {
+        downloaded: 0,
+        skipped: plan.skipped.length,
+        empty: loaded.length === 0 && !(loaded.attachments && loaded.attachments.length),
+      };
+    }
     await commitFiles(db, { put: writes, remove: plan.remove });
     applyIndexPlan({ put: writes, remove: plan.remove });
     if (plan.remove.length) {
@@ -1470,7 +1667,11 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     if (mode === 'replace') {
       folders = folderList(files.map((file) => file.path));
       recent = [];
-      expanded = new Set(folders);
+      expanded = new Set();
+      for (const file of files) {
+        if (!file || file.kind === 'binary' || file.trashedAt) continue;
+        for (const folder of ancestorFolders(file.path)) expanded.add(folder);
+      }
       await setMeta(db, 'folders', folders);
       await setMeta(db, 'recent', recent);
       await setMeta(db, 'expanded', [...expanded]);
@@ -1478,7 +1679,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       for (const file of writes) {
         for (const folder of ancestorFolders(file.path)) {
           if (!folders.includes(folder)) folders.push(folder);
-          expanded.add(folder);
+          if (file.kind !== 'binary') expanded.add(folder);
         }
       }
       await setMeta(db, 'folders', folders);
@@ -1708,6 +1909,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       }
       booting = false;
       holdEditor(holding);
+      await paintVault();
       await github.refresh();
       github.resume();
       setStatus('saved');

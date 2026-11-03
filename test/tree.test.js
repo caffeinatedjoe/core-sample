@@ -55,6 +55,40 @@ test('a new folder is a path, not a second copy of a note', () => {
   assert.throws(() => folderDestination('', 'notes.md', []), /\.md/);
 });
 
+test('the tree lists attachments with their filename and a type icon', () => {
+  const rows = listBrowser({
+    files: [
+      { path: 'Site Log.md', kind: 'markdown', content: '# Site\n', trashedAt: null },
+      { path: 'assets/Site Log/shot.png', kind: 'binary', content: '', trashedAt: null },
+      { path: 'assets/Site Log/notes.pdf', kind: 'binary', content: '', trashedAt: null },
+    ],
+    folders: ['assets', 'assets/Site Log'],
+    expanded: ['assets', 'assets/Site Log'],
+    recent: [],
+    query: '',
+    currentPath: 'Site Log.md',
+  });
+  const shot = rows.find((row) => row.path === 'assets/Site Log/shot.png');
+  const pdf = rows.find((row) => row.path === 'assets/Site Log/notes.pdf');
+  assert.equal(shot.type, 'attachment');
+  assert.equal(shot.title, 'shot.png');
+  assert.equal(shot.icon, 'image');
+  assert.equal(pdf.type, 'attachment');
+  assert.equal(pdf.title, 'notes.pdf');
+  assert.equal(pdf.icon, 'file');
+
+  const fromIndex = listBrowser({
+    files: [{ path: 'Site Log.md', kind: 'markdown', content: '', trashedAt: null }],
+    folders: [],
+    expanded: ['assets', 'assets/Site Log'],
+    recent: [],
+    query: '',
+    currentPath: '',
+    extraPaths: ['assets/Site Log/shot.png', 'Site Log.md'],
+  });
+  assert.equal(fromIndex.some((row) => row.path === 'assets/Site Log/shot.png' && row.type === 'attachment'), true);
+});
+
 test('recent notes stay in open order and drop duplicates', () => {
   assert.deepEqual(rememberRecent(['b.md', 'a.md'], 'a.md'), ['a.md', 'b.md']);
   assert.equal(rememberRecent(['a.md', 'b.md', 'c.md', 'd.md', 'e.md', 'f.md', 'g.md', 'h.md'], 'i.md').length, 8);

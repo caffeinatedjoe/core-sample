@@ -419,7 +419,7 @@ export function mountGithub(doc, db, hooks) {
       const loaded = await collectDownload(fetchImpl, settings, (done, total) => {
         setStatus(`Downloading ${done} of ${total}`);
       });
-      if (!loaded.length) {
+      if (!downloadHasContent(loaded)) {
         setStatus('No Markdown files were found. Nothing on this phone was changed.');
         return;
       }
@@ -716,6 +716,10 @@ export function mountGithub(doc, db, hooks) {
       return probeFlight || Promise.resolve(lastAccess);
     },
   };
+}
+
+function downloadHasContent(loaded) {
+  return Boolean(loaded && (loaded.length || (loaded.attachments && loaded.attachments.length)));
 }
 
 function downloadMessage(counts) {
