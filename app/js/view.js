@@ -29,7 +29,7 @@ import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
-import { createAutoSync, loadConflictRemote, syncAlert } from './github-sync.js';
+import { createAutoSync, loadConflictRemote, syncAlert, syncAlertFocus, syncAlertTone } from './github-sync.js';
 import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
 import { basename } from './embeds.js';
@@ -80,17 +80,24 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   let sync = null;
   let syncConflicts = false;
+  let syncKind = '';
   const syncStatus = doc.getElementById('sync-status');
 
   // The note screen shows the status only when it needs a tap; Settings
   // always shows it, with the detail and Retry.
   function paintSync(text, state = {}) {
     const alert = syncAlert(state);
+    syncKind = alert;
     syncConflicts = alert === 'conflict' || alert === 'copies';
     if (syncStatus) {
       syncStatus.textContent = text;
       syncStatus.hidden = !alert;
       syncStatus.setAttribute('aria-disabled', alert ? 'false' : 'true');
+      if (alert) syncStatus.setAttribute('data-alert', alert);
+      else syncStatus.removeAttribute('data-alert');
+      const tone = syncAlertTone(alert);
+      if (tone) syncStatus.setAttribute('data-tone', tone);
+      else syncStatus.removeAttribute('data-tone');
     }
     const line = doc.getElementById('settings-sync-status');
     if (line) line.textContent = text || 'Not connected to GitHub';
@@ -1541,8 +1548,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   });
   syncStatus?.addEventListener('click', () => {
     if (syncStatus.getAttribute('aria-disabled') === 'true') return;
+    github.open(syncAlertFocus(syncKind));
     if (syncConflicts) conflictScreen.open();
-    else github.open();
   });
   doc.getElementById('sync-conflicts')?.addEventListener('click', () => conflictScreen.open());
   doc.getElementById('sync-retry')?.addEventListener('click', () => {

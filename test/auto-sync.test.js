@@ -26,6 +26,8 @@ import {
   SYNC_POLL_MS,
   SYNC_STATUS,
   syncAlert,
+  syncAlertFocus,
+  syncAlertTone,
 } from '../app/js/github-sync.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
@@ -302,6 +304,18 @@ test('the note screen flags only conflicts, conflict copies, sign-in and failed 
   assert.equal(syncAlert({ configured: true, confirmed: true, copies: 1 }), 'copies');
   assert.equal(syncAlert({ configured: true, authRequired: true }), 'auth');
   assert.equal(syncAlert({ configured: true, failed: true }), 'failed');
+  assert.equal(syncAlertTone(''), '');
+  assert.equal(syncAlertTone(syncAlert({ configured: true, pending: true })), '');
+  assert.equal(syncAlertTone(syncAlert({ configured: true, offline: true })), '');
+  assert.equal(syncAlertTone('failed'), 'danger');
+  assert.equal(syncAlertTone('auth'), 'danger');
+  assert.equal(syncAlertTone('conflict'), 'attention');
+  assert.equal(syncAlertTone('copies'), 'attention');
+  assert.equal(syncAlertFocus('auth'), 'github');
+  assert.equal(syncAlertFocus('failed'), 'sync');
+  assert.equal(syncAlertFocus('conflict'), 'sync');
+  assert.equal(syncAlertFocus('copies'), 'sync');
+  assert.equal(syncAlertFocus(''), '');
 });
 
 test('status is never Synced before a confirmed write, and a conflict keeps both sides', () => {

@@ -36,12 +36,30 @@ test('an open keyboard is the overlap and does not change the scroll pad', () =>
   assert.equal(frame.keyboard, 397);
   assert.equal(frame.gap, 47);
   assert.equal(frame.scrollPad, 47);
+  assert.equal(frame.visualBottom, 400);
+  assert.equal(frame.shell, 400);
 });
 
 test('visualViewport offsetTop counts toward the keyboard overlap', () => {
   const frame = layoutFrame({ ...joe, visualViewportHeight: 500, visualViewportOffsetTop: 40 });
   assert.equal(frame.keyboard, 257);
   assert.equal(frame.gap, 47);
+  assert.equal(frame.visualBottom, 540);
+  assert.equal(frame.shell, 540);
+});
+
+test('the shell pins to the visual viewport bottom while the keyboard is up', () => {
+  const closed = layoutFrame(joe);
+  assert.equal(closed.keyboard, 0);
+  assert.equal(closed.shell, 0);
+  const open = layoutFrame({
+    ...joe,
+    visualViewportHeight: 430,
+    visualViewportOffsetTop: 30,
+  });
+  assert.equal(open.keyboard, 337);
+  assert.equal(open.shell, 460);
+  assert.equal(open.shell, open.visualBottom);
 });
 
 test('once innerHeight matches the screen, padding is only the home indicator', () => {

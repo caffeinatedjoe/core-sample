@@ -67,6 +67,7 @@ export function page(fetchImpl) {
     'github-file-status', 'settings-button', 'vault-button', 'settings-close', 'github-save-config', 'github-open-github',
     'github-advanced',
     'github-check-now', 'github-cancel', 'github-save-repo', 'github-download', 'github-alongside',
+    'settings-sync-heading', 'settings-github-heading',
     'github-export-replace', 'github-disconnect', 'github-disconnect-yes', 'github-erase',
     'github-erase-yes', 'github-push', 'github-pull',
   ];

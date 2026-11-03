@@ -559,3 +559,22 @@ test('signing in again replaces only the token, and cancel keeps the old one', a
     await finishDb(db, name);
   }
 });
+
+test('opening Settings from a sync problem scrolls to that group', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  try {
+    const { doc, nodes } = page(async () => jsonResponse({ message: 'nope' }, 404));
+    const app = mountGithub(doc, db, { now: () => 1_000, sleep: () => Promise.resolve() });
+    app.open('sync');
+    assert.equal(nodes['settings-sheet'].hidden, false);
+    assert.equal(nodes['settings-sync-heading'].scrolled, true);
+    assert.equal(nodes['settings-github-heading'].scrolled, false);
+    app.open('github');
+    assert.equal(nodes['settings-github-heading'].scrolled, true);
+    nodes['settings-button'].click();
+    assert.equal(nodes['settings-sheet'].hidden, false);
+  } finally {
+    await finishDb(db, name);
+  }
+});

@@ -1,9 +1,13 @@
 // Standalone iOS paints from physical y=0, but innerHeight, 100%, 100dvh, and
 // 100svh can all stop a status-bar height short of the screen (Joe: 797 vs
 // 844). A JS pixel height on a fixed frame lands in that strip and cannot be
-// touched. CSS owns the shell size (100lvh in standalone). This module only
-// answers two questions: whether the keyboard is open, and how much extra
-// padding keeps the last controls inside innerHeight when it stays short.
+// touched. CSS owns the shell size (100lvh in standalone) while the keyboard
+// is down. When the keyboard is up, the shell height is the visual viewport's
+// bottom (offsetTop + height) so the format toolbar sits flush on whatever is
+// directly above the keyboard — the form accessory bar if iOS draws one, or
+// the keys if it does not. This module answers: whether the keyboard is open,
+// how tall the shell should be, and how much extra padding keeps the last
+// controls inside innerHeight when it stays short.
 // screen.width / screen.height do not swap on iOS; use the oriented side.
 export const KEYBOARD_THRESHOLD = 80;
 
@@ -21,8 +25,10 @@ export function layoutFrame({
   const vvHeight = visualViewportHeight == null || Number.isNaN(Number(visualViewportHeight))
     ? inner
     : Number(visualViewportHeight);
-  const overlap = inner - vvHeight - (Number(visualViewportOffsetTop) || 0);
+  const offsetTop = Number(visualViewportOffsetTop) || 0;
+  const overlap = inner - vvHeight - offsetTop;
   const keyboard = overlap > KEYBOARD_THRESHOLD ? Math.round(overlap) : 0;
+  const visualBottom = Math.round(vvHeight + offsetTop);
 
   const screenSpan = orientedScreen(screenWidth, screenHeight, landscape);
   const gap = standalone ? Math.max(0, Math.round(screenSpan - inner)) : 0;
@@ -32,6 +38,8 @@ export function layoutFrame({
     gap,
     scrollPad: Math.max(safe, gap),
     screenSpan: Math.round(screenSpan),
+    visualBottom,
+    shell: keyboard > 0 && visualBottom > 0 ? visualBottom : 0,
   };
 }
 

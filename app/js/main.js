@@ -33,6 +33,13 @@ function bindViewport() {
     const root = document.documentElement;
     root.style.setProperty('--keyboard-inset', `${frameState.keyboard}px`);
     root.style.setProperty('--scroll-pad', `${frameState.scrollPad}px`);
+    if (frameState.shell) {
+      root.style.setProperty('--shell-h', `${frameState.shell}px`);
+      root.classList.add('is-keyboard');
+    } else {
+      root.style.removeProperty('--shell-h');
+      root.classList.remove('is-keyboard');
+    }
     if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
     if (!document.getElementById('layout-debug')?.hidden) paintDebug();
   };
@@ -133,6 +140,8 @@ function paintDebug() {
     `safe-left ${pad ? pad.paddingLeft : 'none'}`,
     `--keyboard-inset ${style.getPropertyValue('--keyboard-inset').trim() || '0px'}`,
     `--scroll-pad ${style.getPropertyValue('--scroll-pad').trim() || 'none'}`,
+    `--shell-h ${style.getPropertyValue('--shell-h').trim() || 'none'}`,
+    `is-keyboard ${root.classList.contains('is-keyboard') ? 'yes' : 'no'}`,
     `gap ${frameState ? px(frameState.gap) : 'none'}`,
     `100lvh ${probeHeight('probe-lvh')}`,
     `100vh ${probeHeight('probe-vh')}`,

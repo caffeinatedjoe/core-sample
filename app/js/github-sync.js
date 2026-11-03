@@ -79,6 +79,21 @@ export function syncAlert(state = {}) {
   return '';
 }
 
+// Only a broken sign-in or a failed sync is an error. A conflict or leftover
+// copy needs a tap, but it is not painted as danger. Pending and offline
+// never reach this because syncAlert is empty for them.
+export function syncAlertTone(alert) {
+  if (alert === 'failed' || alert === 'auth') return 'danger';
+  if (alert === 'conflict' || alert === 'copies') return 'attention';
+  return '';
+}
+
+export function syncAlertFocus(alert) {
+  if (alert === 'auth') return 'github';
+  if (alert === 'failed' || alert === 'conflict' || alert === 'copies') return 'sync';
+  return '';
+}
+
 export function backoffDelay(attempt, random = Math.random) {
   const n = Math.max(0, Number(attempt) || 0);
   const exp = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * (2 ** n));
