@@ -38,9 +38,8 @@ import { createImageViewer } from './image-viewer.js';
 import { createLiveEditor } from './live-editor.js';
 import { headingOffset } from './live-rules.js';
 import { applyTaskToggle } from './tasks.js';
-import { createTaskIndex } from './task-index.js';
+import { createTaskIndex, isIndexableNote } from './task-index.js';
 import { dataviewResult } from './dql.js';
-import { isIgnoredPath } from './vault-paths.js';
 
 const SAVE_DELAY = 400;
 
@@ -135,7 +134,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   }
 
   function notesForIndex() {
-    return live().map((file) => ({ path: file.path, content: file.content }));
+    return live().filter(isIndexableNote).map((file) => ({ path: file.path, content: file.content }));
   }
 
   function rebuildIndex() {
@@ -145,9 +144,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function updateIndexPath(file) {
     if (!file?.path) return;
-    if (file.kind && file.kind !== 'markdown') taskIndex.remove(file.path);
-    else if (file.trashedAt || isIgnoredPath(file.path)) taskIndex.remove(file.path);
-    else taskIndex.replace(file.path, file.content);
+    if (isIndexableNote(file)) taskIndex.replace(file.path, file.content);
+    else taskIndex.remove(file.path);
     source.refreshDataview?.();
   }
 
@@ -155,9 +153,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     for (const path of result.remove || []) taskIndex.remove(path);
     for (const file of result.put || []) {
       if (!file?.path) continue;
-      if (file.kind && file.kind !== 'markdown') taskIndex.remove(file.path);
-      else if (file.trashedAt || isIgnoredPath(file.path)) taskIndex.remove(file.path);
-      else taskIndex.replace(file.path, file.content);
+      if (isIndexableNote(file)) taskIndex.replace(file.path, file.content);
+      else taskIndex.remove(file.path);
     }
     source.refreshDataview?.();
   }

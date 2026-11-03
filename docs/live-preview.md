@@ -124,7 +124,8 @@ navigation bar.
   widget while the caret is outside it: matching vault tasks, grouped by
   source note. Moving the caret into the block shows the raw query, the
   same as other fences. The widget re-runs when the note is opened and
-  whenever the task index changes. Tapping a result checkbox toggles only
+  whenever the task index changes. Conflict copies, backup copies, and
+  other leftover local copies are not indexed. Tapping a result checkbox toggles only
   that status character in the source note (CRLF, tabs, and trailing
   spaces stay) and queues sync through the existing save path. If the
   source line no longer matches, Core Sample relocates by task text or
