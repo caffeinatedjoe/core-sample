@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v33';
+const CACHE = 'core-sample-shell-v34';
 
 const SHELL = [
   './',
@@ -21,6 +21,9 @@ const SHELL = [
   './js/viewer-gestures.js',
   './js/image-viewer.js',
   './js/checklist.js',
+  './js/tasks.js',
+  './js/task-index.js',
+  './js/dql.js',
   './js/live-rules.js',
   './js/live-editor.js',
   './js/format.js',

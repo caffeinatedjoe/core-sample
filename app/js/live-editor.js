@@ -100,7 +100,156 @@ function draw(spec, view, hooks) {
     return node;
   }
   if (spec.kind === 'fence') return make(doc, 'span', 'cm-fence-label', spec.info);
+  if (spec.kind === 'dataview') return drawDataview(doc, spec);
   return make(doc, 'span');
+}
+
+function liveInner(target, root, event) {
+  const origin = target?.nodeType === 1 ? target : target?.parentElement;
+  let node = origin?.closest?.('[data-live]');
+  if ((!node || node === root) && event) {
+    const point = event.changedTouches?.[0] || event.touches?.[0] || event;
+    const x = point.clientX;
+    const y = point.clientY;
+    if (typeof x === 'number' && typeof y === 'number') {
+      node = root.ownerDocument.elementFromPoint(x, y)?.closest?.('[data-live]');
+    }
+  }
+  if (!node || node === root || !root.contains(node)) return null;
+  return node;
+}
+
+// Widgets are contenteditable=false, so iOS retargets taps onto the
+// widget root. Handle them here instead of waiting for bubble to the
+// editor content, which is how in-note checkboxes work.
+function bindDataview(node, view, hooks) {
+  let touch = null;
+  let touchedAt = 0;
+  const run = (inner, held) => {
+    if (held) {
+      try {
+        const pos = view.posAtDOM(node);
+        view.dispatch({ selection: { anchor: Math.min(view.state.doc.length, pos + 1) } });
+      } catch { /* the widget was redrawn */ }
+      view.focus();
+      return;
+    }
+    if (inner.dataset.live === 'dv-check') {
+      const hint = taskHint(inner);
+      if (hint) hooks.onDataviewToggle?.(hint);
+      return;
+    }
+    if (inner.dataset.live === 'dv-open') {
+      const hint = taskHint(inner);
+      if (hint) hooks.onDataviewOpen?.(hint);
+      return;
+    }
+    if (inner.dataset.live === 'dv-file') {
+      hooks.onDataviewOpen?.({ path: inner.dataset.dvPath || '', line: 0, text: '' });
+    }
+  };
+  node.addEventListener('touchstart', (event) => {
+    const inner = event.touches.length === 1 ? liveInner(event.target, node, event) : null;
+    const point = event.touches[0];
+    touch = inner && point ? { inner, x: point.clientX, y: point.clientY, at: Date.now(), moved: false } : null;
+  }, { passive: true });
+  node.addEventListener('touchmove', (event) => {
+    if (!touch) return;
+    const point = event.touches[0];
+    if (!point || Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > SLOP_PX) touch.moved = true;
+  }, { passive: true });
+  node.addEventListener('touchcancel', () => { touch = null; });
+  node.addEventListener('touchend', (event) => {
+    const started = touch;
+    touch = null;
+    if (!started || started.moved || !started.inner.isConnected) return;
+    event.preventDefault();
+    event.stopPropagation();
+    touchedAt = Date.now();
+    run(started.inner, Date.now() - started.at >= HOLD_MS);
+  });
+  node.addEventListener('mousedown', (event) => {
+    if (liveInner(event.target, node, event)) event.preventDefault();
+  });
+  node.addEventListener('click', (event) => {
+    const inner = liveInner(event.target, node, event);
+    if (!inner) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (Date.now() - touchedAt < 800) return;
+    run(inner, false);
+  });
+}
+
+function drawDataview(doc, spec) {
+  const node = make(doc, 'div', 'cm-dataview');
+  node.setAttribute('contenteditable', 'false');
+  const result = spec.result;
+  if (!result || result.supported === false) {
+    node.classList.add('is-unsupported');
+    const source = make(doc, 'pre', 'dv-source', spec.query || result?.query || '');
+    const note = make(doc, 'p', 'dv-note', result?.message || 'Not supported in Core Sample yet');
+    node.append(source, note);
+    return node;
+  }
+  const groups = result.groups || [];
+  if (!groups.length) {
+    node.append(make(doc, 'p', 'dv-empty', 'No matching tasks'));
+    return node;
+  }
+  for (const group of groups) {
+    const heading = make(doc, 'div', 'dv-file', group.name || group.path || '');
+    heading.dataset.live = 'dv-file';
+    heading.dataset.dvPath = group.path || '';
+    heading.setAttribute('role', 'link');
+    node.append(heading);
+    for (const task of group.tasks || []) {
+      const row = make(doc, 'div', 'dv-task');
+      if (task.depth) row.style.paddingLeft = `${task.depth * 22}px`;
+      row.dataset.dvPath = task.path || '';
+      row.dataset.dvLine = String(task.line ?? '');
+      row.dataset.dvText = task.text || '';
+      row.dataset.dvStatus = task.status || ' ';
+      const box = make(doc, 'span', 'task-toggle');
+      box.dataset.live = 'dv-check';
+      box.setAttribute('role', 'checkbox');
+      box.setAttribute('aria-checked', task.completed ? 'true' : 'false');
+      box.setAttribute('aria-label', task.completed ? 'Mark not done' : 'Mark done');
+      const mark = make(doc, 'span', 'task-box');
+      mark.setAttribute('aria-hidden', 'true');
+      if (task.completed) mark.innerHTML = CHECK;
+      box.append(mark);
+      const label = make(doc, 'span', 'dv-text', task.text || '');
+      label.dataset.live = 'dv-open';
+      if (task.completed) label.classList.add('cm-task-done');
+      row.append(box, label);
+      node.append(row);
+    }
+  }
+  return node;
+}
+
+function taskHint(node) {
+  const row = node?.closest?.('[data-dv-path][data-dv-line]');
+  if (!row) return null;
+  return {
+    path: row.dataset.dvPath || '',
+    line: Number(row.dataset.dvLine),
+    text: row.dataset.dvText || '',
+    status: row.dataset.dvStatus || ' ',
+  };
+}
+
+function dataviewHeight(spec) {
+  const result = spec.result;
+  if (!result || result.supported === false) {
+    const lines = String(spec.query || '').split('\n').length;
+    return 52 + lines * 20;
+  }
+  const groups = result.groups || [];
+  if (!groups.length) return 44;
+  const tasks = groups.reduce((n, group) => n + (group.tasks || []).length, 0);
+  return 12 + groups.length * 28 + tasks * 36;
 }
 
 class LiveWidget extends WidgetType {
@@ -118,11 +267,15 @@ class LiveWidget extends WidgetType {
   }
 
   get estimatedHeight() {
-    return this.spec.kind === 'image' ? 180 : -1;
+    if (this.spec.kind === 'image') return 180;
+    if (this.spec.kind === 'dataview') return dataviewHeight(this.spec);
+    return -1;
   }
 
   toDOM(view) {
-    return draw(this.spec, view, this.hooks);
+    const node = draw(this.spec, view, this.hooks);
+    if (this.spec.kind === 'dataview') bindDataview(node, view, this.hooks);
+    return node;
   }
 
   ignoreEvent() {
@@ -172,21 +325,31 @@ function decorate(view, hooks) {
     }
     else if (spec.type === 'mark') out.push(Decoration.mark({ class: spec.cls }).range(spec.from, spec.to));
     else if (spec.type === 'hide') out.push(hidden.range(spec.from, spec.to));
-    else if (spec.type === 'replace') out.push(Decoration.replace({ widget: new LiveWidget(spec.widget, hooks, 'inline') }).range(spec.from, spec.to));
+    else if (spec.type === 'replace') {
+      const widget = spec.widget.kind === 'dataview'
+        ? { ...spec.widget, result: hooks.dataview?.(spec.widget.query, spec.widget.lang) }
+        : spec.widget;
+      out.push(Decoration.replace({
+        widget: new LiveWidget(widget, hooks, widget.kind === 'dataview' ? 'block' : 'inline'),
+      }).range(spec.from, spec.to));
+    }
     else if (spec.type === 'widget') out.push(Decoration.widget({ widget: new LiveWidget(spec.widget, hooks, 'after'), side: 1 }).range(spec.at));
   }
   return Decoration.set(out, true);
 }
 
-function livePlugin(hooks) {
+function livePlugin(hooks, live) {
   return ViewPlugin.fromClass(class {
     constructor(view) {
+      this.tick = live.tick;
       this.decorations = decorate(view, hooks);
     }
 
     update(update) {
       if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged
-        || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+        || syntaxTree(update.startState) !== syntaxTree(update.state)
+        || live.tick !== this.tick) {
+        this.tick = live.tick;
         this.decorations = decorate(update.view, hooks);
       }
     }
@@ -213,6 +376,7 @@ export function diffChange(before, after) {
 export function createLiveEditor(host, hooks = {}) {
   const editable = new Compartment();
   let quiet = false;
+  const live = { tick: 0 };
 
   const extensions = () => [
     EditorState.lineSeparator.of('\n'),
@@ -235,7 +399,7 @@ export function createLiveEditor(host, hooks = {}) {
       autocomplete: 'off',
     }),
     editable.of([EditorState.readOnly.of(false), EditorView.editable.of(true)]),
-    livePlugin(hooks),
+    livePlugin(hooks, live),
     EditorView.updateListener.of((update) => {
       if (update.docChanged && !quiet) hooks.onChange?.();
       if (update.focusChanged) {
@@ -302,6 +466,20 @@ export function createLiveEditor(host, hooks = {}) {
     }
     if (node.dataset.live === 'task') {
       toggleTask(node);
+      return;
+    }
+    if (node.dataset.live === 'dv-check') {
+      const hint = taskHint(node);
+      if (hint) hooks.onDataviewToggle?.(hint);
+      return;
+    }
+    if (node.dataset.live === 'dv-open') {
+      const hint = taskHint(node);
+      if (hint) hooks.onDataviewOpen?.(hint);
+      return;
+    }
+    if (node.dataset.live === 'dv-file') {
+      hooks.onDataviewOpen?.({ path: node.dataset.dvPath || '', line: 0, text: '' });
       return;
     }
     hooks.onTap?.(planPreviewClick(target), node, event);
@@ -405,6 +583,23 @@ export function createLiveEditor(host, hooks = {}) {
     },
     scrollToPos(pos) {
       view.dispatch({ effects: EditorView.scrollIntoView(Math.max(0, Math.min(view.state.doc.length, pos)), { y: 'start', yMargin: 12 }) });
+    },
+    scrollToLine(line) {
+      const n = Number(line);
+      if (!Number.isInteger(n) || n < 0) return;
+      const number = Math.min(view.state.doc.lines, n + 1);
+      const at = view.state.doc.line(number).from;
+      view.dispatch({ effects: EditorView.scrollIntoView(at, { y: 'start', yMargin: 12 }) });
+    },
+    replaceText(text) {
+      const change = diffChange(view.state.doc.toString(), String(text ?? ''));
+      if (!change) return false;
+      view.dispatch({ changes: change, userEvent: 'input.toggle' });
+      return true;
+    },
+    refreshDataview() {
+      live.tick += 1;
+      view.dispatch({});
     },
     posOf(node) {
       try {

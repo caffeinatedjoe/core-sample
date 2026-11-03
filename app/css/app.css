@@ -479,6 +479,74 @@ html.is-keyboard .format-bar {
 #source .cm-line.cm-code-first.cm-code-last { border-radius: 10px; }
 .cm-fence-label { font-size: 0.85em; }
 
+#source .cm-line.cm-dv-rest {
+  display: none;
+}
+
+#source .cm-dataview {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0.35em 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: max(16px, 1em);
+  line-height: 1.4;
+  pointer-events: auto;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#source .cm-dataview .dv-file {
+  font-weight: 600;
+  color: var(--accent);
+  padding: 8px 4px 2px;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+#source .cm-dataview .dv-task {
+  display: flex;
+  align-items: flex-start;
+  min-height: 44px;
+}
+
+#source .cm-dataview .dv-task .task-toggle {
+  flex: none;
+  height: 1.4em;
+  margin-top: 10px;
+}
+
+#source .cm-dataview .dv-text {
+  flex: 1;
+  padding: 10px 4px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+#source .cm-dataview .dv-empty,
+#source .cm-dataview .dv-note {
+  margin: 8px 4px 4px;
+  color: var(--muted);
+  font-size: max(16px, 0.95em);
+}
+
+#source .cm-dataview .dv-source {
+  margin: 0;
+  padding: 8px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#source .cm-dataview.is-unsupported {
+  background: var(--code);
+}
+
 #source .cm-line.cm-frontmatter,
 #source .cm-line.cm-table {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

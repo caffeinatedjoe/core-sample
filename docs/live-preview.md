@@ -120,6 +120,19 @@ navigation bar.
 - **Tasks.** A checkbox tap flips the one mark character with the
   `checklist.js` parser. It changes the text in place, keeps the selection,
   saves at once, and does not focus the editor.
+- **Dataview TASK queries.** A closed ` ```dataview ` block is a read-only
+  widget while the caret is outside it: matching vault tasks, grouped by
+  source note. Moving the caret into the block shows the raw query, the
+  same as other fences. The widget re-runs when the note is opened and
+  whenever the task index changes. Conflict copies, backup copies, and
+  other leftover local copies are not indexed. Tapping a result checkbox toggles only
+  that status character in the source note (CRLF, tabs, and trailing
+  spaces stay) and queues sync through the existing save path. If the
+  source line no longer matches, Core Sample relocates by task text or
+  refuses; it never writes a different line. Tapping the task text opens
+  the source note at that line. Rendering never edits the query note.
+  LIST, TABLE, CALENDAR, dataviewjs, and unknown functions stay as the
+  raw block plus "Not supported in Core Sample yet".
 - **Text on disk.** CodeMirror splits lines only on `\n`, so `\r\n` endings,
   tabs and trailing spaces come back exactly as typed. Rendering never edits
   the text. The 400 ms save, flush on hide, sync and conflicts read the same
@@ -226,6 +239,9 @@ instead of pinning to `offsetTop + height`.
 - A Properties editor. Frontmatter is shown as a muted monospace block.
 - Rendered tables, callout widgets, math and note embeds. Tables and callouts
   are styled in place as text. `![[note]]` stays a link chip, as before.
+- Dataview beyond the TASK subset in [DECISIONS.md](../DECISIONS.md) (LIST,
+  TABLE, CALENDAR, dataviewjs, `FROM [[link]]`, unknown functions). Those
+  blocks stay visible as source plus a short unsupported note.
 - Syntax colors inside code blocks.
 - The sidebar's Search field does not switch between views the way
   Obsidian's chevron does (Files, Search, Bookmarks and others). Core Sample

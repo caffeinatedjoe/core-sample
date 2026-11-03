@@ -14,6 +14,7 @@ function widgetText(widget) {
   if (widget.kind === 'task') return widget.checked ? '☑' : '☐';
   if (widget.kind === 'rule') return '⎯';
   if (widget.kind === 'fence') return `⟨code ${widget.info}⟩`;
+  if (widget.kind === 'dataview') return `⟨dv ${widget.lang}⟩`;
   if (widget.kind === 'link') return `⟨link ${widget.label}→${widget.href}⟩`;
   if (widget.kind === 'wikilink') return `⟨wiki ${widget.label}→${widget.target}${widget.heading ? `#${widget.heading}` : ''}⟩`;
   if (widget.kind === 'image') return `⟨img ${widget.image.kind} ${widget.image.embed || widget.image.src || widget.image.name}⟩`;
@@ -135,6 +136,17 @@ test('quotes hide the marker off the line', () => {
 test('rules draw a line off the line', () => {
   assert.equal(visible('a\n\n---\nb'), 'a\n\n⎯\nb');
   assert.equal(visible('a\n\n---\nb', 4), 'a\n\n---\nb');
+});
+
+test('dataview fences become a widget off the block and raw query on it', () => {
+  const doc = 'top\n```dataview\nTASK\nWHERE !completed\n```\nend';
+  assert.equal(visible(doc), 'top\n⟨dv dataview⟩\n\n\n\nend');
+  assert.equal(visible(doc, doc.indexOf('TASK')), doc);
+  const widget = specsOf(doc).find((s) => s.widget?.kind === 'dataview');
+  assert.equal(widget.widget.query, 'TASK\nWHERE !completed');
+  assert.equal(widget.widget.lang, 'dataview');
+  const js = '```dataviewjs\nawait dv.taskList()\n```';
+  assert.equal(visible(js), '⟨dv dataviewjs⟩\n\n');
 });
 
 test('code fences hide per block and nothing inside a fence renders', () => {
