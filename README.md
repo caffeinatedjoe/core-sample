@@ -11,6 +11,7 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 - Notes save as you type. The last opened note comes back after a reload.
 - Create and open notes. `[[wikilinks]]` open a local note, or create it if it is not there yet. Web links open outside the app.
 - Tap a checkbox and the Markdown updates in place, without raising the keyboard.
+- `TASK` Dataview queries render as a grouped task list. Checking a result updates the source note.
 - A left sidebar like Obsidian's (panel button, or swipe from the left edge): folders, rename, move, and Trash, and search by name or text. The gear opens Settings: GitHub, sync, backup export and import, and the build id.
 
 ## GitHub

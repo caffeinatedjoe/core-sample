@@ -73,6 +73,14 @@ Implemented in core-sample-shell-v25. Vault safety fixes for Welcome uploads, tr
 - Docs: install, GitHub auth, troubleshooting, and a clear warning that clearing Safari website data deletes local notes.
 - Confirm the only server is the free relay, and that no tokens or notes were committed.
 
+## v34 — Dataview TASK queries
+
+Implemented as core-sample-shell-v34. A ` ```dataview ` TASK block in Live Preview is a read-only widget while the caret is outside it, and the raw query while the caret is inside. Checking a result toggles that line in its source note through the existing save path. The query note's text is never rewritten by rendering.
+
+- Task index from IndexedDB, then incremental updates for local edits, sync, deletes, and renames.
+- DQL subset: TASK, FROM (folder, #tag, and/or), WHERE (completed, contains, file fields, ==/!=, &&/||/!), SORT, GROUP BY file, LIMIT. Anything else shows the raw block plus "Not supported in Core Sample yet".
+- No network at query time. No tokens, no vault contents in tests.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

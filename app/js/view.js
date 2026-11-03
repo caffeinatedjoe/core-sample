@@ -37,6 +37,10 @@ import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
 import { createLiveEditor } from './live-editor.js';
 import { headingOffset } from './live-rules.js';
+import { applyTaskToggle } from './tasks.js';
+import { createTaskIndex } from './task-index.js';
+import { dataviewResult } from './dql.js';
+import { isIgnoredPath } from './vault-paths.js';
 
 const SAVE_DELAY = 400;
 
@@ -111,6 +115,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     const conflicts = doc.getElementById('sync-conflicts');
     if (conflicts) conflicts.hidden = !syncConflicts;
   }
+  const taskIndex = createTaskIndex();
+
   const saver = createDebouncedSaver({
     delay: SAVE_DELAY,
     write: async (note) => {
@@ -118,6 +124,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       await putFile(db, note);
       const index = files.findIndex((item) => item.path === note.path);
       if (index >= 0) files[index] = { ...files[index], ...note };
+      updateIndexPath(note);
       if (note.dirty) await sync?.noteEdited(note);
     },
     onStatus: (state) => setStatus(state),
@@ -125,6 +132,34 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function live() {
     return liveNotes(files);
+  }
+
+  function notesForIndex() {
+    return live().map((file) => ({ path: file.path, content: file.content }));
+  }
+
+  function rebuildIndex() {
+    taskIndex.rebuild(notesForIndex());
+    source.refreshDataview?.();
+  }
+
+  function updateIndexPath(file) {
+    if (!file?.path) return;
+    if (file.kind && file.kind !== 'markdown') taskIndex.remove(file.path);
+    else if (file.trashedAt || isIgnoredPath(file.path)) taskIndex.remove(file.path);
+    else taskIndex.replace(file.path, file.content);
+    source.refreshDataview?.();
+  }
+
+  function applyIndexPlan(result) {
+    for (const path of result.remove || []) taskIndex.remove(path);
+    for (const file of result.put || []) {
+      if (!file?.path) continue;
+      if (file.kind && file.kind !== 'markdown') taskIndex.remove(file.path);
+      else if (file.trashedAt || isIgnoredPath(file.path)) taskIndex.remove(file.path);
+      else taskIndex.replace(file.path, file.content);
+    }
+    source.refreshDataview?.();
   }
 
   function snapshot() {
@@ -199,6 +234,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     onToggle: toggledTask,
     onTap: tapped,
     hydrate: hydrateEmbed,
+    dataview: (query, lang) => dataviewResult(query, lang, taskIndex),
+    onDataviewToggle: dataviewToggle,
+    onDataviewOpen: dataviewOpen,
   });
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
   // Text typed before the last note loads would be replaced by it.
@@ -413,7 +451,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     hydrateEmbed(node, true);
   }
 
-  function showNote(note, { heading = '' } = {}) {
+  function showNote(note, { heading = '', line } = {}) {
     const same = current && current.path === note.path;
     current = note;
     if (!same) {
@@ -425,7 +463,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       source.value = note.content;
     }
     title.textContent = noteTitle(note);
+    source.refreshDataview?.();
     if (heading) scrollToHeading(heading);
+    else if (Number.isInteger(line) && line >= 0) source.scrollToLine?.(line);
   }
 
   function scrollToHeading(heading) {
@@ -491,6 +531,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     const previous = files.slice();
     await commitFiles(db, { put: result.put || [], remove: result.remove || [] });
     files = result.files;
+    applyIndexPlan(result);
     if (result.folders) {
       folders = result.folders;
       await setMeta(db, 'folders', folders);
@@ -530,7 +571,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     }
   }
 
-  async function openPath(path, { heading = '' } = {}) {
+  async function openPath(path, { heading = '', line } = {}) {
     if (current && current.path !== path) {
       if (!(await flushEditing())) return;
     }
@@ -539,7 +580,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       setStatus('missing', path.replace(/\.md$/i, ''));
       return;
     }
-    showNote(note, { heading });
+    showNote(note, { heading, line });
     await setMeta(db, 'lastOpened', path);
     recent = rememberRecent(recent, path);
     await setMeta(db, 'recent', recent);
@@ -1021,6 +1062,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       return;
     }
     files.push(note);
+    updateIndexPath(note);
     for (const ancestor of ancestorFolders(path)) expanded.add(ancestor);
     await setMeta(db, 'expanded', [...expanded]);
     recent = rememberRecent(recent, path);
@@ -1070,6 +1112,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const merged = mergeBackup(files, folders, backup);
       await commitFiles(db, { put: merged.put });
       files = merged.files;
+      rebuildIndex();
       folders = merged.folders;
       await setMeta(db, 'folders', folders);
       backupMessage(merged.keptAside.length
@@ -1093,6 +1136,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         put: backup.files,
       });
       files = backup.files.map((file) => ({ ...file }));
+      rebuildIndex();
       folders = [...backup.folders];
       recent = [...backup.recent];
       expanded = new Set();
@@ -1262,6 +1306,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       return;
     }
     files.push(note);
+    updateIndexPath(note);
     sync?.noteEdited(note);
     for (const ancestor of ancestorFolders(plan.path)) expanded.add(ancestor);
     recent = rememberRecent(recent, plan.path);
@@ -1272,6 +1317,58 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function toggledTask() {
     flushNow();
+  }
+
+  async function dataviewToggle(task) {
+    const path = task?.path;
+    if (!path) return;
+    const isCurrent = current && current.path === path;
+    const file = isCurrent
+      ? { ...snapshot(), content: source.value }
+      : files.find((item) => item.path === path && !item.trashedAt);
+    if (!file) {
+      setStatus('invalid', 'That task is gone from its note. Nothing was changed.');
+      return;
+    }
+    const result = applyTaskToggle(file.content, task);
+    if (result.error) {
+      setStatus('invalid', result.error);
+      return;
+    }
+    if (result.content === file.content) return;
+    if (isCurrent) {
+      source.replaceText?.(result.content) || (source.value = result.content);
+      current.content = result.content;
+      current.dirty = true;
+      current.updatedAt = Date.now();
+      if (!source.replaceText) rememberEdit();
+      taskIndex.replace(path, result.content);
+      flushNow();
+      source.refreshDataview?.();
+      return;
+    }
+    const next = { ...file, content: result.content, dirty: true, updatedAt: Date.now() };
+    try {
+      await putFile(db, next);
+    } catch {
+      setStatus('error');
+      return;
+    }
+    const at = files.findIndex((item) => item.path === path);
+    if (at >= 0) files[at] = next;
+    else files.push(next);
+    taskIndex.replace(path, next.content);
+    sync?.noteEdited(next);
+    source.refreshDataview?.();
+  }
+
+  function dataviewOpen(task) {
+    if (!task?.path) return;
+    if (linkNav) return;
+    const line = Number.isInteger(task.line) ? task.line : 0;
+    linkNav = openPath(task.path, { line }).finally(() => {
+      linkNav = null;
+    });
   }
 
   function openExternal(href) {
@@ -1339,6 +1436,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     const index = files.findIndex((item) => item.path === file.path);
     if (index >= 0) files[index] = file;
     else files.push(file);
+    updateIndexPath(file);
     if (current && current.path === file.path) {
       if (source.value !== file.content) showNote(file);
       else current = file;
@@ -1362,6 +1460,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       now,
     ));
     await commitFiles(db, { put: writes, remove: plan.remove });
+    applyIndexPlan({ put: writes, remove: plan.remove });
     if (plan.remove.length) {
       const removed = new Set(plan.remove);
       files = files.filter((file) => !removed.has(file.path));
@@ -1405,11 +1504,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     try {
       await saver.discard();
       await eraseLocalNotes(db);
-      files = [];
-      folders = [];
-      recent = [];
-      expanded = new Set();
-      clearEditor();
+    files = [];
+    folders = [];
+    recent = [];
+    expanded = new Set();
+    taskIndex.rebuild([]);
+    clearEditor();
       renderList();
       setStatus('saved');
     } finally {
@@ -1422,6 +1522,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const index = files.findIndex((item) => item.path === file.path);
       if (index >= 0) files[index] = file;
       else files.push(file);
+      updateIndexPath(file);
       if (!current || current.path !== file.path) continue;
       const typed = source.value !== current.content && source.value !== file.content;
       if (typed) continue;
@@ -1435,6 +1536,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function applyRemoved(paths) {
     const gone = new Set(paths || []);
     files = files.filter((file) => !gone.has(file.path));
+    for (const path of gone) taskIndex.remove(path);
+    source.refreshDataview?.();
     recent = recent.filter((path) => !gone.has(path));
     setMeta(db, 'recent', recent).catch(() => {});
     if (current && gone.has(current.path)) {
@@ -1450,6 +1553,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     const next = { ...files[index], ...fields };
     await putFile(db, next);
     files[index] = next;
+    updateIndexPath(next);
     if (current && current.path === notePath) Object.assign(current, fields);
   }
 
@@ -1469,6 +1573,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (index >= 0) files[index] = file;
       else files.push(file);
     }
+    applyIndexPlan(plan);
     recent = recent.filter((path) => !removed.has(path));
     const quiet = new Set(plan.remove || []);
     for (const file of plan.put || []) {
@@ -1497,6 +1602,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         if (nowOps.length) await deleteOps(db, nowOps.map((op) => op.id));
         for (const op of beforeOps) await putOp(db, op);
         files = beforeFiles.map((file) => ({ ...file }));
+        rebuildIndex();
         if (current) {
           const next = files.find((file) => file.path === current.path && !file.trashedAt);
           if (next) showNote(next);
@@ -1515,6 +1621,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     await putFile(db, next);
     const index = files.findIndex((item) => item.path === notePath);
     if (index >= 0) files[index] = next;
+    updateIndexPath(next);
     renderList();
     await sync?.refreshStatus();
   }
@@ -1591,6 +1698,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       folders = session.folders;
       recent = session.recent;
       expanded = new Set(session.expanded || []);
+      taskIndex.rebuild(notesForIndex());
       if (!session.expanded && session.current) {
         for (const folder of ancestorFolders(session.current.path)) expanded.add(folder);
       }

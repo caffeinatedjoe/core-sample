@@ -270,6 +270,23 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
       if (name === 'FencedCode') {
         const open = doc.lineAt(node.from);
         const close = doc.lineAt(node.to);
+        const infoNode = node.node.getChild('CodeInfo');
+        const info = infoNode ? doc.sliceString(infoNode.from, infoNode.to).trim() : '';
+        const lang = info.toLowerCase();
+        const marks = node.node.getChildren('CodeMark');
+        const closed = marks.length > 1 && close.number > open.number;
+        const dataview = (lang === 'dataview' || lang === 'dataviewjs') && closed && !touches(ranges, node.from, node.to);
+        if (dataview) {
+          const parts = [];
+          for (let n = open.number + 1; n < close.number; n += 1) parts.push(doc.line(n).text);
+          replace(open.from, open.to, { kind: 'dataview', lang, query: parts.join('\n') });
+          for (let n = open.number + 1; n <= close.number; n += 1) {
+            const line = doc.line(n);
+            addLine(line.from, 'cm-dv-rest');
+            hide(line.from, line.to);
+          }
+          return false;
+        }
         for (let n = open.number; n <= close.number; n += 1) {
           const line = doc.line(n);
           if (line.to < from || line.from > to) continue;
@@ -278,15 +295,11 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
           if (n === close.number) cls += ' cm-code-last';
           addLine(line.from, cls);
         }
-        const marks = node.node.getChildren('CodeMark');
-        const closed = marks.length > 1 && close.number > open.number;
         if (touches(ranges, node.from, node.to)) {
           for (const item of marks) mark(item.from, item.to, 'cm-mark');
-          const info = node.node.getChild('CodeInfo');
-          if (info) mark(info.from, info.to, 'cm-mark');
+          if (infoNode) mark(infoNode.from, infoNode.to, 'cm-mark');
         } else {
-          const info = node.node.getChild('CodeInfo');
-          replace(open.from, open.to, { kind: 'fence', info: info ? doc.sliceString(info.from, info.to) : '' });
+          replace(open.from, open.to, { kind: 'fence', info });
           if (closed) hide(close.from, close.to);
         }
         return false;

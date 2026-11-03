@@ -47,6 +47,13 @@ export function fakeEditorFactory(createElement) {
       hasFocus: () => false,
       measure() {},
       scrollToPos() {},
+      scrollToLine() {},
+      replaceText(next) {
+        text = String(next ?? '');
+        hooks.onChange();
+        return true;
+      },
+      refreshDataview() {},
       posOf: () => -1,
       images: () => [],
       embedNodes: () => host.querySelectorAll('.embed'),
