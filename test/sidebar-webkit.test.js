@@ -232,7 +232,28 @@ test('webkit long-press on a sidebar row opens rename, move and delete', { timeo
 });
 
 test('webkit signed-in Settings hides client id behind Advanced', { timeout: 90000 }, async (t) => {
-  await withPhone(t, async ({ page, url, errors }) => {
+  await withPhone(t, async ({ page, context, url, errors }) => {
+    await context.route('https://api.github.com/**', async (route) => {
+      const href = route.request().url();
+      const cors = {
+        'access-control-allow-origin': '*',
+        'access-control-allow-headers': 'authorization, content-type, accept',
+      };
+      if (route.request().method() === 'OPTIONS') {
+        await route.fulfill({ status: 204, headers: cors });
+        return;
+      }
+      if (href.endsWith('/user')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          headers: cors,
+          body: JSON.stringify({ login: 'joe' }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 404, headers: cors, body: '' });
+    });
     await openApp(page, url, ROWS, 'Welcome.md', {
       ...META,
       githubToken: 'gho_testtokenvalue123456',
