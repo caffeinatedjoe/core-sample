@@ -37,6 +37,7 @@ Implemented as manual connect, download, and one-file push and pull. Stage 4's d
 - Cloudflare Worker that forwards only the device-code and token endpoints. No client secret. No token logging. Allowlist those endpoints and the app origin.
 - Checklist for Joe: free Cloudflare account, GitHub OAuth app with device flow, Worker deploy.
 - Device flow from the PWA. Token stays in IndexedDB.
+- A device code is polled for its token once. The token and the end of the pending flow are one write. A `/user` 401 is rechecked before Sign in again, and the last sign-in failure is shown in the sheet (core-sample-shell-v29).
 - Choose repo, branch, and notes root (default: repo root).
 - Initial download. Store each file's blob SHA.
 - Basic push and pull of one file at a time.

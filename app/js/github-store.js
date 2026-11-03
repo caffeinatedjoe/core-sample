@@ -1,4 +1,5 @@
-import { commitFiles, deleteOps, getMeta, listFiles, listOps, setMeta } from './db.js';
+import { commitFiles, deleteOps, getMeta, listFiles, listOps, setMeta, updateMeta } from './db.js';
+import { redact } from './github-redact.js';
 
 export const TOKEN_KEY = 'githubToken';
 export const CLIENT_ID_KEY = 'githubClientId';
@@ -9,6 +10,7 @@ export const ROOT_KEY = 'githubRoot';
 export const LOGIN_KEY = 'githubLogin';
 export const PENDING_KEY = 'githubPending';
 export const STORAGE_KEY = 'storagePersistent';
+export const AUTH_FAILURE_KEY = 'githubAuthFailure';
 
 export function storagePersistenceText(granted) {
   return granted === true
@@ -71,8 +73,78 @@ export async function saveGithubConfig(db, { clientId = '', relay = '' }) {
 }
 
 export async function saveGithubSession(db, { token, login = '' }) {
-  await setMeta(db, TOKEN_KEY, token);
-  await setMeta(db, LOGIN_KEY, login);
+  await updateMeta(db, [], () => ({ [TOKEN_KEY]: token, [LOGIN_KEY]: login }));
+}
+
+// A device code is single use. The token it returned and the end of the
+// pending flow are written together, before any network call, so a reload
+// or a second launch can never find the code again and poll it a second time.
+// The pending flow is cleared only when it is still this code.
+export async function completeDeviceSignIn(db, { token, deviceCode }) {
+  await updateMeta(db, [PENDING_KEY], (values) => {
+    const writes = { [TOKEN_KEY]: token, [LOGIN_KEY]: '' };
+    const pending = values[PENDING_KEY];
+    if (!pending || pending.deviceCode === deviceCode) writes[PENDING_KEY] = null;
+    return writes;
+  });
+}
+
+// Fills in the login for a token that is still the saved one. It never
+// writes the token, so a slow lookup cannot put an older token back.
+export async function saveGithubLogin(db, { token, login }) {
+  const writes = await updateMeta(db, [TOKEN_KEY, LOGIN_KEY], (values) => {
+    if (!token || values[TOKEN_KEY] !== token) return null;
+    if (values[LOGIN_KEY] === login) return null;
+    return { [LOGIN_KEY]: login };
+  });
+  return Boolean(writes);
+}
+
+const AUTH_ENDPOINTS = new Set(['GET /user', 'POST /login/oauth/access_token']);
+const AUTH_MESSAGE_MAX = 160;
+
+// What the GitHub sheet shows about the last sign-in failure. It holds the
+// time, the endpoint, the HTTP status and GitHub's own words, never a token
+// or a device code.
+export function authFailureRecord({ at, endpoint, status, message }, secrets = []) {
+  const clean = redact(String(message || ''), secrets).replace(/\s+/g, ' ').trim();
+  return {
+    at: Number(at) > 0 ? Number(at) : 0,
+    endpoint: AUTH_ENDPOINTS.has(endpoint) ? endpoint : 'GitHub',
+    status: Number.isInteger(status) && status > 0 ? status : 0,
+    message: clean.length > AUTH_MESSAGE_MAX ? `${clean.slice(0, AUTH_MESSAGE_MAX - 1)}…` : clean,
+  };
+}
+
+export async function recordAuthFailure(db, failure, secrets = []) {
+  const record = authFailureRecord(failure, secrets);
+  await setMeta(db, AUTH_FAILURE_KEY, record);
+  return record;
+}
+
+export async function loadAuthFailure(db) {
+  const value = await getMeta(db, AUTH_FAILURE_KEY);
+  if (!value || typeof value !== 'object' || !(Number(value.at) > 0)) return null;
+  return authFailureRecord(value);
+}
+
+export function describeAuthFailure(record, { locale, timeZone } = {}) {
+  if (!record || !(record.at > 0)) return '';
+  let when = '';
+  try {
+    when = new Date(record.at).toLocaleString(locale, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone,
+    });
+  } catch {
+    when = new Date(record.at).toISOString();
+  }
+  const status = record.status ? ` HTTP ${record.status}` : '';
+  const said = record.message ? `: ${record.message}` : '';
+  return `Last sign-in problem, ${when}. ${record.endpoint}${status}${said}`;
 }
 
 export async function saveGithubTarget(db, { repo, branch, root }) {

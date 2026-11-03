@@ -1,3 +1,5 @@
+import { redact } from './github-redact.js';
+
 // OAuth Apps cannot ask for file contents alone. `repo` is the smallest
 // scope that can read and write a private repository. `public_repo` cannot.
 export const GITHUB_SCOPE = 'repo';
@@ -50,9 +52,16 @@ export function interpretPoll(body, intervalSeconds) {
   const error = body && typeof body.error === 'string' ? body.error : '';
   if (error === 'authorization_pending') return { done: false, wait: interval };
   if (error === 'slow_down') return { done: false, wait: interval + 5 };
-  if (error === 'expired_token') return { done: true, failure: 'The code expired. Start again.' };
-  if (error === 'access_denied') return { done: true, failure: 'GitHub sign-in was declined.' };
-  return { done: true, failure: 'GitHub did not sign in.' };
+  const detail = pollError(body, error);
+  if (error === 'expired_token') return { done: true, failure: 'The code expired. Start again.', detail };
+  if (error === 'access_denied') return { done: true, failure: 'GitHub sign-in was declined.', detail };
+  return { done: true, failure: 'GitHub did not sign in.', detail };
+}
+
+function pollError(body, error) {
+  const description = body && typeof body.error_description === 'string' ? body.error_description : '';
+  if (error && description) return `${error}: ${description}`;
+  return error || description || 'No token in the answer.';
 }
 
 export async function runDevicePoll({
@@ -124,10 +133,14 @@ export function pendingFlow(start, now = Date.now()) {
 }
 
 // One poll loop for a pending device flow. Resume and Check now share it.
+// GitHub hands out the token for a device code once. After a token arrives
+// the code is never polled again: `completeFlow` must store the token and
+// end the pending flow in one write before anything else runs.
 export function createDeviceSignIn({
   loadPending,
   savePending,
   clearPending,
+  completeFlow,
   postToken,
   sleep,
   now = () => Date.now(),
@@ -139,6 +152,7 @@ export function createDeviceSignIn({
   let stop = false;
   let wake = null;
   let pollNow = false;
+  const consumed = new Set();
 
   function checkNow() {
     if (!running) return begin(true);
@@ -182,16 +196,21 @@ export function createDeviceSignIn({
       let body;
       try {
         body = await postToken(flow.deviceCode);
-      } catch {
-        return { done: true, failure: 'The sign-in request failed.' };
+      } catch (error) {
+        return {
+          done: true,
+          failure: 'The sign-in request failed.',
+          detail: redact(error && error.message ? error.message : '', [flow.deviceCode]),
+        };
       }
       const step = interpretPoll(body, interval);
       if (step.token) {
+        consumed.add(flow.deviceCode);
         if (stop) return { done: true, cancelled: true };
-        return step;
+        return { ...step, flow };
       }
       if (stop) return { done: true, cancelled: true };
-      if (step.done) return step;
+      if (step.done) return { ...step, detail: redact(step.detail || '', [flow.deviceCode]) };
       if (step.wait !== interval) {
         interval = step.wait;
         flow = { ...flow, interval };
@@ -203,12 +222,21 @@ export function createDeviceSignIn({
 
   async function settle(result) {
     if (!result || result.cancelled || result.idle) return result;
-    try {
-      if (result.token) {
-        if (onToken) await onToken(result.token);
-      } else if (onFailure) {
-        await onFailure(result.failure || 'GitHub did not sign in.');
+    if (result.token) {
+      try {
+        if (completeFlow) await completeFlow(result.token, result.flow);
+        else await clearPending();
+      } catch {
+        await Promise.resolve().then(clearPending).catch(() => {});
+        const failure = "Couldn't save the sign-in on this phone. Try again.";
+        if (onFailure) await onFailure(failure, '');
+        return { done: true, failure };
       }
+      if (onToken) await onToken(result.token);
+      return result;
+    }
+    try {
+      if (onFailure) await onFailure(result.failure || 'GitHub did not sign in.', result.detail || '');
     } finally {
       await clearPending();
     }
@@ -221,7 +249,7 @@ export function createDeviceSignIn({
       try {
         const flow = await loadPending();
         if (!flow) return { done: true, idle: true };
-        if (!(now() < flow.expiresAt)) {
+        if (consumed.has(flow.deviceCode) || !(now() < flow.expiresAt)) {
           await clearPending();
           return { done: true, idle: true };
         }
@@ -231,6 +259,7 @@ export function createDeviceSignIn({
         running = null;
         stop = false;
         wake = null;
+        pollNow = false;
       }
     })();
     return running;

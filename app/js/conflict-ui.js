@@ -531,7 +531,7 @@ export function mountConflictScreen(doc, { files, apply, dismiss, loadRemote, ke
       showToast(error && error.message ? error.message : 'Nothing was saved.', null);
       return;
     }
-    busy = false;
+    setBusy(false);
     remoteNote = null;
     pendingOffer = sibling && sibling.path ? sibling.path : '';
     showToast(plan.summary, async () => {

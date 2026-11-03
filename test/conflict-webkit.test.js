@@ -161,7 +161,7 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
   try {
     await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v28');
+    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v29');
     // start() records lastOpened asynchronously; seeding before then gets overwritten.
     await page.waitForFunction(() => new Promise((resolve) => {
       const request = indexedDB.open('core-sample');
@@ -250,6 +250,11 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
     const before = patches;
     await page.locator('#conflict-resolve-button').click();
     await page.waitForSelector('#undo-toast:not([hidden])');
+    const lingering = await page.evaluate(() => {
+      const node = document.getElementById('conflict-resolve-button');
+      return Boolean(node && (node.textContent === 'Syncing…' || node.hasAttribute('aria-busy')));
+    });
+    assert.equal(lingering, false);
     await shot('undo-toast.png');
     await page.locator('#undo-toast-action').click();
     await page.waitForFunction(() => document.getElementById('source')?.value === 'phone\nkeep\n');

@@ -4,11 +4,13 @@ import { commitFiles, deleteOps, getFile, getMeta, listFiles, listOps, putFile, 
 import {
   decodeUtf8Base64,
   githubRequest,
+  AUTH_RECHECK_MS,
   githubStatusReason,
+  readUser,
   repoPath,
   selectMarkdown,
 } from './github-api.js';
-import { loadGithubSettings } from './github-store.js';
+import { loadGithubSettings, recordAuthFailure } from './github-store.js';
 import { redact } from './github-redact.js';
 import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
 import { isIgnoredPath } from './vault-paths.js';
@@ -509,6 +511,55 @@ export async function loadConflictRemote({
   return unavailable(file, offline() ? 'offline' : state);
 }
 
+export const SYNC_REQUEST_TIMEOUT_MS = 15000;
+export const SYNC_BLOB_TIMEOUT_MS = 60000;
+// A run with no request starting or settling for this long is given up so
+// the next poll can start. Longer than any single request may take.
+export const SYNC_STALL_MS = 90000;
+
+const NULL_BODY = new Set([101, 103, 204, 205, 304]);
+
+// Every sync request, body included, settles within its limit. The abort
+// stops the network read; the race covers a fetch that ignores the signal.
+export function timedFetch(fetchImpl, {
+  timeoutMs = SYNC_REQUEST_TIMEOUT_MS,
+  blobTimeoutMs = SYNC_BLOB_TIMEOUT_MS,
+  setTimer = (fn, ms) => setTimeout(fn, ms),
+  clearTimer = (id) => clearTimeout(id),
+  onActivity = () => {},
+} = {}) {
+  return async (url, init = {}) => {
+    const limit = /\/git\/blobs\/[^/?]+/.test(String(url)) ? Math.max(timeoutMs, blobTimeoutMs) : timeoutMs;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = null;
+    const expired = new Promise((resolve, reject) => {
+      timer = setTimer(() => {
+        if (controller) controller.abort();
+        const error = new Error('GitHub took too long to answer.');
+        error.timedOut = true;
+        reject(error);
+      }, limit);
+    });
+    const run = (async () => {
+      const response = await fetchImpl(url, controller ? { ...init, signal: controller.signal } : init);
+      const body = NULL_BODY.has(response.status) ? null : await response.arrayBuffer();
+      return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    })();
+    onActivity();
+    try {
+      return await Promise.race([run, expired]);
+    } finally {
+      clearTimer(timer);
+      run.catch(() => {});
+      onActivity();
+    }
+  };
+}
+
 async function request(fetchImpl, token, url, options = {}) {
   return githubRequest(fetchImpl, url, { token, secrets: [token], ...options });
 }
@@ -520,7 +571,7 @@ function limited(result) {
 
 export function createAutoSync({
   db,
-  fetchImpl = globalThis.fetch,
+  fetchImpl: rawFetch = globalThis.fetch,
   now = () => Date.now(),
   random = Math.random,
   debounceMs = SYNC_DEBOUNCE_MS,
@@ -529,6 +580,10 @@ export function createAutoSync({
   clearTimer = (id) => clearTimeout(id),
   offline = () => false,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  authRecheckMs = AUTH_RECHECK_MS,
+  requestTimeoutMs = SYNC_REQUEST_TIMEOUT_MS,
+  blobTimeoutMs = SYNC_BLOB_TIMEOUT_MS,
+  stallMs = SYNC_STALL_MS,
   beforeSync = async () => {},
   onStatus = () => {},
   onApplied = () => {},
@@ -537,6 +592,18 @@ export function createAutoSync({
 } = {}) {
   let chain = Promise.resolve();
   let state = { configured: false, confirmed: false };
+  let activity = 0;
+  let quietRetries = 0;
+  let retryTimer = null;
+  const fetchImpl = timedFetch(rawFetch, {
+    timeoutMs: requestTimeoutMs,
+    blobTimeoutMs,
+    setTimer,
+    clearTimer,
+    onActivity: () => {
+      activity += 1;
+    },
+  });
   let stopped = false;
   let prepared = null;
 
@@ -716,11 +783,23 @@ export function createAutoSync({
     }
     publish({ configured: true, offline: false, syncing: true, pending, failed: false, authRequired: false });
     try {
-      return await perform(settings, ops, reason, finish);
+      const result = await perform(settings, ops, reason, finish);
+      quietRetries = 0;
+      return result;
     } catch (error) {
       const message = redact(error && error.message ? error.message : '', [settings.token]);
-      const reached = message.includes('could not be reached') || message.includes('offline');
       const conflicted = await hasConflict();
+      if (error && error.timedOut) {
+        retryLater();
+        return finish({
+          syncing: false,
+          pending: true,
+          retrying: true,
+          conflict: conflicted,
+        });
+      }
+      const reached = message.includes('could not be reached') || message.includes('offline');
+      if (reached) retryLater();
       return finish({
         syncing: false,
         offline: reached || offline(),
@@ -731,8 +810,54 @@ export function createAutoSync({
     }
   }
 
+  // A slow or lost answer retries on a growing delay. The queue and the
+  // notes are kept, and the regular poll keeps running beside it.
+  function retryLater() {
+    if (stopped) return;
+    if (retryTimer) clearTimer(retryTimer);
+    const wait = backoffDelay(quietRetries, random);
+    quietRetries += 1;
+    retryTimer = arm(setTimer, () => {
+      retryTimer = null;
+      queue('retry');
+    }, wait);
+  }
+
+  // The next run never waits on one that stopped making progress. Each
+  // request has its own limit, so this only trips on a wait outside them.
+  function watched(reason) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let seen = activity;
+      let timer = null;
+      const check = () => {
+        if (settled) return;
+        if (activity !== seen) {
+          seen = activity;
+          timer = arm(setTimer, check, stallMs);
+          return;
+        }
+        settled = true;
+        retryLater();
+        resolve(publish({ configured: true, syncing: false, pending: true, retrying: true, offline: false, failed: false }));
+      };
+      timer = arm(setTimer, check, stallMs);
+      syncOnce(reason).then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimer(timer);
+        resolve(value);
+      }, (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimer(timer);
+        reject(error);
+      });
+    });
+  }
+
   function queue(reason) {
-    const job = chain.then(() => syncOnce(reason));
+    const job = chain.then(() => watched(reason));
     chain = job.then(() => {}, () => {});
     return job;
   }
@@ -769,20 +894,7 @@ export function createAutoSync({
     const parentsOf = new Map();
 
     let ref = await call(refUrl, { etag: savedEtag });
-    if (ref.status === 401) {
-      const user = await call('https://api.github.com/user');
-      if (user.status === 401) {
-        return finish({
-          configured: true,
-          authRequired: true,
-          syncing: false,
-          confirmed: false,
-          pending: ops.length > 0,
-          failed: false,
-        });
-      }
-      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
-    }
+    if (ref.status === 401) return authOrFail(settings, ops);
     if (limited(ref)) {
       const wait = retryDelay({ status: ref.status, headers: ref.headers, now: now(), random });
       return scheduleRetry(settings, ops, wait);
@@ -1320,8 +1432,18 @@ export function createAutoSync({
   }
 
   async function authOrFail(settings, ops) {
-    const user = await request(fetchImpl, settings.token, 'https://api.github.com/user');
+    const user = await readUser(fetchImpl, settings.token, { sleep, recheckMs: authRecheckMs });
     if (user.status === 401) {
+      try {
+        await recordAuthFailure(db, {
+          at: now(),
+          endpoint: 'GET /user',
+          status: 401,
+          message: user.message,
+        }, [settings.token]);
+      } catch {
+        // The sign-in state below still shows. The record is only a hint.
+      }
       return finish({
         configured: true,
         authRequired: true,
@@ -1430,6 +1552,8 @@ export function createAutoSync({
     stop() {
       stopped = true;
       clock.stop();
+      if (retryTimer) clearTimer(retryTimer);
+      retryTimer = null;
     },
     status() {
       return presentSyncStatus(state);

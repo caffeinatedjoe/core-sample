@@ -92,7 +92,7 @@ async function routeGithub(context, git, gate = {}) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v28');
+  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v29');
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');
     request.onerror = () => resolve(false);
