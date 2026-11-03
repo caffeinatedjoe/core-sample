@@ -46,9 +46,14 @@ function appendTree(rows, files, folders, open, dir, depth, currentPath) {
   }
 }
 
-export function snippetAround(content, query) {
+function folded(text, matchCase) {
+  const value = String(text ?? '');
+  return matchCase ? value : value.toLowerCase();
+}
+
+export function snippetAround(content, query, { matchCase = false } = {}) {
   const hay = String(content ?? '');
-  const at = hay.toLowerCase().indexOf(String(query).toLowerCase());
+  const at = folded(hay, matchCase).indexOf(folded(query, matchCase));
   if (at < 0) return '';
   const start = Math.max(0, at - 20);
   const end = Math.min(hay.length, at + query.length + 28);
@@ -56,21 +61,21 @@ export function snippetAround(content, query) {
   return `${start > 0 ? '…' : ''}${slice}${end < hay.length ? '…' : ''}`;
 }
 
-export function searchNotes(files, query) {
-  const q = String(query ?? '').trim().toLowerCase();
+export function searchNotes(files, query, { matchCase = false, content = true } = {}) {
+  const q = folded(String(query ?? '').trim(), matchCase);
   if (!q) return [];
   const hits = [];
   for (const file of liveNotes(files)) {
     const title = noteTitle(file);
-    const nameHit = title.toLowerCase().includes(q) || file.path.toLowerCase().includes(q);
+    const nameHit = folded(title, matchCase).includes(q) || folded(file.path, matchCase).includes(q);
     if (nameHit) {
       hits.push({ path: file.path, title, kind: 'name', snippet: '' });
-    } else if (String(file.content ?? '').toLowerCase().includes(q)) {
+    } else if (content && folded(file.content, matchCase).includes(q)) {
       hits.push({
         path: file.path,
         title,
         kind: 'content',
-        snippet: snippetAround(file.content, q),
+        snippet: snippetAround(file.content, q, { matchCase }),
       });
     }
     if (hits.length >= SEARCH_LIMIT) break;
@@ -94,11 +99,25 @@ export function moveTargets(files, folders, from, isFolder) {
   return [...targets].sort(byName);
 }
 
-export function listBrowser({ files, folders, expanded, recent, query, currentPath }) {
+export const NO_MATCHES = 'No matches found.';
+
+// Counts what the tree shows: live notes and the folders that hold them or
+// were made empty on purpose. Trash and ignored paths are left out.
+export function vaultSummary(files, folders) {
+  const notes = liveNotes(files).length;
+  const count = folderSet(files, folders).size;
+  return {
+    files: notes,
+    folders: count,
+    text: `${notes} ${notes === 1 ? 'file' : 'files'}, ${count} ${count === 1 ? 'folder' : 'folders'}`,
+  };
+}
+
+export function listBrowser({ files, folders, expanded, recent, query, currentPath, matchCase = false, searchContent = true }) {
   const q = String(query ?? '').trim();
   if (q) {
-    const hits = searchNotes(files, q);
-    if (!hits.length) return [{ type: 'empty', text: 'No matching notes' }];
+    const hits = searchNotes(files, q, { matchCase, content: searchContent });
+    if (!hits.length) return [{ type: 'empty', text: NO_MATCHES }];
     return hits.map((hit) => ({
       type: 'note',
       path: hit.path,
