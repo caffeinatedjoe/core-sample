@@ -469,16 +469,44 @@ function loginName(body) {
   return typeof login === 'string' && /^[A-Za-z0-9-]+$/.test(login) ? login : '';
 }
 
+export const USER_URL = 'https://api.github.com/user';
+export const AUTH_RECHECK_MS = Object.freeze([700, 2000]);
+
+function pause(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+// GET /user, asked again after a short wait when it says 401. Only a 401
+// that holds on every try means the saved token no longer works.
+export async function readUser(fetchImpl, token, { sleep = pause, recheckMs = AUTH_RECHECK_MS } = {}) {
+  let user = await githubRequest(fetchImpl, USER_URL, { token, secrets: [token] });
+  for (const ms of recheckMs) {
+    if (user.status !== 401) break;
+    await sleep(ms);
+    user = await githubRequest(fetchImpl, USER_URL, { token, secrets: [token] });
+  }
+  return user;
+}
+
 // Only a 401 from GET /user means the saved sign-in needs replacing.
 // A 401 on any other call stays a request error and leaves the session alone.
-async function readAccess(fetchImpl, { token, repo }) {
+async function readAccess(fetchImpl, { token, repo }, recheck) {
   let user;
   try {
-    user = await githubRequest(fetchImpl, 'https://api.github.com/user', { token, secrets: [token] });
+    user = await readUser(fetchImpl, token, recheck);
   } catch {
     return { state: 'signed-in', login: '', message: githubStatusReason(0) };
   }
-  if (user.status === 401) return { state: 'unauthorized', login: '', message: 'Sign in again' };
+  if (user.status === 401) {
+    return {
+      state: 'unauthorized',
+      login: '',
+      message: 'Sign in again',
+      failure: { endpoint: 'GET /user', status: 401, message: user.message },
+    };
+  }
   if (!user.ok) return { state: 'signed-in', login: '', message: githubStatusReason(user.status) };
   const login = loginName(user.body);
   const who = login ? `Signed in as ${login}` : 'Signed in.';
@@ -498,10 +526,13 @@ async function readAccess(fetchImpl, { token, repo }) {
 
 // Plain words for the GitHub sheet. The token is never part of the text.
 // `state` is `unauthorized` only when GET /user returns 401.
-export async function describeAccess(fetchImpl, { token, repo } = {}, { timeoutMs = ACCESS_CHECK_MS } = {}) {
+export async function describeAccess(fetchImpl, { token, repo } = {}, { timeoutMs = ACCESS_CHECK_MS, sleep, recheckMs } = {}) {
   if (!token) return { state: 'signed-out', login: '', message: '' };
+  const recheck = {};
+  if (sleep) recheck.sleep = sleep;
+  if (recheckMs) recheck.recheckMs = recheckMs;
   try {
-    return await withTimeout(readAccess(fetchImpl, { token, repo }), timeoutMs);
+    return await withTimeout(readAccess(fetchImpl, { token, repo }, recheck), timeoutMs);
   } catch (error) {
     if (error && error.timedOut) {
       return { state: 'signed-in', login: '', message: "Couldn't reach GitHub (timed out)" };
@@ -512,7 +543,7 @@ export async function describeAccess(fetchImpl, { token, repo } = {}, { timeoutM
 
 export async function lookupLogin(fetchImpl, token) {
   try {
-    const result = await githubRequest(fetchImpl, 'https://api.github.com/user', { token, secrets: [token] });
+    const result = await githubRequest(fetchImpl, USER_URL, { token, secrets: [token] });
     if (!result.ok) return '';
     const login = result.body && result.body.login;
     return typeof login === 'string' && /^[A-Za-z0-9-]+$/.test(login) ? login : '';

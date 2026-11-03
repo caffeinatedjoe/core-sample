@@ -25,12 +25,16 @@ import {
 import { startImagePrefetch } from './images.js';
 import {
   clearPendingFlow,
+  completeDeviceSignIn,
+  describeAuthFailure,
   disconnectGithub,
+  loadAuthFailure,
   loadGithubSettings,
   loadPendingFlow,
   loadStorageFlag,
+  recordAuthFailure,
   saveGithubConfig,
-  saveGithubSession,
+  saveGithubLogin,
   saveGithubTarget,
   savePendingFlow,
   storagePersistenceText,
@@ -62,6 +66,7 @@ export function mountGithub(doc, db, hooks) {
   const connectButton = doc.getElementById('github-connect');
   const signAgain = doc.getElementById('github-sign-in-again');
   const storageLine = doc.getElementById('github-storage');
+  const failureLine = doc.getElementById('github-auth-failure');
   const fileBar = doc.getElementById('github-file-bar');
   const fileStatus = doc.getElementById('github-file-status');
   const view = doc.defaultView || globalThis;
@@ -139,6 +144,11 @@ export function mountGithub(doc, db, hooks) {
     if (fileBar) fileBar.hidden = !ready;
     if (!ready && fileStatus) fileStatus.textContent = '';
     if (storageLine) storageLine.textContent = storagePersistenceText(await loadStorageFlag(db));
+    if (failureLine) {
+      const text = describeAuthFailure(await loadAuthFailure(db));
+      failureLine.textContent = text;
+      failureLine.hidden = !text;
+    }
     return pendingLive;
   }
 
@@ -152,16 +162,18 @@ export function mountGithub(doc, db, hooks) {
     const gen = ++probeGen;
     checkedAt = now();
     const timeoutMs = hooks.accessTimeoutMs || ACCESS_CHECK_MS;
-    const flight = describeAccess(fetchImpl, settings, { timeoutMs }).then(async (access) => {
+    const flight = describeAccess(fetchImpl, settings, {
+      timeoutMs,
+      sleep: hooks.recheckSleep,
+      recheckMs: hooks.recheckMs,
+    }).then(async (access) => {
       if (gen !== probeGen) return access;
       lastAccess = access;
       userUnauthorized = access.state === 'unauthorized';
-      if (access.login) {
-        const current = await loadGithubSettings(db);
-        if (current.token === settings.token && current.login !== access.login) {
-          await saveGithubSession(db, { token: current.token, login: access.login });
-        }
+      if (access.failure) {
+        await recordAuthFailure(db, { ...access.failure, at: now() }, [settings.token]).catch(() => {});
       }
+      if (access.login) await saveGithubLogin(db, { token: settings.token, login: access.login });
       const fresh = await loadGithubSettings(db);
       if (fresh.token === settings.token) await paint(fresh);
       return access;
@@ -214,16 +226,14 @@ export function mountGithub(doc, db, hooks) {
     userUnauthorized = false;
     lastAccess = null;
     checkedAt = now();
-    await saveGithubSession(db, { token, login: '' });
+    hidePending();
     let login = '';
     try {
       login = await lookupLogin(fetchImpl, token);
     } catch {
       login = '';
     }
-    if (login) await saveGithubSession(db, { token, login });
-    await clearPendingFlow(db);
-    hidePending();
+    if (login) await saveGithubLogin(db, { token, login });
     tryAgain.hidden = true;
     await refresh();
     sheet.hidden = false;
@@ -234,7 +244,12 @@ export function mountGithub(doc, db, hooks) {
     startImagePrefetch(db, fetchImpl);
   }
 
-  async function onFailure(message) {
+  async function onFailure(message, detail) {
+    await recordAuthFailure(db, {
+      at: now(),
+      endpoint: 'POST /login/oauth/access_token',
+      message: detail || message,
+    }).catch(() => {});
     hidePending();
     const settings = await loadGithubSettings(db);
     const signedIn = Boolean(settings.token);
@@ -248,6 +263,7 @@ export function mountGithub(doc, db, hooks) {
     loadPending: () => loadPendingFlow(db),
     savePending: (flow) => savePendingFlow(db, flow),
     clearPending: () => clearPendingFlow(db),
+    completeFlow: (token, flow) => completeDeviceSignIn(db, { token, deviceCode: flow.deviceCode }),
     postToken: async (deviceCode) => {
       const settings = await loadGithubSettings(db);
       const id = settings.clientId || clientId;

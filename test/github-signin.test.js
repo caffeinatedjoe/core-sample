@@ -14,120 +14,11 @@ import {
   savePendingFlow,
   STORAGE_KEY,
 } from '../app/js/github-store.js';
+import { domText, jsonResponse, page, until } from './helpers/github-page.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
 const DEVICE = 'dc_supersecretvalue';
 const USER_CODE = 'ABCD-1234';
-
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-function element(id) {
-  const node = {
-    id,
-    hidden: false,
-    value: '',
-    textContent: '',
-    href: '',
-    target: '',
-    rel: '',
-    focused: false,
-    scrolled: false,
-    listeners: {},
-  };
-  node.addEventListener = (type, fn) => {
-    (node.listeners[type] ||= []).push(fn);
-  };
-  node.focus = () => {
-    node.focused = true;
-  };
-  node.scrollIntoView = () => {
-    node.scrolled = true;
-  };
-  node.click = () => {
-    for (const fn of node.listeners.click || []) fn({ target: node, preventDefault() {} });
-  };
-  node.setAttribute = () => {};
-  return node;
-}
-
-function page(fetchImpl) {
-  const ids = [
-    'github-sheet', 'github-client-id', 'github-relay', 'github-repo', 'github-branch', 'github-root',
-    'github-status', 'github-device', 'github-signin-state', 'github-user-code', 'github-verify',
-    'github-try-again', 'github-target', 'github-login', 'github-sign-in-again', 'github-storage',
-    'github-choice', 'github-confirm-replace',
-    'github-disconnect-confirm', 'github-erase-confirm', 'github-connect', 'github-export-backup', 'github-file-bar',
-    'github-file-status', 'github-button', 'github-close', 'github-save-config', 'github-open-github',
-    'github-check-now', 'github-cancel', 'github-save-repo', 'github-download', 'github-alongside',
-    'github-export-replace', 'github-disconnect', 'github-disconnect-yes', 'github-erase',
-    'github-erase-yes', 'github-push', 'github-pull',
-  ];
-  const nodes = {};
-  for (const id of ids) nodes[id] = element(id);
-  for (const id of ['github-sheet', 'github-device', 'github-try-again', 'github-target', 'github-sign-in-again', 'github-choice', 'github-confirm-replace', 'github-disconnect-confirm', 'github-erase-confirm', 'github-file-bar']) {
-    nodes[id].hidden = true;
-  }
-  nodes['github-verify'].href = DEVICE_PAGE;
-  const opens = [];
-  const copies = [];
-  const doc = {
-    visibilityState: 'visible',
-    listeners: {},
-    body: element('body'),
-    getElementById: (id) => nodes[id],
-    addEventListener(type, fn) {
-      (doc.listeners[type] ||= []).push(fn);
-    },
-    dispatch(type) {
-      for (const fn of doc.listeners[type] || []) fn({ type });
-    },
-  };
-  const view = {
-    listeners: {},
-    navigator: {
-      clipboard: {
-        writeText(text) {
-          copies.push(text);
-          return view.copyResult(text);
-        },
-      },
-    },
-    copyResult: () => Promise.resolve(),
-    open(url) {
-      opens.push(url);
-      return view.openResult;
-    },
-    openResult: {},
-    fetch: fetchImpl,
-    setTimeout,
-    addEventListener(type, fn) {
-      (view.listeners[type] ||= []).push(fn);
-    },
-    dispatch(type) {
-      for (const fn of view.listeners[type] || []) fn({ type, persisted: true });
-    },
-  };
-  doc.defaultView = view;
-  return { doc, nodes, view, opens, copies };
-}
-
-function domText(nodes) {
-  return Object.values(nodes).map((node) => [node.textContent, node.value, node.href].join('\n')).join('\n');
-}
-
-async function until(read) {
-  for (let i = 0; i < 30; i += 1) {
-    const value = await read();
-    if (value) return value;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('timed out');
-}
 
 test('a pending sign-in survives a reload, then the repo field is shown and focused', async () => {
   const logs = [];
@@ -419,10 +310,19 @@ test('the github sheet names who is signed in, or that the repo cannot be read',
       if (String(url) === 'https://api.github.com/user') return jsonResponse({ message: 'Bad credentials' }, 401);
       return jsonResponse({ message: 'nope' }, 401);
     });
-    const expiredApp = mountGithub(expired.doc, db, { now: () => 5_000, sleep: () => Promise.resolve(), accessTimeoutMs: 50 });
+    const expiredApp = mountGithub(expired.doc, db, {
+      now: () => 5_000,
+      sleep: () => Promise.resolve(),
+      recheckSleep: () => Promise.resolve(),
+      accessTimeoutMs: 50,
+    });
     await expiredApp.refresh();
     await expiredApp.whenChecked();
     assert.equal(expired.nodes['github-login'].textContent, 'Sign in again');
+    const failure = await getMeta(db, 'githubAuthFailure');
+    assert.deepEqual(failure, { at: 5_000, endpoint: 'GET /user', status: 401, message: 'Bad credentials' });
+    assert.equal(expired.nodes['github-auth-failure'].hidden, false);
+    assert.match(expired.nodes['github-auth-failure'].textContent, /^Last sign-in problem, .+\. GET \/user HTTP 401: Bad credentials$/);
     assert.equal(expired.nodes['github-sign-in-again'].hidden, false);
     assert.equal(expired.nodes['github-connect'].hidden, true);
     assert.equal(expired.nodes['github-target'].hidden, false);
@@ -616,6 +516,7 @@ test('signing in again replaces only the token, and cancel keeps the old one', a
         if (waits === 1) return new Promise(() => {});
         return Promise.resolve();
       },
+      recheckSleep: () => Promise.resolve(),
       accessTimeoutMs: 50,
     });
     await app.refresh();

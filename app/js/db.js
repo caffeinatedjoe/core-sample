@@ -67,6 +67,46 @@ export function deleteMeta(db, key) {
   return run(db, 'meta', 'readwrite', (store) => store.delete(key));
 }
 
+// Reads `keys` and writes what `decide` returns in one readwrite transaction,
+// so no other tab or reload can write between the read and the write.
+// `decide(values)` returns `{ key: value }` pairs to put, or null to write nothing.
+export function updateMeta(db, keys, decide) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('meta', 'readwrite');
+    const store = tx.objectStore('meta');
+    const values = {};
+    let writes = null;
+    let left = keys.length;
+    const apply = () => {
+      try {
+        writes = decide(values) || null;
+        for (const [key, value] of Object.entries(writes || {})) store.put({ key, value });
+      } catch (error) {
+        writes = null;
+        tx.abort();
+        reject(error);
+      }
+    };
+    try {
+      if (!left) apply();
+      for (const key of keys) {
+        const request = store.get(key);
+        request.onsuccess = () => {
+          values[key] = request.result ? request.result.value : undefined;
+          left -= 1;
+          if (!left) apply();
+        };
+      }
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    tx.oncomplete = () => resolve(writes);
+    tx.onerror = () => reject(tx.error || new Error('IndexedDB request failed'));
+    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+  });
+}
+
 export function commitFiles(db, { put = [], remove = [] } = {}) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('files', 'readwrite');

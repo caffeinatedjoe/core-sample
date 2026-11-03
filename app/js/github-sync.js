@@ -4,11 +4,13 @@ import { commitFiles, deleteOps, getFile, getMeta, listFiles, listOps, putFile, 
 import {
   decodeUtf8Base64,
   githubRequest,
+  AUTH_RECHECK_MS,
   githubStatusReason,
+  readUser,
   repoPath,
   selectMarkdown,
 } from './github-api.js';
-import { loadGithubSettings } from './github-store.js';
+import { loadGithubSettings, recordAuthFailure } from './github-store.js';
 import { redact } from './github-redact.js';
 import { GITHUB_DELETED_TEXT, hasConflictRemote, merge2, merge3 } from './conflicts.js';
 import { isIgnoredPath } from './vault-paths.js';
@@ -529,6 +531,7 @@ export function createAutoSync({
   clearTimer = (id) => clearTimeout(id),
   offline = () => false,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  authRecheckMs = AUTH_RECHECK_MS,
   beforeSync = async () => {},
   onStatus = () => {},
   onApplied = () => {},
@@ -769,20 +772,7 @@ export function createAutoSync({
     const parentsOf = new Map();
 
     let ref = await call(refUrl, { etag: savedEtag });
-    if (ref.status === 401) {
-      const user = await call('https://api.github.com/user');
-      if (user.status === 401) {
-        return finish({
-          configured: true,
-          authRequired: true,
-          syncing: false,
-          confirmed: false,
-          pending: ops.length > 0,
-          failed: false,
-        });
-      }
-      return finish({ configured: true, failed: true, syncing: false, confirmed: false, pending: ops.length > 0 });
-    }
+    if (ref.status === 401) return authOrFail(settings, ops);
     if (limited(ref)) {
       const wait = retryDelay({ status: ref.status, headers: ref.headers, now: now(), random });
       return scheduleRetry(settings, ops, wait);
@@ -1320,8 +1310,18 @@ export function createAutoSync({
   }
 
   async function authOrFail(settings, ops) {
-    const user = await request(fetchImpl, settings.token, 'https://api.github.com/user');
+    const user = await readUser(fetchImpl, settings.token, { sleep, recheckMs: authRecheckMs });
     if (user.status === 401) {
+      try {
+        await recordAuthFailure(db, {
+          at: now(),
+          endpoint: 'GET /user',
+          status: 401,
+          message: user.message,
+        }, [settings.token]);
+      } catch {
+        // The sign-in state below still shows. The record is only a hint.
+      }
       return finish({
         configured: true,
         authRequired: true,
