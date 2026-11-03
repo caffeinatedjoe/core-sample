@@ -22,4 +22,6 @@ Taken: "On this phone" and "On GitHub" as the only side names, each with the tim
 
 ## Offline
 
-Resolve writes the note and the sync queue on the phone. If the network is down, the push waits. Synced is still shown only after GitHub accepts the ref update.
+Resolve writes the note and the sync queue on the phone. If the network is down, the push waits. Synced is still shown only after GitHub accepts the ref update. While the resolve and its sync run, the Resolve button reads Syncing… (Saving… offline) and every choice is disabled, so a second tap cannot start another resolve.
+
+A conflict recorded before v26 has no GitHub text on the phone. Opening it loads GitHub's current version, for at most 15 seconds. If that fails and there is no exact conflict copy, the screen does not draw a diff against an empty side, which would mark every phone line as Added. It says GitHub's version isn't available offline (or took too long, or couldn't be loaded), shows the phone's text as plain lines, keeps Keep GitHub and Keep both off, and offers Try again. Keep phone still works.
