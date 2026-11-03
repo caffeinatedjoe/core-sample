@@ -149,7 +149,7 @@ test('no migration, upgrade, or service worker path deletes the meta store or th
   }
   assert.deepEqual(callers, []);
   const store = read('app/js/github-store.js');
-  assert.equal(store.split('clear(db, TOKEN_KEY)').length, 2);
+  assert.equal((store.match(/\[TOKEN_KEY\]: null/g) || []).length, 1);
   const ui = read('app/js/github-ui.js');
   assert.equal(ui.split('disconnectGithub(').length, 2);
 });

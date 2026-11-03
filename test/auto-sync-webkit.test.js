@@ -205,7 +205,7 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.1';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.2';
     });
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {

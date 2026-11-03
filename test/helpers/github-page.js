@@ -60,7 +60,7 @@ export function element(id) {
 export function page(fetchImpl) {
   const ids = [
     'settings-sheet', 'github-client-id', 'github-relay', 'github-repo', 'github-branch', 'github-root',
-    'github-status', 'github-auth-failure', 'github-device', 'github-signin-state', 'github-user-code', 'github-verify',
+    'github-status', 'github-auth-failure', 'github-token-meta', 'github-copy-auth-log', 'github-device', 'github-signin-state', 'github-user-code', 'github-verify',
     'github-try-again', 'github-target', 'github-login', 'github-sign-in-again', 'github-storage',
     'github-choice', 'github-confirm-replace',
     'github-disconnect-confirm', 'github-erase-confirm', 'github-connect', 'github-export-backup', 'github-file-bar',
@@ -73,7 +73,7 @@ export function page(fetchImpl) {
   ];
   const nodes = {};
   for (const id of ids) nodes[id] = element(id);
-  for (const id of ['settings-sheet', 'github-device', 'github-try-again', 'github-target', 'github-sign-in-again', 'github-auth-failure', 'github-choice', 'github-confirm-replace', 'github-disconnect-confirm', 'github-erase-confirm', 'github-file-bar']) {
+  for (const id of ['settings-sheet', 'github-device', 'github-try-again', 'github-target', 'github-sign-in-again', 'github-auth-failure', 'github-token-meta', 'github-choice', 'github-confirm-replace', 'github-disconnect-confirm', 'github-erase-confirm', 'github-file-bar']) {
     nodes[id].hidden = true;
   }
   nodes['github-verify'].href = DEVICE_PAGE;

@@ -278,6 +278,12 @@ test('webkit signed-in Settings hides client id behind Advanced', { timeout: 900
     assert.equal(await page.locator('#github-save-config').isVisible(), false);
     assert.equal(await page.locator('#export-backup').isVisible(), true);
     assert.equal(await page.locator('#github-export-backup').count(), 0);
+    await page.locator('#settings-github-heading').scrollIntoViewIfNeeded();
+    const tokenLine = await page.locator('#github-token-meta').textContent();
+    assert.match(tokenLine, /Token …3456/);
+    assert.equal(tokenLine.includes('gho_'), false);
+    assert.equal(await page.locator('#github-copy-auth-log').isVisible(), true);
+    await shot(page, 'settings-signin-fingerprint.png');
     await shot(page, 'settings-signed-in.png');
     await page.locator('#github-advanced > summary').click();
     assert.equal(await page.locator('#github-client-id').isVisible(), true);
