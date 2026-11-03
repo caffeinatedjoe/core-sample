@@ -23,7 +23,6 @@ test('export and import round-trip without dropping text, trash, or folders', ()
   const backup = buildBackup(files, {
     folders: ['Work', 'Empty'],
     lastOpened: 'Welcome.md',
-    editorMode: 'preview',
     recent: ['Welcome.md'],
   }, 50);
   const parsed = parseBackup(JSON.stringify(backup));
@@ -34,7 +33,8 @@ test('export and import round-trip without dropping text, trash, or folders', ()
   assert.equal(parsed.files[0].content, '# Welcome\n\n日本語 🌧️');
   assert.deepEqual(parsed.folders, ['Empty', 'Work']);
   assert.equal(parsed.lastOpened, 'Welcome.md');
-  assert.equal(parsed.editorMode, 'preview');
+  assert.equal('editorMode' in parsed, false);
+  assert.equal('editorMode' in parseBackup({ ...backup, editorMode: 'preview' }), false);
   assert.deepEqual(parsed.recent, ['Welcome.md']);
   assert.throws(() => parseBackup('{"format":"other"}'), /not a Core Sample backup/);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { listBrowser, searchNotes } from '../app/js/browser.js';
+import { listBrowser, NO_MATCHES, searchNotes, vaultSummary } from '../app/js/browser.js';
 
 const files = [
   { path: 'Welcome.md', kind: 'markdown', content: '# Welcome\n\nclay strata', trashedAt: null },
@@ -44,4 +44,55 @@ test('search matches a filename or the note text and skips trash', () => {
   assert.equal(named.find((row) => row.path === 'logs/Core.md').title, 'Core');
   assert.equal(named.some((row) => row.title === 'Not the filename'), false);
   assert.equal(rows.some((row) => row.type === 'trash'), false);
+});
+
+test('match case narrows names and text, and text search can be turned off', () => {
+  assert.equal(searchNotes(files, 'Core', { matchCase: true }).length, 1);
+  assert.equal(searchNotes(files, 'CORE', { matchCase: true }).length, 0);
+  assert.equal(searchNotes(files, 'CORE').length, 1);
+  assert.equal(searchNotes(files, 'Quartz', { matchCase: true }).length, 0);
+  assert.equal(searchNotes(files, 'quartz', { matchCase: true })[0].snippet.includes('quartz'), true);
+  assert.equal(searchNotes(files, 'quartz', { content: false }).length, 0);
+  assert.equal(searchNotes(files, 'core', { content: false }).length, 1);
+});
+
+test('a search with no hits says No matches found.', () => {
+  const rows = listBrowser({ files, folders: [], expanded: [], recent: [], query: 'basalt', currentPath: '' });
+  assert.deepEqual(rows, [{ type: 'empty', text: NO_MATCHES }]);
+  assert.equal(NO_MATCHES, 'No matches found.');
+  const cased = listBrowser({ files, folders: [], expanded: [], recent: [], query: 'CLAY', currentPath: '', matchCase: true });
+  assert.equal(cased[0].text, NO_MATCHES);
+});
+
+test('the vault summary counts live notes and their folders', () => {
+  const summary = vaultSummary([
+    ...files,
+    { path: '.obsidian/app.md', kind: 'markdown', content: '', trashedAt: null },
+    { path: 'a/b/Deep.md', kind: 'markdown', content: '', trashedAt: null },
+  ], ['Empty', '.trash']);
+  assert.equal(summary.files, 3);
+  assert.deepEqual([summary.folders, summary.text], [4, '3 files, 4 folders']);
+  assert.equal(vaultSummary([files[0]], []).text, '1 file, 0 folders');
+});
+
+test('the vault summary skips phone-only extras and prefers the GitHub tree', () => {
+  const local = vaultSummary([
+    { path: 'Welcome.md', kind: 'markdown', content: '', origin: 'app', localOnly: true, trashedAt: null },
+    { path: 'Note.md', kind: 'markdown', content: '', trashedAt: null },
+    { path: 'Note (conflict 2026-10-21 1918).md', kind: 'markdown', content: '', conflictCopy: true, trashedAt: null },
+    { path: 'Note (backup 2026-10-21 1918).md', kind: 'markdown', content: '', backup: true, trashedAt: null },
+    { path: '.obsidian/app.md', kind: 'markdown', content: '', trashedAt: null },
+  ], ['Empty']);
+  assert.equal(local.files, 1);
+  assert.equal(local.text, '1 file, 1 folder');
+
+  const vault = vaultSummary([], ['Empty'], [
+    'Welcome.md',
+    'assets/photo.png',
+    'logs/Core.md',
+    '.obsidian/app.json',
+  ]);
+  assert.equal(vault.files, 3);
+  assert.equal(vault.folders, 2);
+  assert.equal(vault.text, '3 files, 2 folders');
 });

@@ -20,6 +20,10 @@ Taken: a separate note only when someone taps "Keep both as separate notes." Old
 
 Taken: "On this phone" and "On GitHub" as the only side names, each with the time that side last changed on this phone's clock. The clock is the device's local zone, with a relative day when it is today or yesterday ("Today 12:10 PM"). GitHub's "As of" time is the committer date of the head commit already fetched for sync, not when the phone noticed the change. New conflict, phone, and backup filenames use that same local clock. Targets are at least 44pt, type is `rem` on the system font, and additions and deletions use a `+` / `−` plus the words Added and Removed. The colors are tested for contrast in light and dark. The merged text has a preview before Resolve. Undo keeps a local backup of the discarded side and a toast.
 
+## Getting there
+
+The note screen stays clean. When a note is in conflict, or a conflict copy is still on the phone, a small Conflict flag appears at the top right of the note screen. Tapping it opens the conflict list. Settings → Sync shows the same status with a Conflicts button, so the list is also reachable when the sidebar is open. The flag disappears once nothing is left to resolve or dismiss.
+
 ## Offline
 
 Resolve writes the note and the sync queue on the phone. If the network is down, the push waits. Synced is still shown only after GitHub accepts the ref update. While the resolve and its sync run, the Resolve button reads Syncing… (Saving… offline) and every choice is disabled, so a second tap cannot start another resolve.

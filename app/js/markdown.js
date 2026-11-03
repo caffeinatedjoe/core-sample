@@ -36,7 +36,7 @@ export function parseWikilink(inner) {
   };
 }
 
-function isSafeUrl(url) {
+export function isSafeUrl(url) {
   const value = String(url || '').trim();
   if (!value) return false;
   if (/^javascript:/i.test(value) || /^data:/i.test(value)) return false;
@@ -175,18 +175,17 @@ function remoteImage(src, alt, width, height) {
   return `<span class="embed"><img class="embed-image" alt="${escapeHtml(alt)}" src="${escapeHtml(src)}"${imageAttrs(width, height)}></span>`;
 }
 
-function matchImage(text, index) {
+// What `![[...]]` or `![alt](dest)` at `index` shows: a vault embed to load,
+// a remote or data image, or a label only. Null when it is not an image.
+export function describeImage(text, index) {
   if (text[index] !== '!' || text[index + 1] !== '[') return null;
   if (text.startsWith('![[', index)) {
     const end = text.indexOf(']]', index + 3);
     if (end === -1) return null;
     const spec = parseWikilinkImage(text.slice(index + 3, end));
     if (!spec) return null;
-    if (spec.kind === 'unsupported') return { html: fallbackEmbed(spec.target), next: end + 2 };
-    return {
-      html: fallbackEmbed(spec.target, { width: spec.width, height: spec.height, embed: spec.target }),
-      next: end + 2,
-    };
+    if (spec.kind === 'unsupported') return { kind: 'label', name: spec.target, next: end + 2 };
+    return { kind: 'embed', name: spec.target, embed: spec.target, width: spec.width, height: spec.height, next: end + 2 };
   }
   const parsed = readMarkdownImage(text, index);
   if (!parsed) return null;
@@ -195,27 +194,32 @@ function matchImage(text, index) {
   const height = size ? size.height : null;
   const alt = size ? basename(parsed.dest) : parsed.alt;
   const dest = parsed.dest.trim();
+  const next = parsed.next;
   if (/^https:\/\//i.test(dest) && isSafeUrl(dest)) {
-    return { html: remoteImage(dest, alt || basename(dest), width, height), next: parsed.next };
+    return { kind: 'remote', src: dest, alt: alt || basename(dest), width, height, next };
   }
   if (/^data:image\/(?:png|jpe?g|gif|webp|svg\+xml)[;,]/i.test(dest)) {
-    return { html: remoteImage(dest, alt || 'image', width, height), next: parsed.next };
+    return { kind: 'remote', src: dest, alt: alt || 'image', width, height, next };
   }
-  if (/^[a-z][a-z+.-]*:/i.test(dest)) {
-    return { html: fallbackEmbed(parsed.alt || 'image'), next: parsed.next };
-  }
+  if (/^[a-z][a-z+.-]*:/i.test(dest)) return { kind: 'label', name: parsed.alt || 'image', next };
   const link = normalizeVaultPath(decodePath(dest.split(/\s+/)[0]));
   const kind = link ? imageKind(link) : '';
-  if (kind === 'raster' || kind === 'svg') {
+  if (kind === 'raster' || kind === 'svg') return { kind: 'embed', name: link, embed: link, width, height, next };
+  if (link && kind === 'unsupported') return { kind: 'label', name: basename(link) || alt, next };
+  return { kind: 'label', name: alt || basename(dest) || 'image', next };
+}
+
+function matchImage(text, index) {
+  const image = describeImage(text, index);
+  if (!image) return null;
+  if (image.kind === 'remote') return { html: remoteImage(image.src, image.alt, image.width, image.height), next: image.next };
+  if (image.kind === 'embed') {
     return {
-      html: fallbackEmbed(link, { width, height, embed: link }),
-      next: parsed.next,
+      html: fallbackEmbed(image.name, { width: image.width, height: image.height, embed: image.embed }),
+      next: image.next,
     };
   }
-  if (link && imageKind(link) === 'unsupported') {
-    return { html: fallbackEmbed(basename(link) || alt), next: parsed.next };
-  }
-  return { html: fallbackEmbed(alt || basename(dest) || 'image'), next: parsed.next };
+  return { html: fallbackEmbed(image.name), next: image.next };
 }
 
 function readMarkdownImage(text, index) {

@@ -25,6 +25,7 @@ import {
   SYNC_DEBOUNCE_MS,
   SYNC_POLL_MS,
   SYNC_STATUS,
+  syncAlert,
 } from '../app/js/github-sync.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
@@ -289,6 +290,18 @@ test('backoff grows with jitter and rate limits wait out the reset', () => {
   assert.equal(refReadPath('main'), '/git/ref/heads/main');
   assert.equal(refUpdatePath('main'), '/git/refs/heads/main');
   assert.notEqual(refReadPath('main'), refUpdatePath('main'));
+});
+
+test('the note screen flags only conflicts, conflict copies, sign-in and failed syncs', () => {
+  assert.equal(syncAlert({ configured: true, confirmed: true }), '');
+  assert.equal(syncAlert({ configured: true, syncing: true }), '');
+  assert.equal(syncAlert({ configured: true, pending: true }), '');
+  assert.equal(syncAlert({ configured: true, offline: true }), '');
+  assert.equal(syncAlert({ configured: false, conflict: true }), '');
+  assert.equal(syncAlert({ configured: true, conflict: true, copies: 2 }), 'conflict');
+  assert.equal(syncAlert({ configured: true, confirmed: true, copies: 1 }), 'copies');
+  assert.equal(syncAlert({ configured: true, authRequired: true }), 'auth');
+  assert.equal(syncAlert({ configured: true, failed: true }), 'failed');
 });
 
 test('status is never Synced before a confirmed write, and a conflict keeps both sides', () => {

@@ -156,16 +156,39 @@ async function seedVault(page) {
   }, INDEX);
 }
 
+// Old builds (v15, v16) still have the textarea and the Preview button.
 async function showNote(page) {
-  await page.locator('#source').fill(NOTE);
+  const live = await page.locator('#source .cm-content').count();
+  await page.locator(live ? '#source .cm-content' : '#source').fill(NOTE);
   await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
   await seedVault(page);
-  await page.locator('#mode-preview').click();
+  if (live) {
+    await page.waitForSelector('#source .embed .embed-fallback');
+    await redrawImage(page);
+  } else {
+    await page.locator('#mode-preview').click();
+  }
+}
+
+// Puts the caret on the image line and takes it off again, so the image
+// widget is drawn from scratch the way the old Preview button repainted it.
+async function redrawImage(page) {
+  await page.evaluate(async () => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    const at = view.state.doc.toString().indexOf('![[');
+    view.focus();
+    view.dispatch({ selection: { anchor: at } });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    view.contentDOM.blur();
+  });
+  await page.waitForFunction(() => !document.querySelector('#source .cm-image-source'));
 }
 
 async function previewState(page) {
   return page.evaluate(() => {
-    const preview = document.getElementById('preview');
+    const old = document.getElementById('preview');
+    const preview = old && !old.hidden ? old : document.getElementById('source');
     const html = preview?.innerHTML || '';
     const img = preview?.querySelector('img.embed-image') || null;
     const style = img ? getComputedStyle(img) : null;
@@ -192,7 +215,9 @@ async function previewState(page) {
       visibility: style?.visibility || '',
       display: style?.display || '',
       src: img?.getAttribute('src') || '',
-      inTask: Boolean(img?.closest('li.task .item-body')),
+      inTask: old && !old.hidden
+        ? Boolean(img?.closest('li.task .item-body'))
+        : Boolean(img?.closest('.cm-line')?.previousElementSibling?.classList.contains('cm-task-line')),
       modal: document.getElementById('image-viewer')?.getAttribute('aria-modal'),
       pixel,
       scale: window.visualViewport?.scale ?? 1,
@@ -233,7 +258,7 @@ test('the hidden photo dialog does not cancel touches on the note', () => {
   assert.match(js, /setAttribute\('aria-modal', 'true'\)/);
   assert.match(js, /removeAttribute\('aria-modal'\)/);
   const view = readFileSync(join(appDir, 'js/view.js'), 'utf8');
-  assert.match(view, /embedBlobs\.set\(made\.img, result\.blob\)/);
+  assert.match(view, /embedBlobs\.set\(made\.img, entry\.blob\)/);
   assert.match(view, /blob: img \? embedBlobs\.get\(img\)/);
 });
 
@@ -259,11 +284,11 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v29';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v31';
     });
     await showNote(page);
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
+      const img = document.querySelector('#source img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     });
     const before = await previewState(page);
@@ -272,7 +297,7 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
     assert.ok(seen.urls.some((url) => url.includes('/contents/assets/Field%20Notes/image-1710000000000.png')));
 
     await page.evaluate(() => {
-      document.querySelector('#preview img.embed-image').dispatchEvent(
+      document.querySelector('#source img.embed-image').dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true }),
       );
     });
@@ -282,7 +307,7 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
       return Boolean(photo && photo.complete && photo.naturalWidth > 0);
     });
     const open = await page.evaluate(() => {
-      const img = document.querySelector('#preview img.embed-image');
+      const img = document.querySelector('#source img.embed-image');
       const photo = document.querySelector('.image-viewer-photo');
       const style = getComputedStyle(img);
       const canvas = document.createElement('canvas');
@@ -322,10 +347,9 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
     assertPainted(closed, 'closed');
     assert.equal(closed.src, before.src);
 
-    await page.locator('#mode-source').click();
-    await page.locator('#mode-preview').click();
+    await redrawImage(page);
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
+      const img = document.querySelector('#source img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     });
     const again = await previewState(page);
@@ -398,9 +422,9 @@ test('webkit fetches a bare filename from the attachment folder when the file li
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v29';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v31';
     });
-    await page.locator('#source').fill(NOTE);
+    await page.locator('#source .cm-content').fill(NOTE);
     await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
     await page.evaluate(async () => {
       const db = await new Promise((resolve, reject) => {
@@ -421,9 +445,9 @@ test('webkit fetches a bare filename from the attachment folder when the file li
       });
       db.close();
     });
-    await page.locator('#mode-preview').click();
+    await redrawImage(page);
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
+      const img = document.querySelector('#source img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     });
     const painted = await previewState(page);
@@ -437,7 +461,7 @@ test('webkit fetches a bare filename from the attachment folder when the file li
     if (shots) await page.screenshot({ path: join(shots, 'v18-nested-inline.png') });
 
     await page.evaluate(() => {
-      document.querySelector('#preview img.embed-image').dispatchEvent(
+      document.querySelector('#source img.embed-image').dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true }),
       );
     });
@@ -563,13 +587,13 @@ test('webkit keeps the task image through a cold v15 to v16 to v20 update', { ti
     assert.equal(on16.tasks, 3);
     if (on15.natural > 0) assert.ok(on16.natural > 0, 'v16 dropped a painted image');
 
-    await advance(appDir, 'core-sample-shell-v29');
+    await advance(appDir, 'core-sample-shell-v31');
     await page.waitForFunction(() => {
-      const img = document.querySelector('#preview img.embed-image');
+      const img = document.querySelector('#source img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     }, null, { timeout: 20000 });
     const on17 = await previewState(page);
-    assert.equal(on17.build, 'core-sample-shell-v29');
+    assert.equal(on17.build, 'core-sample-shell-v31');
     assertPainted(on17, 'v18');
 
     const cached = await page.evaluate(async () => {
@@ -597,9 +621,9 @@ test('webkit keeps the task image through a cold v15 to v16 to v20 update', { ti
     if (cached.some((row) => row.blob && row.size > 0)) {
       await page.evaluate(() => localStorage.setItem('core-sample-offline', '1'));
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await ready('core-sample-shell-v29');
+      await ready('core-sample-shell-v31');
       await page.waitForFunction(() => {
-        const img = document.querySelector('#preview img.embed-image');
+        const img = document.querySelector('#source img.embed-image');
         return Boolean(img && img.complete && img.naturalWidth > 0);
       });
       const offline = await previewState(page);

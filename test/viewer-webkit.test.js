@@ -136,15 +136,15 @@ test('webkit photo viewer pinches, pans, dismisses, and does not zoom the page',
       const source = document.getElementById('source');
       return status.includes('Saved') && source && !source.hidden;
     });
-    await page.locator('#source').fill(`![red](${red})\n\n![blue](${blue})`);
+    await page.locator('#source .cm-content').fill(`![red](${red})\n\n![blue](${blue})`);
     await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
-    await page.locator('#mode-preview').click();
+    await page.evaluate(() => document.querySelector('#source .cm-content').blur());
     await page.waitForFunction(() => {
-      const images = [...document.querySelectorAll('#preview img.embed-image')];
+      const images = [...document.querySelectorAll('#source img.embed-image')];
       return images.length === 2 && images.every((img) => img.complete && img.naturalWidth > 0);
     });
     const beforeScroll = await page.evaluate(() => {
-      const preview = document.getElementById('preview');
+      const preview = document.querySelector('#source .cm-scroller');
       const img = preview.querySelector('img.embed-image');
       const max = Math.max(0, preview.scrollHeight - preview.clientHeight);
       const besideThumb = Math.max(0, img.offsetTop - 48);
@@ -153,7 +153,7 @@ test('webkit photo viewer pinches, pans, dismisses, and does not zoom the page',
     });
     assert.ok(beforeScroll.top > 40, JSON.stringify(beforeScroll));
     await page.evaluate(() => {
-      document.querySelector('#preview img.embed-image').dispatchEvent(
+      document.querySelector('#source img.embed-image').dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true }),
       );
     });
@@ -174,7 +174,7 @@ test('webkit photo viewer pinches, pans, dismisses, and does not zoom the page',
         transform: photo.style.transform,
         opacity: document.querySelector('.image-viewer-backdrop').style.opacity,
         scale: window.visualViewport.scale,
-        scroll: document.getElementById('preview').scrollTop,
+        scroll: document.querySelector('#source .cm-scroller').scrollTop,
       };
     });
     assert.equal(opened.role, 'dialog');
@@ -262,14 +262,14 @@ test('webkit photo viewer pinches, pans, dismisses, and does not zoom the page',
     await page.waitForFunction(() => document.getElementById('image-viewer').hidden);
     const closed = await page.evaluate(() => ({
       scale: window.visualViewport.scale,
-      scroll: document.getElementById('preview').scrollTop,
+      scroll: document.querySelector('#source .cm-scroller').scrollTop,
       focus: document.activeElement?.className || '',
     }));
     assert.equal(closed.scale, 1);
     assert.equal(closed.scroll, beforeScroll.top);
     assert.match(closed.focus, /embed-image/);
 
-    await page.locator('#preview img.embed-image').first().tap();
+    await page.locator('#source img.embed-image').first().tap();
     await page.waitForFunction(() => document.getElementById('image-viewer').dataset.state === 'open');
     const width = center.x * 2;
     await gesture(page, [

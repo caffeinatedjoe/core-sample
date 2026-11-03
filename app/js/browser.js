@@ -1,4 +1,4 @@
-import { noteSnippet, noteTitle } from './notes.js';
+import { noteTitle } from './notes.js';
 import { ancestorFolders, liveNotes, parentPath } from './organize.js';
 import { isIgnoredPath } from './vault-paths.js';
 
@@ -41,14 +41,18 @@ function appendTree(rows, files, folders, open, dir, depth, currentPath) {
       title: noteTitle(file),
       depth,
       current: file.path === currentPath,
-      detail: noteSnippet(file),
     });
   }
 }
 
-export function snippetAround(content, query) {
+function folded(text, matchCase) {
+  const value = String(text ?? '');
+  return matchCase ? value : value.toLowerCase();
+}
+
+export function snippetAround(content, query, { matchCase = false } = {}) {
   const hay = String(content ?? '');
-  const at = hay.toLowerCase().indexOf(String(query).toLowerCase());
+  const at = folded(hay, matchCase).indexOf(folded(query, matchCase));
   if (at < 0) return '';
   const start = Math.max(0, at - 20);
   const end = Math.min(hay.length, at + query.length + 28);
@@ -56,21 +60,21 @@ export function snippetAround(content, query) {
   return `${start > 0 ? '…' : ''}${slice}${end < hay.length ? '…' : ''}`;
 }
 
-export function searchNotes(files, query) {
-  const q = String(query ?? '').trim().toLowerCase();
+export function searchNotes(files, query, { matchCase = false, content = true } = {}) {
+  const q = folded(String(query ?? '').trim(), matchCase);
   if (!q) return [];
   const hits = [];
   for (const file of liveNotes(files)) {
     const title = noteTitle(file);
-    const nameHit = title.toLowerCase().includes(q) || file.path.toLowerCase().includes(q);
+    const nameHit = folded(title, matchCase).includes(q) || folded(file.path, matchCase).includes(q);
     if (nameHit) {
       hits.push({ path: file.path, title, kind: 'name', snippet: '' });
-    } else if (String(file.content ?? '').toLowerCase().includes(q)) {
+    } else if (content && folded(file.content, matchCase).includes(q)) {
       hits.push({
         path: file.path,
         title,
         kind: 'content',
-        snippet: snippetAround(file.content, q),
+        snippet: snippetAround(file.content, q, { matchCase }),
       });
     }
     if (hits.length >= SEARCH_LIMIT) break;
@@ -94,18 +98,51 @@ export function moveTargets(files, folders, from, isFolder) {
   return [...targets].sort(byName);
 }
 
-export function listBrowser({ files, folders, expanded, recent, query, currentPath }) {
+export const NO_MATCHES = 'No matches found.';
+
+function isPhoneOnly(file) {
+  if (!file || file.trashedAt || isIgnoredPath(file.path)) return true;
+  if (file.conflictCopy || file.backup || file.localOnly === true || file.origin === 'app') return true;
+  return / \((?:conflict|backup) \d{4}-\d{2}-\d{2} \d{4}(?:-\d+)?\)\.md$/i.test(file.path);
+}
+
+// What Obsidian shows under the vault name: every non-dot file on GitHub
+// (notes and attachments) and the folders that hold them. Local-only Welcome,
+// conflict copies and backup copies are left out. `vaultPaths` is the saved
+// GitHub tree when we have it.
+export function vaultSummary(files, folders, vaultPaths) {
+  const paths = Array.isArray(vaultPaths)
+    ? vaultPaths.filter((path) => path && !isIgnoredPath(path))
+    : (files || []).filter((file) => !isPhoneOnly(file)).map((file) => file.path);
+  const dirs = new Set();
+  for (const path of paths) {
+    for (const folder of ancestorFolders(path)) dirs.add(folder);
+  }
+  if (!Array.isArray(vaultPaths)) {
+    for (const folder of folders || []) {
+      if (folder && !isIgnoredPath(folder)) dirs.add(folder);
+    }
+  }
+  const notes = paths.length;
+  const count = dirs.size;
+  return {
+    files: notes,
+    folders: count,
+    text: `${notes} ${notes === 1 ? 'file' : 'files'}, ${count} ${count === 1 ? 'folder' : 'folders'}`,
+  };
+}
+
+export function listBrowser({ files, folders, expanded, recent, query, currentPath, matchCase = false, searchContent = true }) {
   const q = String(query ?? '').trim();
   if (q) {
-    const hits = searchNotes(files, q);
-    if (!hits.length) return [{ type: 'empty', text: 'No matching notes' }];
+    const hits = searchNotes(files, q, { matchCase, content: searchContent });
+    if (!hits.length) return [{ type: 'empty', text: NO_MATCHES }];
     return hits.map((hit) => ({
       type: 'note',
       path: hit.path,
       title: hit.title,
       depth: 0,
       current: hit.path === currentPath,
-      detail: hit.kind === 'content' ? hit.snippet : noteSnippet(files.find((file) => file.path === hit.path)),
     }));
   }
 
@@ -122,7 +159,6 @@ export function listBrowser({ files, folders, expanded, recent, query, currentPa
         title: noteTitle(file),
         depth: 0,
         current: path === currentPath,
-        detail: noteSnippet(file),
         recent: true,
       });
     }

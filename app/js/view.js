@@ -1,6 +1,4 @@
-import { renderMarkdown } from './markdown.js';
-import { toggleChecklist } from './checklist.js';
-import { commitFiles, deleteOps, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, setMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -10,8 +8,7 @@ import {
   pickCurrent,
   planWikilink,
 } from './notes.js';
-import { planPreviewClick } from './preview-tap.js';
-import { listBrowser, moveTargets, rememberRecent } from './browser.js';
+import { listBrowser, moveTargets, rememberRecent, vaultSummary } from './browser.js';
 import { buildBackup, mergeBackup, parseBackup } from './backup.js';
 import {
   ancestorFolders,
@@ -32,41 +29,81 @@ import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
-import { createAutoSync, loadConflictRemote } from './github-sync.js';
+import { createAutoSync, loadConflictRemote, syncAlert } from './github-sync.js';
+import { mountDrawer } from './drawer.js';
+import { LONG_PRESS, SLOP } from './drawer-gesture.js';
+import { basename } from './embeds.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
+import { createLiveEditor } from './live-editor.js';
+import { headingOffset } from './live-rules.js';
 
 const SAVE_DELAY = 400;
 
-export function mountApp(doc, db) {
-  const source = doc.getElementById('source');
-  const preview = doc.getElementById('preview');
+// `createEditor` is for tests that run without a real DOM.
+export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
+  const host = doc.getElementById('source');
   const title = doc.getElementById('note-title');
   const status = doc.getElementById('save-status');
-  const sheet = doc.getElementById('notes-sheet');
   const list = doc.getElementById('notes-list');
   const form = doc.getElementById('new-note-form');
   const nameInput = doc.getElementById('new-note-name');
   const formError = doc.getElementById('new-note-error');
-  const modeSource = doc.getElementById('mode-source');
-  const modePreview = doc.getElementById('mode-preview');
   const search = doc.getElementById('notes-search');
+  const searchCase = doc.getElementById('search-case');
+  const searchCancel = doc.getElementById('search-cancel');
+  const searchOptions = doc.getElementById('search-options');
+  const searchOptionsPanel = doc.getElementById('search-options-panel');
+  const searchContent = doc.getElementById('search-content');
+  const drawerPanel = list?.closest?.('.drawer-panel') || doc.querySelector?.('.drawer-panel');
   const panelBox = doc.getElementById('action-panel');
   const backupFile = doc.getElementById('backup-file');
+  const backupBox = doc.getElementById('backup-panel');
+  const backupStatus = doc.getElementById('backup-status');
+  const vaultName = doc.getElementById('vault-name');
+  const vaultCount = doc.getElementById('vault-count');
 
   let files = [];
   let folders = [];
   let recent = [];
   let expanded = new Set();
   let query = '';
+  let searching = false;
+  let vaultPaths = null;
+  let matchCase = false;
   let panel = null;
+  let backupStep = null;
   let current = null;
-  let mode = 'source';
   let erasing = false;
   let holding = false;
+  let booting = true;
 
   let sync = null;
+  let syncConflicts = false;
   const syncStatus = doc.getElementById('sync-status');
+
+  // The note screen shows the status only when it needs a tap; Settings
+  // always shows it, with the detail and Retry.
+  function paintSync(text, state = {}) {
+    const alert = syncAlert(state);
+    syncConflicts = alert === 'conflict' || alert === 'copies';
+    if (syncStatus) {
+      syncStatus.textContent = text;
+      syncStatus.hidden = !alert;
+      syncStatus.setAttribute('aria-disabled', alert ? 'false' : 'true');
+    }
+    const line = doc.getElementById('settings-sync-status');
+    if (line) line.textContent = text || 'Not connected to GitHub';
+    const detail = doc.getElementById('settings-sync-detail');
+    if (detail) {
+      detail.textContent = state.detail || '';
+      detail.hidden = !state.detail;
+    }
+    const retry = doc.getElementById('sync-retry');
+    if (retry) retry.hidden = !state.configured;
+    const conflicts = doc.getElementById('sync-conflicts');
+    if (conflicts) conflicts.hidden = !syncConflicts;
+  }
   const saver = createDebouncedSaver({
     delay: SAVE_DELAY,
     write: async (note) => {
@@ -120,31 +157,35 @@ export function mountApp(doc, db) {
     else if (state === 'missing') status.textContent = `No note named ${detail}`;
     else if (state === 'ambiguous') status.textContent = `More than one note named ${detail}`;
     else if (state === 'invalid') status.textContent = detail;
-  }
-
-  function applyMode(next, { persist = true } = {}) {
-    mode = next === 'preview' ? 'preview' : 'source';
-    source.hidden = mode !== 'source';
-    preview.hidden = mode !== 'preview';
-    modeSource.setAttribute('aria-pressed', mode === 'source' ? 'true' : 'false');
-    modePreview.setAttribute('aria-pressed', mode === 'preview' ? 'true' : 'false');
-    if (mode === 'preview') paintPreview();
-    if (persist) setMeta(db, 'editorMode', mode).catch(() => {});
+    // Routine saves stay readable to VoiceOver but off the clean note screen.
+    status.classList?.toggle?.('is-alert', state !== 'saving' && state !== 'saved');
   }
 
   let embedTicket = 0;
   const embedUrls = new Set();
   const embedBlobs = new WeakMap();
+  const embedCache = new Map();
   const viewerUrls = new Set();
   const photos = createImageViewer(doc, doc.getElementById('image-viewer'), {
     onClose() {
       for (const url of viewerUrls) {
-        const shown = [...preview.querySelectorAll('img')].some((img) => img.getAttribute('src') === url);
+        const shown = source.embedNodes().some((node) => node.querySelector('img')?.getAttribute('src') === url);
         if (!shown) URL.revokeObjectURL(url);
       }
       viewerUrls.clear();
     },
   });
+
+  const source = createEditor(host, {
+    onChange: rememberEdit,
+    onBlur: flushNow,
+    onToggle: toggledTask,
+    onTap: tapped,
+    hydrate: hydrateEmbed,
+  });
+  Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
+  // Text typed before the last note loads would be replaced by it.
+  source.readOnly = true;
 
   function revokeEmbed(url) {
     if (!url || !embedUrls.has(url)) return;
@@ -154,6 +195,7 @@ export function mountApp(doc, db) {
   }
 
   function revokeEmbeds() {
+    embedCache.clear();
     for (const url of [...embedUrls]) revokeEmbed(url);
   }
 
@@ -161,13 +203,16 @@ export function mountApp(doc, db) {
     photos.close({ animate: false, restoreFocus: false });
   }
 
-  async function loadEmbedSrc(embed) {
-    let settings = { token: '', repo: '', branch: '', root: '' };
+  async function embedSettings() {
     try {
-      settings = await loadGithubSettings(db);
+      return await loadGithubSettings(db);
     } catch {
-      settings = { token: '', repo: '', branch: '', root: '' };
+      return { token: '', repo: '', branch: '', root: '' };
     }
+  }
+
+  async function loadEmbedSrc(embed) {
+    const settings = await embedSettings();
     const result = await loadEmbedBlob(db, {
       link: embed,
       notePath: current && current.path ? current.path : '',
@@ -189,42 +234,40 @@ export function mountApp(doc, db) {
   }
 
   function openViewer(target) {
+    const drawn = new Map();
+    for (const node of source.embedNodes()) {
+      const pos = source.posOf(node);
+      if (pos >= 0) drawn.set(pos, node);
+    }
     const slides = [];
     let start = 0;
-    for (const node of preview.querySelectorAll('.embed')) {
-      const img = node.querySelector('img.embed-image');
-      const embed = node.dataset.embed || '';
-      const src = img?.getAttribute('src') || '';
+    for (const item of source.images()) {
+      const { image } = item;
+      if (image.kind === 'label') continue;
+      const node = drawn.get(item.from) || drawn.get(item.to) || null;
+      const img = node?.querySelector('img.embed-image') || null;
+      const src = img?.getAttribute('src') || (image.kind === 'remote' ? image.src : '');
       const usable = /^(blob:|https:|data:image\/)/i.test(src);
+      const embed = image.kind === 'embed' ? image.embed : '';
       if (!usable && !embed) continue;
-      if (img && (img === target || img.contains(target))) start = slides.length;
+      if (node && (node === target || node.contains(target))) start = slides.length;
       slides.push({
         src: usable ? src : '',
         blob: img ? embedBlobs.get(img) || null : null,
-        alt: img?.getAttribute('alt') || node.querySelector('.embed-fallback')?.textContent || '',
+        alt: img?.getAttribute('alt') || node?.querySelector('.embed-fallback')?.textContent || image.alt || basename(image.name || ''),
         thumb: img || node,
         load: usable ? null : () => loadEmbedSrc(embed),
       });
     }
     if (!slides.length) return;
-    photos.open({ slides, index: start, scrollEl: preview });
-  }
-
-  function paintPreview() {
-    const ticket = ++embedTicket;
-    closeViewer();
-    revokeEmbeds();
-    const scroll = preview.scrollTop;
-    preview.innerHTML = renderMarkdown(source.value);
-    preview.scrollTop = scroll;
-    bindImageErrors(preview);
-    if (mode === 'preview') hydrateEmbeds(ticket);
+    photos.open({ slides, index: start, scrollEl: source.scrollEl });
   }
 
   function bindImageErrors(root) {
     for (const img of root.querySelectorAll('img.embed-image')) {
       if (img.dataset.embedBound === '1') continue;
       img.dataset.embedBound = '1';
+      img.addEventListener('load', () => source.measure());
       img.addEventListener('error', () => {
         const src = img.getAttribute('src');
         const frame = doc.defaultView?.requestAnimationFrame?.bind(doc.defaultView) || ((fn) => fn());
@@ -244,87 +287,23 @@ export function mountApp(doc, db) {
     fallback.className = 'embed-fallback';
     fallback.textContent = reason || 'Not found in vault';
     node.append(fallback);
+    source.measure();
   }
 
   function replaceBrokenImage(img) {
-    const host = img.closest('.embed');
-    if (!host || !img.isConnected) return;
+    const node = img.closest('.embed');
+    if (!node || !img.isConnected) return;
     const src = img.getAttribute('src') || '';
+    if (node.dataset.embed) embedCache.delete(node.dataset.embed);
     if (src) revokeEmbed(src);
-    showEmbedReason(host, "Couldn't display");
+    showEmbedReason(node, "Couldn't display");
   }
 
-  async function hydrateEmbeds(ticket) {
-    const nodes = [...preview.querySelectorAll('[data-embed]')];
-    if (!nodes.length) return;
-    let settings = { token: '', repo: '', branch: '', root: '' };
+  async function fetchEmbed(link, fresh) {
+    const settings = await embedSettings();
     try {
-      settings = await loadGithubSettings(db);
-    } catch {
-      settings = { token: '', repo: '', branch: '', root: '' };
-    }
-    if (ticket !== embedTicket) return;
-    if (ticket !== embedTicket) return;
-    const notePath = current && current.path ? current.path : '';
-    for (const node of nodes) {
-      if (ticket !== embedTicket || !node.isConnected) return;
-      const link = node.dataset.embed || '';
-      let result;
-      try {
-        result = await loadEmbedBlob(db, {
-          link,
-          notePath,
-          repo: settings.repo,
-          branch: settings.branch,
-          root: settings.root,
-          token: settings.token,
-          fetchImpl: globalThis.fetch.bind(globalThis),
-          offline: browserOffline(),
-        });
-      } catch {
-        showEmbedReason(node, browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)");
-        continue;
-      }
-      if (ticket !== embedTicket || !node.isConnected) return;
-      if (result.status !== 'ready') {
-        showEmbedReason(node, result.reason);
-        continue;
-      }
-      const made = embedImage(result.blob, {
-        createObjectURL: URL.createObjectURL.bind(URL),
-        createElement: (tag) => doc.createElement(tag),
-        width: node.dataset.width || '',
-        height: node.dataset.height || '',
-        name: result.name,
-        type: result.type,
-      });
-      if (ticket !== embedTicket) {
-        URL.revokeObjectURL(made.url);
-        return;
-      }
-      embedUrls.add(made.url);
-      embedBlobs.set(made.img, result.blob);
-      made.img.dataset.imagePath = result.path || '';
-      made.img.dataset.imageRepo = settings.repo || '';
-      node.replaceChildren(made.img);
-      bindImageErrors(node);
-    }
-  }
-
-  async function retryEmbed(node) {
-    if (!node || !node.isConnected) return;
-    const ticket = embedTicket;
-    let settings = { token: '', repo: '', branch: '', root: '' };
-    try {
-      settings = await loadGithubSettings(db);
-    } catch {
-      settings = { token: '', repo: '', branch: '', root: '' };
-    }
-    if (ticket !== embedTicket || !node.isConnected) return;
-    let result;
-    try {
-      result = await loadEmbedBlob(db, {
-        link: node.dataset.embed || '',
+      const result = await loadEmbedBlob(db, {
+        link,
         notePath: current && current.path ? current.path : '',
         repo: settings.repo,
         branch: settings.branch,
@@ -332,58 +311,100 @@ export function mountApp(doc, db) {
         token: settings.token,
         fetchImpl: globalThis.fetch.bind(globalThis),
         offline: browserOffline(),
-        fresh: true,
+        ...(fresh ? { fresh: true } : {}),
       });
+      return { ...result, repo: settings.repo || '', url: '' };
     } catch {
-      showEmbedReason(node, browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)");
+      return { status: 'error', reason: browserOffline() ? OFFLINE_IMAGE_REASON : "Couldn't reach GitHub (offline)" };
+    }
+  }
+
+  // One load per image link per open note. Widgets are redrawn as the caret
+  // moves, so they share the blob and its object URL instead of refetching.
+  // A miss is not kept: the next draw asks again, after a sign-in or a pull.
+  function cachedEmbed(link, fresh = false) {
+    if (!fresh && embedCache.has(link)) return embedCache.get(link);
+    const entry = fetchEmbed(link, fresh).then((result) => {
+      if (result.status !== 'ready' && embedCache.get(link) === entry) embedCache.delete(link);
+      return result;
+    });
+    embedCache.set(link, entry);
+    return entry;
+  }
+
+  function fillEmbed(node, entry) {
+    if (entry.status !== 'ready' || !entry.blob) {
+      showEmbedReason(node, entry.reason);
       return;
     }
-    if (ticket !== embedTicket || !node.isConnected) return;
-    if (result.status !== 'ready') {
-      showEmbedReason(node, result.reason);
-      return;
-    }
-    const made = embedImage(result.blob, {
-      createObjectURL: URL.createObjectURL.bind(URL),
+    const made = embedImage(entry.blob, {
+      createObjectURL: (blob) => {
+        if (!entry.url) {
+          entry.url = URL.createObjectURL(blob);
+          embedUrls.add(entry.url);
+        }
+        return entry.url;
+      },
       createElement: (tag) => doc.createElement(tag),
       width: node.dataset.width || '',
       height: node.dataset.height || '',
-      name: result.name,
-      type: result.type,
+      name: entry.name,
+      type: entry.type,
     });
-    embedUrls.add(made.url);
-    embedBlobs.set(made.img, result.blob);
-    made.img.dataset.imagePath = result.path || '';
-    made.img.dataset.imageRepo = settings.repo || '';
+    embedBlobs.set(made.img, entry.blob);
+    made.img.dataset.imagePath = entry.path || '';
+    made.img.dataset.imageRepo = entry.repo || '';
     node.replaceChildren(made.img);
     bindImageErrors(node);
   }
 
+  async function hydrateEmbed(node, fresh = false) {
+    const link = node.dataset.embed || '';
+    if (!link) return;
+    const ticket = embedTicket;
+    const entry = await cachedEmbed(link, fresh);
+    if (ticket !== embedTicket) return;
+    fillEmbed(node, entry);
+  }
+
+  function refreshEmbeds() {
+    for (const node of source.embedNodes()) {
+      if (node.dataset.embed && !node.querySelector('img')) hydrateEmbed(node);
+    }
+  }
+
+  function retryEmbed(node) {
+    if (!node || !node.isConnected) return;
+    hydrateEmbed(node, true);
+  }
+
   function showNote(note, { heading = '' } = {}) {
+    const same = current && current.path === note.path;
     current = note;
-    source.value = note.content;
+    if (!same) {
+      embedTicket += 1;
+      closeViewer();
+      revokeEmbeds();
+      source.load(note.content);
+    } else {
+      source.value = note.content;
+    }
     title.textContent = noteTitle(note);
-    paintPreview();
-    if (heading && mode === 'preview') scrollToHeading(heading);
+    if (heading) scrollToHeading(heading);
   }
 
   function scrollToHeading(heading) {
-    const want = heading.trim().toLowerCase();
-    for (const node of preview.querySelectorAll('[data-heading]')) {
-      if ((node.dataset.heading || '').trim().toLowerCase() === want) {
-        node.scrollIntoView({ block: 'start' });
-        return;
-      }
-    }
+    const at = headingOffset(source.value, heading);
+    if (at >= 0) source.scrollToPos(at);
   }
 
   function clearEditor() {
     current = null;
-    source.value = '';
-    title.textContent = '';
+    embedTicket += 1;
     closeViewer();
     revokeEmbeds();
-    preview.replaceChildren();
+    source.load('');
+    title.textContent = '';
   }
 
   async function flushEditing() {
@@ -417,10 +438,7 @@ export function mountApp(doc, db) {
       const fresh = files.find((file) => file.path === current.path && !file.trashedAt);
       if (fresh) {
         current = fresh;
-        if (source.value !== fresh.content) {
-          source.value = fresh.content;
-          if (mode === 'preview') paintPreview();
-        }
+        if (source.value !== fresh.content) source.value = fresh.content;
         title.textContent = noteTitle(fresh);
         return;
       }
@@ -493,17 +511,56 @@ export function mountApp(doc, db) {
     closeSheet();
   }
 
+  function paintSearchMode() {
+    drawerPanel?.classList?.toggle?.('is-searching', searching);
+    if (searchCancel) searchCancel.hidden = !searching;
+    if (!searching) {
+      query = '';
+      if (search) search.value = '';
+      if (searchOptionsPanel) searchOptionsPanel.hidden = true;
+      searchOptions?.setAttribute?.('aria-expanded', 'false');
+    }
+  }
+
+  function setSearching(on) {
+    searching = Boolean(on);
+    paintSearchMode();
+    renderList();
+  }
+
   function renderList() {
-    const rows = listBrowser({
-      files,
-      folders,
-      expanded: [...expanded],
-      recent,
-      query,
-      currentPath: current ? current.path : '',
-    });
-    list.replaceChildren();
-    for (const row of rows) list.append(renderRow(row));
+    const q = searching ? query : '';
+    if (searching && !String(q || '').trim()) {
+      list.replaceChildren();
+    } else {
+      const rows = listBrowser({
+        files,
+        folders,
+        expanded: [...expanded],
+        recent,
+        query: q,
+        currentPath: current ? current.path : '',
+        matchCase,
+        searchContent: searchContent ? searchContent.checked !== false : true,
+      });
+      list.replaceChildren();
+      for (const row of rows) list.append(renderRow(row));
+    }
+    if (vaultCount) vaultCount.textContent = vaultSummary(files, folders, vaultPaths).text;
+  }
+
+  async function paintVault() {
+    if (vaultName) {
+      const settings = await embedSettings();
+      vaultName.textContent = (settings.repo || '').split('/').pop() || 'Core Sample';
+    }
+    try {
+      const index = await getMeta(db, 'githubVaultIndex');
+      vaultPaths = index && Array.isArray(index.paths) ? index.paths : null;
+    } catch {
+      vaultPaths = null;
+    }
+    if (vaultCount) vaultCount.textContent = vaultSummary(files, folders, vaultPaths).text;
   }
 
   function renderRow(row) {
@@ -544,15 +601,61 @@ export function mountApp(doc, db) {
       const name = doc.createElement('span');
       name.className = 'note-name';
       name.textContent = row.title;
-      const detail = doc.createElement('span');
-      detail.className = 'note-path';
-      detail.textContent = row.detail || row.path;
-      openBtn.append(name, detail);
+      openBtn.append(name);
+      if (row.detail) {
+        const detail = doc.createElement('span');
+        detail.className = 'note-path';
+        detail.textContent = row.detail;
+        openBtn.append(detail);
+      }
       openBtn.addEventListener('click', () => openPath(row.path));
     }
     item.className = 'browser-row';
-    item.append(openBtn, textButton('Edit', () => openItem(row.path, row.type === 'folder' ? 'folder' : 'note')));
+    item.append(openBtn);
+    bindRowMenu(item, row.path, row.type === 'folder' ? 'folder' : 'note');
     return item;
+  }
+
+  function bindRowMenu(item, path, kind) {
+    const view = doc.defaultView || globalThis;
+    let timer = 0;
+    let start = null;
+    let opened = false;
+
+    const cancelHold = () => {
+      if (timer) view.clearTimeout?.(timer);
+      timer = 0;
+      start = null;
+    };
+
+    item.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      opened = true;
+      openItem(path, kind);
+    });
+    item.addEventListener('touchstart', (event) => {
+      const touch = event.changedTouches && event.changedTouches[0];
+      if (!touch) return;
+      start = { x: touch.clientX, y: touch.clientY };
+      opened = false;
+      timer = view.setTimeout?.(() => {
+        opened = true;
+        openItem(path, kind);
+      }, LONG_PRESS);
+    }, { passive: true });
+    item.addEventListener('touchmove', (event) => {
+      const touch = event.changedTouches && event.changedTouches[0];
+      if (!start || !touch) return;
+      if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > SLOP) cancelHold();
+    }, { passive: true });
+    item.addEventListener('touchend', cancelHold);
+    item.addEventListener('touchcancel', cancelHold);
+    item.addEventListener('click', (event) => {
+      if (!opened) return;
+      event.preventDefault();
+      event.stopPropagation();
+      opened = false;
+    }, true);
   }
 
   function textButton(label, onClick, className = 'row-more') {
@@ -583,9 +686,19 @@ export function mountApp(doc, db) {
     else if (panel.type === 'confirm-empty') renderEmptyPanel();
     else if (panel.type === 'new-folder') renderFolderPanel();
     else if (panel.type === 'new-note') renderNestedNotePanel();
-    else if (panel.type === 'backup') renderBackupPanel();
-    else if (panel.type === 'import') renderImportPanel();
-    else if (panel.type === 'confirm-replace') renderReplacePanel();
+  }
+
+  function renderBackup() {
+    if (!backupBox) return;
+    backupBox.replaceChildren();
+    backupBox.hidden = !backupStep;
+    if (backupStep?.type === 'import') renderImportPanel();
+    else if (backupStep?.type === 'confirm-replace') renderReplacePanel();
+  }
+
+  function closeBackup() {
+    backupStep = null;
+    renderBackup();
   }
 
   function closePanel() {
@@ -665,36 +778,29 @@ export function mountApp(doc, db) {
     input.focus();
   }
 
-  function renderBackupPanel() {
-    const message = doc.createElement('p');
-    message.textContent = 'A backup is a file of the notes on this device.';
-    panelBox.append(
-      message,
-      panelButton('Export backup', exportBackup),
-      panelButton('Import backup', () => backupFile.click()),
-      panelButton('Cancel', closePanel),
-    );
-  }
-
   function renderImportPanel() {
-    const count = panel.backup.files.length;
+    const count = backupStep.backup.files.length;
     const message = doc.createElement('p');
     message.textContent = `This backup has ${count} ${count === 1 ? 'note' : 'notes'}.`;
-    panelBox.append(
+    backupBox.append(
       message,
-      panelButton('Add to this device', () => addBackup(panel.backup)),
+      panelButton('Add to this device', () => addBackup(backupStep.backup)),
       panelButton('Replace notes on this device', () => {
-        panel = { type: 'confirm-replace', backup: panel.backup };
-        renderPanel();
+        backupStep = { type: 'confirm-replace', backup: backupStep.backup };
+        renderBackup();
       }),
-      panelButton('Cancel', closePanel),
+      panelButton('Cancel', closeBackup),
     );
   }
 
   function renderReplacePanel() {
     const message = doc.createElement('p');
     message.textContent = 'Replace the notes on this device with this backup? Notes that are not in the backup will be removed. Export first if you still need them.';
-    panelBox.append(message, panelButton('Replace', () => replaceBackup(panel.backup), 'danger'), panelButton('Cancel', closePanel));
+    backupBox.append(message, panelButton('Replace', () => replaceBackup(backupStep.backup), 'danger'), panelButton('Cancel', closeBackup));
+  }
+
+  function backupMessage(text) {
+    if (backupStatus) backupStatus.textContent = text;
   }
 
   function namedField(value, label) {
@@ -888,18 +994,17 @@ export function mountApp(doc, db) {
     showNote(note);
     closeSheet();
     sync?.noteEdited(note);
-    if (mode === 'source') source.focus();
+    source.focus();
   }
 
   async function exportBackup() {
     if (!(await flushEditing())) {
-      formError.textContent = "Couldn't save the open note before export.";
+      backupMessage("Couldn't save the open note before export.");
       return;
     }
     const payload = buildBackup(files, {
       folders,
       lastOpened: current ? current.path : null,
-      editorMode: mode,
       recent,
     });
     const json = JSON.stringify(payload);
@@ -932,19 +1037,19 @@ export function mountApp(doc, db) {
       files = merged.files;
       folders = merged.folders;
       await setMeta(db, 'folders', folders);
-      formError.textContent = merged.keptAside.length
+      backupMessage(merged.keptAside.length
         ? `Added the backup. ${merged.keptAside.length} notes were kept beside ones already here.`
-        : 'Added the backup.';
-      closePanel();
+        : 'Added the backup.');
+      closeBackup();
       renderList();
     } catch (error) {
-      formError.textContent = error.message;
+      backupMessage(error.message);
     }
   }
 
   async function replaceBackup(backup) {
     if (!(await flushEditing())) {
-      formError.textContent = "Couldn't save the open note.";
+      backupMessage("Couldn't save the open note.");
       return;
     }
     try {
@@ -960,28 +1065,43 @@ export function mountApp(doc, db) {
       await setMeta(db, 'recent', recent);
       await setMeta(db, 'expanded', []);
       if (backup.lastOpened) await setMeta(db, 'lastOpened', backup.lastOpened);
-      applyMode(backup.editorMode, { persist: true });
       const next = pickCurrent(live(), backup.lastOpened);
       if (next) showNote(next);
       else clearEditor();
-      formError.textContent = 'Replaced the notes on this device.';
-      closePanel();
+      backupMessage('Replaced the notes on this device.');
+      closeBackup();
       renderList();
     } catch (error) {
-      formError.textContent = error.message;
+      backupMessage(error.message);
     }
   }
 
-  function openSheet() {
-    formError.textContent = '';
-    renderList();
-    renderPanel();
-    sheet.hidden = false;
+  const drawer = mountDrawer(doc, {
+    beforeOpen() {
+      formError.textContent = '';
+      renderList();
+      renderPanel();
+      paintVault().catch(() => {});
+      // Opening the panel puts the keyboard away, as Obsidian does.
+      source.blur();
+    },
+    afterClose() {
+      closePanel();
+      if (form) form.hidden = true;
+      if (searching) setSearching(false);
+    },
+    blocked: () => booting || overlayOpen(),
+  });
+
+  function overlayOpen() {
+    return ['settings-sheet', 'conflict-sheet', 'image-viewer'].some((id) => {
+      const node = doc.getElementById(id);
+      return node && !node.hidden;
+    });
   }
 
   function closeSheet() {
-    sheet.hidden = true;
-    closePanel();
+    drawer.close();
   }
 
   function rememberEdit() {
@@ -995,50 +1115,67 @@ export function mountApp(doc, db) {
     saver.schedule(snapshot);
   }
 
-  source.addEventListener('input', rememberEdit);
-  source.addEventListener('blur', flushNow);
-  modeSource.addEventListener('click', () => applyMode('source'));
-  modePreview.addEventListener('click', () => {
-    if (current) current.content = source.value;
-    applyMode('preview');
+  search?.addEventListener('focus', () => {
+    if (!searching) setSearching(true);
   });
-  doc.getElementById('notes-button').addEventListener('click', openSheet);
-  doc.getElementById('notes-close').addEventListener('click', closeSheet);
-  sheet.addEventListener('click', (event) => {
-    if (event.target === sheet) closeSheet();
-  });
-  search.addEventListener('input', () => {
+  search?.addEventListener('input', () => {
     query = search.value;
+    if (!searching) {
+      searching = true;
+      paintSearchMode();
+    }
     renderList();
+  });
+  search?.addEventListener('blur', () => {
+    if (searching && !String(search.value || '').trim()) setSearching(false);
+  });
+  searchCancel?.addEventListener('click', () => {
+    setSearching(false);
+    search?.blur?.();
+  });
+  searchCase?.addEventListener('click', () => {
+    matchCase = !matchCase;
+    searchCase.setAttribute('aria-pressed', matchCase ? 'true' : 'false');
+    renderList();
+  });
+  searchOptions?.addEventListener('click', () => {
+    const open = searchOptionsPanel.hidden;
+    searchOptionsPanel.hidden = !open;
+    searchOptions.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  searchContent?.addEventListener('change', renderList);
+  doc.getElementById('new-note-button')?.addEventListener('click', () => {
+    formError.textContent = '';
+    closePanel();
+    form.hidden = !form.hidden;
+    if (!form.hidden) nameInput.focus();
   });
   doc.getElementById('new-folder-button').addEventListener('click', () => {
     panel = { type: 'new-folder', parent: '' };
     formError.textContent = '';
+    if (form) form.hidden = true;
     renderPanel();
   });
-  doc.getElementById('backup-button').addEventListener('click', () => {
-    panel = { type: 'backup' };
-    formError.textContent = '';
-    renderPanel();
-  });
-  const exportBackupButton = doc.getElementById('export-backup');
-  if (exportBackupButton) {
-    exportBackupButton.addEventListener('click', () => {
-      exportBackup().catch((error) => {
-        formError.textContent = error && error.message ? error.message : "Couldn't export the backup.";
-      });
+  doc.getElementById('export-backup')?.addEventListener('click', () => {
+    backupMessage('');
+    exportBackup().catch((error) => {
+      backupMessage(error && error.message ? error.message : "Couldn't export the backup.");
     });
-  }
+  });
+  doc.getElementById('import-backup')?.addEventListener('click', () => {
+    backupMessage('');
+    backupFile.click();
+  });
   backupFile.addEventListener('change', async () => {
     const chosen = backupFile.files && backupFile.files[0];
     backupFile.value = '';
     if (!chosen) return;
     try {
-      panel = { type: 'import', backup: parseBackup(await chosen.text()) };
-      formError.textContent = '';
-      renderPanel();
+      backupStep = { type: 'import', backup: parseBackup(await chosen.text()) };
+      backupMessage('');
+      renderBackup();
     } catch (error) {
-      formError.textContent = error.message;
+      backupMessage(error.message);
     }
   });
 
@@ -1098,43 +1235,32 @@ export function mountApp(doc, db) {
     closeSheet();
   }
 
-  preview.addEventListener('click', (event) => {
-    const plan = planPreviewClick(event.target);
-    if (plan.type === 'external' || plan.type === 'none') return;
-    if (plan.preventDefault) event.preventDefault();
+  function toggledTask() {
+    flushNow();
+  }
 
-    if (plan.type === 'task') {
-      if (holding) return;
-      const next = toggleChecklist(source.value, plan.index);
-      const selStart = source.selectionStart;
-      const selEnd = source.selectionEnd;
-      const sourceScroll = source.scrollTop;
-      const previewScroll = preview.scrollTop;
-      source.value = next;
-      source.selectionStart = selStart;
-      source.selectionEnd = selEnd;
-      source.scrollTop = sourceScroll;
-      if (current) {
-        if (next !== current.content) current.dirty = true;
-        current.content = next;
-        current.updatedAt = Date.now();
-        title.textContent = noteTitle(current);
-      }
-      paintPreview();
-      preview.scrollTop = previewScroll;
-      saver.schedule(snapshot);
-      saver.flush().catch(() => {});
+  function openExternal(href) {
+    const link = doc.createElement('a');
+    link.href = href;
+    link.rel = 'noopener';
+    doc.body.append(link);
+    link.click();
+    link.remove();
+  }
+
+  function tapped(plan, node) {
+    if (plan.type === 'external') {
+      openExternal(plan.href);
       return;
     }
 
     if (plan.type === 'image') {
-      openViewer(event.target);
+      openViewer(node);
       return;
     }
 
     if (plan.type === 'embed-retry') {
-      const node = event.target.closest?.('.embed');
-      if (node) retryEmbed(node);
+      retryEmbed(node.closest?.('.embed'));
       return;
     }
 
@@ -1159,7 +1285,7 @@ export function mountApp(doc, db) {
         linkNav = null;
       });
     }
-  });
+  }
 
   function flushNow() {
     if (erasing || !current) return;
@@ -1169,7 +1295,7 @@ export function mountApp(doc, db) {
 
   function holdEditor(held) {
     holding = Boolean(held);
-    source.readOnly = holding;
+    source.readOnly = holding || booting;
   }
 
   async function replaceFile(file) {
@@ -1229,6 +1355,7 @@ export function mountApp(doc, db) {
     syncOpen();
     renderList();
     startImagePrefetch(db);
+    refreshEmbeds();
     return { downloaded: writes.length, skipped: plan.skipped.length, empty: false };
   }
 
@@ -1265,7 +1392,6 @@ export function mountApp(doc, db) {
       current = file;
       source.value = file.content;
       title.textContent = noteTitle(current);
-      if (mode === 'preview') paintPreview();
     }
     renderList();
   }
@@ -1362,16 +1488,13 @@ export function mountApp(doc, db) {
     fetchImpl: globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined,
     offline: () => browserOffline(),
     beforeSync: () => saver.flush(),
-    onStatus(text, state = {}) {
-      if (!syncStatus) return;
-      syncStatus.textContent = text;
-      const open = state.conflict === true || Number(state.copies) > 0;
-      syncStatus.setAttribute('aria-disabled', open ? 'false' : 'true');
-      syncStatus.classList?.toggle?.('sync-status-conflict', open);
-    },
+    onStatus: paintSync,
     onApplied: applySyncedFiles,
     onRemoved: applyRemoved,
-    onPulled: () => startImagePrefetch(db),
+    onPulled: () => {
+      startImagePrefetch(db);
+      refreshEmbeds();
+    },
   });
 
   const conflictScreen = mountConflictScreen(doc, {
@@ -1389,7 +1512,12 @@ export function mountApp(doc, db) {
   });
   syncStatus?.addEventListener('click', () => {
     if (syncStatus.getAttribute('aria-disabled') === 'true') return;
-    conflictScreen.open();
+    if (syncConflicts) conflictScreen.open();
+    else github.open();
+  });
+  doc.getElementById('sync-conflicts')?.addEventListener('click', () => conflictScreen.open());
+  doc.getElementById('sync-retry')?.addEventListener('click', () => {
+    sync.runNow('manual').catch(() => {});
   });
 
   const github = mountGithub(doc, db, {
@@ -1401,6 +1529,7 @@ export function mountApp(doc, db) {
     applyDownload,
     eraseLocal,
     hold: holdEditor,
+    opened: () => drawer.close(),
   });
 
   function hideFlush() {
@@ -1413,7 +1542,10 @@ export function mountApp(doc, db) {
     else sync?.visible();
   });
   window.addEventListener('pagehide', hideFlush);
-  window.addEventListener('online', () => sync?.online());
+  window.addEventListener('online', () => {
+    refreshEmbeds();
+    sync?.online();
+  });
 
   return {
     flush: flushNow,
@@ -1426,13 +1558,15 @@ export function mountApp(doc, db) {
       if (!session.expanded && session.current) {
         for (const folder of ancestorFolders(session.current.path)) expanded.add(folder);
       }
-      applyMode(session.mode, { persist: false });
+      deleteMeta(db, 'editorMode').catch(() => {});
       if (session.current) {
         showNote(session.current);
         await setMeta(db, 'lastOpened', session.current.path);
         recent = rememberRecent(recent, session.current.path);
         await setMeta(db, 'recent', recent);
       }
+      booting = false;
+      holdEditor(holding);
       await github.refresh();
       github.resume();
       setStatus('saved');

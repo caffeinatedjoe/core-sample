@@ -5,10 +5,18 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "icons": "python3 scripts/render-icons.py"
+    "icons": "python3 scripts/render-icons.py",
+    "editor": "node scripts/build-editor.mjs"
   },
   "devDependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
+    "@lezer/common": "^1.5.5",
+    "@lezer/markdown": "^1.8.1",
     "@resvg/resvg-js": "^2.6.2",
+    "esbuild": "^0.28.2",
     "fake-indexeddb": "^6.2.5",
     "playwright": "^1.64.1"
   }

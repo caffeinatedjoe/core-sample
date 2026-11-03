@@ -7,6 +7,7 @@ import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
 import { rememberImage } from '../app/js/images.js';
 import { makeFile } from '../app/js/notes.js';
 import { mountApp } from '../app/js/view.js';
+import { fakeEditorFactory } from './helpers/fake-editor.js';
 
 const TOKEN = 'gho_testtokenvalue123456';
 const NOTE = 'Field Notes.md';
@@ -18,6 +19,7 @@ function matches(node, selector) {
   if (selector === 'img' || selector === 'img.embed-image' || selector === '.embed-image') {
     return node.tag === 'img' && (selector === 'img' || classes.includes('embed-image'));
   }
+  if (selector === '[data-live]') return Boolean(node.dataset.live);
   if (selector === '.embed' || selector === '.embed[data-embed]') {
     return classes.includes('embed') && (selector === '.embed' || Boolean(node.dataset.embed));
   }
@@ -99,36 +101,17 @@ function descendants(node, acc = []) {
 
 function page() {
   const ids = [
-    'source', 'preview', 'note-title', 'save-status', 'notes-sheet', 'notes-list',
-    'new-note-form', 'new-note-name', 'new-note-error', 'mode-source', 'mode-preview',
+    'source', 'note-title', 'save-status', 'notes-sheet', 'notes-list',
+    'new-note-form', 'new-note-name', 'new-note-error',
     'notes-search', 'action-panel', 'backup-file', 'notes-button', 'notes-close',
-    'new-folder-button', 'backup-button',
+    'new-folder-button', 'new-note-button',
   ];
   const nodes = {};
   for (const id of ids) {
-    const node = element(id === 'source' ? 'textarea' : 'div');
+    const node = element('div');
     node.id = id;
     nodes[id] = node;
   }
-  const preview = nodes.preview;
-  let html = '';
-  Object.defineProperty(preview, 'innerHTML', {
-    get() {
-      return html;
-    },
-    set(value) {
-      html = String(value);
-      preview.children = [];
-      const found = html.matchAll(/data-embed="([^"]*)"/g);
-      for (const match of found) {
-        const embed = element('span');
-        embed.className = 'embed';
-        embed.dataset.embed = match[1];
-        embed.attrs['data-embed'] = match[1];
-        preview.append(embed);
-      }
-    },
-  });
   const doc = {
     body: element('body'),
     visibilityState: 'visible',
@@ -181,12 +164,14 @@ async function openPreview(db, fetchImpl, { offline = false } = {}) {
   globalThis.window = { addEventListener() {} };
   const { doc, nodes } = page();
   doc.defaultView.navigator.onLine = !offline;
-  const app = mountApp(doc, db);
+  const createEditor = fakeEditorFactory(element);
+  const app = mountApp(doc, db, { createEditor });
   await app.start();
-  const text = await until(() => chipText(nodes.preview));
+  const text = await until(() => chipText(nodes.source));
   return {
     nodes,
     text,
+    editor: createEditor.made[0],
     restore() {
       globalThis.fetch = previous;
     },
@@ -196,12 +181,11 @@ async function openPreview(db, fetchImpl, { offline = false } = {}) {
 async function seeded(db, { token = TOKEN } = {}) {
   await putFile(db, makeFile(NOTE, `![[${LINK}]]\n`, 1));
   await setMeta(db, 'lastOpened', NOTE);
-  await setMeta(db, 'editorMode', 'preview');
   await saveGithubTarget(db, { repo: 'owner/repo', branch: 'main', root: '' });
   if (token) await saveGithubSession(db, { token });
 }
 
-test('the preview chip names a sign-in, access, or reach failure', async () => {
+test('the image chip names a sign-in, access, or reach failure', async () => {
   const cases = [
     ['401', "Couldn't reach GitHub (HTTP 401)"],
     ['404', 'No access to repo'],
@@ -221,14 +205,12 @@ test('the preview chip names a sign-in, access, or reach failure', async () => {
         assert.equal(shown.text.includes(TOKEN), false, mode);
         assert.equal(github.urls.some((url) => url.includes(TOKEN)), false, mode);
         const before = github.urls.length;
-        const button = shown.nodes.preview.querySelector('.embed-fallback');
+        const button = shown.nodes.source.querySelector('.embed-fallback');
         assert.equal(button.tag, 'button', mode);
-        for (const fn of shown.nodes.preview.listeners.click || []) {
-          await fn({ target: button, preventDefault() {} });
-        }
+        shown.editor.tap(button);
         const grew = await until(() => (github.urls.length > before ? 'yes' : ''));
         assert.equal(grew, 'yes', `${mode} retry`);
-        const retried = chipText(shown.nodes.preview);
+        const retried = chipText(shown.nodes.source);
         assert.equal(retried, reason, `${mode} retry`);
       } finally {
         shown.restore();
@@ -297,11 +279,11 @@ test('a saved image has no chip offline, and a true miss does not ask for sign-i
     });
     const shown = await openPreview(db, github.fetchImpl);
     try {
-      const img = await until(() => (shown.nodes.preview.querySelector('img.embed-image') ? 'yes' : ''));
+      const img = await until(() => (shown.nodes.source.querySelector('img.embed-image') ? 'yes' : ''));
       assert.equal(img, 'yes');
-      assert.equal(chipText(shown.nodes.preview), '');
+      assert.equal(chipText(shown.nodes.source), '');
       assert.equal(github.urls.some((url) => url.includes('/contents/') || url.includes(LINK)), false);
-      assert.equal(shown.nodes.preview.textContent.includes('Sign in again'), false);
+      assert.equal(shown.nodes.source.textContent.includes('Sign in again'), false);
     } finally {
       shown.restore();
     }
@@ -318,17 +300,17 @@ test('a saved image has no chip offline, and a true miss does not ask for sign-i
     await seeded(missingDb);
     const shown = await openPreview(missingDb, missingGithub.fetchImpl, { offline: true });
     try {
-      const text = await until(() => chipText(shown.nodes.preview));
+      const text = await until(() => chipText(shown.nodes.source));
       assert.equal(text, 'Not downloaded yet (offline)');
       assert.equal(text.includes('Sign in again'), false);
       assert.equal(missingGithub.urls.length, 0);
-      const button = shown.nodes.preview.querySelector('.embed-fallback');
-      for (const fn of shown.nodes.preview.listeners.click || []) {
+      const button = shown.nodes.source.querySelector('.embed-fallback');
+      for (const fn of shown.nodes.source.listeners.click || []) {
         await fn({ target: button, preventDefault() {} });
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal(missingGithub.urls.length, 0);
-      assert.equal(chipText(shown.nodes.preview), 'Not downloaded yet (offline)');
+      assert.equal(chipText(shown.nodes.source), 'Not downloaded yet (offline)');
     } finally {
       shown.restore();
     }

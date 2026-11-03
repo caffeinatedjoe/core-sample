@@ -68,6 +68,17 @@ export function presentSyncStatus(state = {}) {
   return text;
 }
 
+// What the note screen flags. Normal states (synced, syncing, pending,
+// offline) stay in Settings; only something that needs the person shows here.
+export function syncAlert(state = {}) {
+  if (!state.configured) return '';
+  if (state.conflict) return 'conflict';
+  if (Number(state.copies) > 0) return 'copies';
+  if (state.authRequired) return 'auth';
+  if (state.failed) return 'failed';
+  return '';
+}
+
 export function backoffDelay(attempt, random = Math.random) {
   const n = Math.max(0, Number(attempt) || 0);
   const exp = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * (2 ** n));

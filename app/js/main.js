@@ -97,11 +97,11 @@ function boxLine(el) {
 }
 
 function activeScroll() {
-  const sheet = document.getElementById('notes-sheet');
-  if (sheet && !sheet.hidden) return document.getElementById('notes-list');
-  const preview = document.getElementById('preview');
-  if (preview && !preview.hidden) return preview;
-  return document.getElementById('source');
+  const drawer = document.getElementById('notes-sheet');
+  if (drawer?.classList.contains('is-open')) return document.getElementById('notes-list');
+  const settings = document.getElementById('settings-sheet');
+  if (settings && !settings.hidden) return settings.querySelector('.settings-body');
+  return document.querySelector('#source .cm-scroller') || document.getElementById('source');
 }
 
 function probeHeight(id) {
@@ -143,7 +143,7 @@ function paintDebug() {
     `body ${boxLine(document.body)}`,
     `#app ${boxLine(document.getElementById('app'))}`,
     `#notes-sheet ${boxLine(document.getElementById('notes-sheet'))}`,
-    `scroll ${scroll ? scroll.id : 'none'} ${boxLine(scroll)}`,
+    `scroll ${scroll ? scroll.id || scroll.className : 'none'} ${boxLine(scroll)}`,
   ];
   panel.textContent = lines.join('\n');
 }

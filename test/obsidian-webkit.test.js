@@ -92,7 +92,7 @@ async function routeGithub(context, git, gate = {}) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v29');
+  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v31');
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');
     request.onerror = () => resolve(false);
@@ -238,7 +238,7 @@ test('webkit phone edits land while Obsidian pushes a backup and a merge commit 
 
     const desktopBase = git.state.head;
     await watchStatus(page);
-    await page.locator('#source').fill('alpha\nfirst phone edit\n');
+    await page.locator('#source .cm-content').fill('alpha\nfirst phone edit\n');
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced'
       && window.__statuses.includes('Syncing'), null, { timeout: 30000 });
     const phonePush = git.state.head;
@@ -258,7 +258,7 @@ test('webkit phone edits land while Obsidian pushes a backup and a merge commit 
       git.advance(git.commitOn(merge, { '.obsidian/workspace.json': '{"active":"Notes/B.md"}\n' }, 'vault backup'));
     };
     await page.evaluate(() => { window.__statuses = []; });
-    await page.locator('#source').fill('alpha\nfirst phone edit\nsecond phone edit\n');
+    await page.locator('#source .cm-content').fill('alpha\nfirst phone edit\nsecond phone edit\n');
     await page.waitForFunction(() => document.getElementById('sync-status')?.textContent === 'Synced'
       && window.__statuses.includes('Syncing'), null, { timeout: 30000 });
     const statuses = await page.evaluate(() => window.__statuses);
