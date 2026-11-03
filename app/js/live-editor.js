@@ -346,6 +346,9 @@ export function createLiveEditor(host, hooks = {}) {
     focus() {
       view.focus();
     },
+    blur() {
+      view.contentDOM.blur();
+    },
     hasFocus() {
       return view.hasFocus;
     },

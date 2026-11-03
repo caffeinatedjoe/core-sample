@@ -8,7 +8,7 @@ import {
   pickCurrent,
   planWikilink,
 } from './notes.js';
-import { listBrowser, moveTargets, rememberRecent } from './browser.js';
+import { listBrowser, moveTargets, rememberRecent, vaultSummary } from './browser.js';
 import { buildBackup, mergeBackup, parseBackup } from './backup.js';
 import {
   ancestorFolders,
@@ -29,7 +29,8 @@ import { fileFromRemote, folderList, planDownload } from './github-api.js';
 import { eraseLocalNotes, loadGithubSettings } from './github-store.js';
 import { mountGithub } from './github-ui.js';
 import { embedImage, loadEmbedBlob, OFFLINE_IMAGE_REASON, startImagePrefetch } from './images.js';
-import { createAutoSync, loadConflictRemote } from './github-sync.js';
+import { createAutoSync, loadConflictRemote, syncAlert } from './github-sync.js';
+import { mountDrawer } from './drawer.js';
 import { basename } from './embeds.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
@@ -43,28 +44,61 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   const host = doc.getElementById('source');
   const title = doc.getElementById('note-title');
   const status = doc.getElementById('save-status');
-  const sheet = doc.getElementById('notes-sheet');
   const list = doc.getElementById('notes-list');
   const form = doc.getElementById('new-note-form');
   const nameInput = doc.getElementById('new-note-name');
   const formError = doc.getElementById('new-note-error');
   const search = doc.getElementById('notes-search');
+  const searchCase = doc.getElementById('search-case');
+  const searchOptions = doc.getElementById('search-options');
+  const searchOptionsPanel = doc.getElementById('search-options-panel');
+  const searchContent = doc.getElementById('search-content');
   const panelBox = doc.getElementById('action-panel');
   const backupFile = doc.getElementById('backup-file');
+  const backupBox = doc.getElementById('backup-panel');
+  const backupStatus = doc.getElementById('backup-status');
+  const vaultName = doc.getElementById('vault-name');
+  const vaultCount = doc.getElementById('vault-count');
 
   let files = [];
   let folders = [];
   let recent = [];
   let expanded = new Set();
   let query = '';
+  let matchCase = false;
   let panel = null;
+  let backupStep = null;
   let current = null;
   let erasing = false;
   let holding = false;
   let booting = true;
 
   let sync = null;
+  let syncConflicts = false;
   const syncStatus = doc.getElementById('sync-status');
+
+  // The note screen shows the status only when it needs a tap; Settings
+  // always shows it, with the detail and Retry.
+  function paintSync(text, state = {}) {
+    const alert = syncAlert(state);
+    syncConflicts = alert === 'conflict' || alert === 'copies';
+    if (syncStatus) {
+      syncStatus.textContent = text;
+      syncStatus.hidden = !alert;
+      syncStatus.setAttribute('aria-disabled', alert ? 'false' : 'true');
+    }
+    const line = doc.getElementById('settings-sync-status');
+    if (line) line.textContent = text || 'Not connected to GitHub';
+    const detail = doc.getElementById('settings-sync-detail');
+    if (detail) {
+      detail.textContent = state.detail || '';
+      detail.hidden = !state.detail;
+    }
+    const retry = doc.getElementById('sync-retry');
+    if (retry) retry.hidden = !state.configured;
+    const conflicts = doc.getElementById('sync-conflicts');
+    if (conflicts) conflicts.hidden = !syncConflicts;
+  }
   const saver = createDebouncedSaver({
     delay: SAVE_DELAY,
     write: async (note) => {
@@ -118,6 +152,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     else if (state === 'missing') status.textContent = `No note named ${detail}`;
     else if (state === 'ambiguous') status.textContent = `More than one note named ${detail}`;
     else if (state === 'invalid') status.textContent = detail;
+    // Routine saves stay readable to VoiceOver but off the clean note screen.
+    status.classList?.toggle?.('is-alert', state !== 'saving' && state !== 'saved');
   }
 
   let embedTicket = 0;
@@ -478,9 +514,18 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       recent,
       query,
       currentPath: current ? current.path : '',
+      matchCase,
+      searchContent: searchContent ? searchContent.checked !== false : true,
     });
     list.replaceChildren();
     for (const row of rows) list.append(renderRow(row));
+    if (vaultCount) vaultCount.textContent = vaultSummary(files, folders).text;
+  }
+
+  async function paintVault() {
+    if (!vaultName) return;
+    const settings = await embedSettings();
+    vaultName.textContent = (settings.repo || '').split('/').pop() || 'Core Sample';
   }
 
   function renderRow(row) {
@@ -560,9 +605,19 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     else if (panel.type === 'confirm-empty') renderEmptyPanel();
     else if (panel.type === 'new-folder') renderFolderPanel();
     else if (panel.type === 'new-note') renderNestedNotePanel();
-    else if (panel.type === 'backup') renderBackupPanel();
-    else if (panel.type === 'import') renderImportPanel();
-    else if (panel.type === 'confirm-replace') renderReplacePanel();
+  }
+
+  function renderBackup() {
+    if (!backupBox) return;
+    backupBox.replaceChildren();
+    backupBox.hidden = !backupStep;
+    if (backupStep?.type === 'import') renderImportPanel();
+    else if (backupStep?.type === 'confirm-replace') renderReplacePanel();
+  }
+
+  function closeBackup() {
+    backupStep = null;
+    renderBackup();
   }
 
   function closePanel() {
@@ -642,36 +697,29 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     input.focus();
   }
 
-  function renderBackupPanel() {
-    const message = doc.createElement('p');
-    message.textContent = 'A backup is a file of the notes on this device.';
-    panelBox.append(
-      message,
-      panelButton('Export backup', exportBackup),
-      panelButton('Import backup', () => backupFile.click()),
-      panelButton('Cancel', closePanel),
-    );
-  }
-
   function renderImportPanel() {
-    const count = panel.backup.files.length;
+    const count = backupStep.backup.files.length;
     const message = doc.createElement('p');
     message.textContent = `This backup has ${count} ${count === 1 ? 'note' : 'notes'}.`;
-    panelBox.append(
+    backupBox.append(
       message,
-      panelButton('Add to this device', () => addBackup(panel.backup)),
+      panelButton('Add to this device', () => addBackup(backupStep.backup)),
       panelButton('Replace notes on this device', () => {
-        panel = { type: 'confirm-replace', backup: panel.backup };
-        renderPanel();
+        backupStep = { type: 'confirm-replace', backup: backupStep.backup };
+        renderBackup();
       }),
-      panelButton('Cancel', closePanel),
+      panelButton('Cancel', closeBackup),
     );
   }
 
   function renderReplacePanel() {
     const message = doc.createElement('p');
     message.textContent = 'Replace the notes on this device with this backup? Notes that are not in the backup will be removed. Export first if you still need them.';
-    panelBox.append(message, panelButton('Replace', () => replaceBackup(panel.backup), 'danger'), panelButton('Cancel', closePanel));
+    backupBox.append(message, panelButton('Replace', () => replaceBackup(backupStep.backup), 'danger'), panelButton('Cancel', closeBackup));
+  }
+
+  function backupMessage(text) {
+    if (backupStatus) backupStatus.textContent = text;
   }
 
   function namedField(value, label) {
@@ -870,7 +918,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   async function exportBackup() {
     if (!(await flushEditing())) {
-      formError.textContent = "Couldn't save the open note before export.";
+      backupMessage("Couldn't save the open note before export.");
       return;
     }
     const payload = buildBackup(files, {
@@ -908,19 +956,19 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       files = merged.files;
       folders = merged.folders;
       await setMeta(db, 'folders', folders);
-      formError.textContent = merged.keptAside.length
+      backupMessage(merged.keptAside.length
         ? `Added the backup. ${merged.keptAside.length} notes were kept beside ones already here.`
-        : 'Added the backup.';
-      closePanel();
+        : 'Added the backup.');
+      closeBackup();
       renderList();
     } catch (error) {
-      formError.textContent = error.message;
+      backupMessage(error.message);
     }
   }
 
   async function replaceBackup(backup) {
     if (!(await flushEditing())) {
-      formError.textContent = "Couldn't save the open note.";
+      backupMessage("Couldn't save the open note.");
       return;
     }
     try {
@@ -939,24 +987,39 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const next = pickCurrent(live(), backup.lastOpened);
       if (next) showNote(next);
       else clearEditor();
-      formError.textContent = 'Replaced the notes on this device.';
-      closePanel();
+      backupMessage('Replaced the notes on this device.');
+      closeBackup();
       renderList();
     } catch (error) {
-      formError.textContent = error.message;
+      backupMessage(error.message);
     }
   }
 
-  function openSheet() {
-    formError.textContent = '';
-    renderList();
-    renderPanel();
-    sheet.hidden = false;
+  const drawer = mountDrawer(doc, {
+    beforeOpen() {
+      formError.textContent = '';
+      renderList();
+      renderPanel();
+      paintVault().catch(() => {});
+      // Opening the panel puts the keyboard away, as Obsidian does.
+      source.blur();
+    },
+    afterClose() {
+      closePanel();
+      if (form) form.hidden = true;
+    },
+    blocked: () => booting || overlayOpen(),
+  });
+
+  function overlayOpen() {
+    return ['settings-sheet', 'conflict-sheet', 'image-viewer'].some((id) => {
+      const node = doc.getElementById(id);
+      return node && !node.hidden;
+    });
   }
 
   function closeSheet() {
-    sheet.hidden = true;
-    closePanel();
+    drawer.close();
   }
 
   function rememberEdit() {
@@ -970,43 +1033,57 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     saver.schedule(snapshot);
   }
 
-  doc.getElementById('notes-button').addEventListener('click', openSheet);
-  doc.getElementById('notes-close').addEventListener('click', closeSheet);
-  sheet.addEventListener('click', (event) => {
-    if (event.target === sheet) closeSheet();
-  });
   search.addEventListener('input', () => {
     query = search.value;
     renderList();
   });
+  searchCase?.addEventListener('click', () => {
+    matchCase = !matchCase;
+    searchCase.setAttribute('aria-pressed', matchCase ? 'true' : 'false');
+    renderList();
+  });
+  searchOptions?.addEventListener('click', () => {
+    const open = searchOptionsPanel.hidden;
+    searchOptionsPanel.hidden = !open;
+    searchOptions.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  searchContent?.addEventListener('change', renderList);
+  doc.getElementById('search-button')?.addEventListener('click', () => {
+    search.focus();
+    search.select?.();
+  });
+  doc.getElementById('new-note-button')?.addEventListener('click', () => {
+    formError.textContent = '';
+    closePanel();
+    form.hidden = !form.hidden;
+    if (!form.hidden) nameInput.focus();
+  });
   doc.getElementById('new-folder-button').addEventListener('click', () => {
     panel = { type: 'new-folder', parent: '' };
     formError.textContent = '';
+    if (form) form.hidden = true;
     renderPanel();
   });
-  doc.getElementById('backup-button').addEventListener('click', () => {
-    panel = { type: 'backup' };
-    formError.textContent = '';
-    renderPanel();
-  });
-  const exportBackupButton = doc.getElementById('export-backup');
-  if (exportBackupButton) {
-    exportBackupButton.addEventListener('click', () => {
-      exportBackup().catch((error) => {
-        formError.textContent = error && error.message ? error.message : "Couldn't export the backup.";
-      });
+  doc.getElementById('export-backup')?.addEventListener('click', () => {
+    backupMessage('');
+    exportBackup().catch((error) => {
+      backupMessage(error && error.message ? error.message : "Couldn't export the backup.");
     });
-  }
+  });
+  doc.getElementById('import-backup')?.addEventListener('click', () => {
+    backupMessage('');
+    backupFile.click();
+  });
   backupFile.addEventListener('change', async () => {
     const chosen = backupFile.files && backupFile.files[0];
     backupFile.value = '';
     if (!chosen) return;
     try {
-      panel = { type: 'import', backup: parseBackup(await chosen.text()) };
-      formError.textContent = '';
-      renderPanel();
+      backupStep = { type: 'import', backup: parseBackup(await chosen.text()) };
+      backupMessage('');
+      renderBackup();
     } catch (error) {
-      formError.textContent = error.message;
+      backupMessage(error.message);
     }
   });
 
@@ -1319,13 +1396,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     fetchImpl: globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined,
     offline: () => browserOffline(),
     beforeSync: () => saver.flush(),
-    onStatus(text, state = {}) {
-      if (!syncStatus) return;
-      syncStatus.textContent = text;
-      const open = state.conflict === true || Number(state.copies) > 0;
-      syncStatus.setAttribute('aria-disabled', open ? 'false' : 'true');
-      syncStatus.classList?.toggle?.('sync-status-conflict', open);
-    },
+    onStatus: paintSync,
     onApplied: applySyncedFiles,
     onRemoved: applyRemoved,
     onPulled: () => {
@@ -1349,7 +1420,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   });
   syncStatus?.addEventListener('click', () => {
     if (syncStatus.getAttribute('aria-disabled') === 'true') return;
-    conflictScreen.open();
+    if (syncConflicts) conflictScreen.open();
+    else github.open();
+  });
+  doc.getElementById('sync-conflicts')?.addEventListener('click', () => conflictScreen.open());
+  doc.getElementById('sync-retry')?.addEventListener('click', () => {
+    sync.runNow('manual').catch(() => {});
   });
 
   const github = mountGithub(doc, db, {

@@ -81,7 +81,7 @@ function page() {
     'source', 'note-title', 'save-status', 'notes-sheet', 'notes-list',
     'new-note-form', 'new-note-name', 'new-note-error',
     'notes-search', 'action-panel', 'backup-file', 'notes-button', 'notes-close',
-    'new-folder-button', 'backup-button',
+    'new-folder-button', 'new-note-button',
   ];
   for (const id of ids) {
     const node = element('div');

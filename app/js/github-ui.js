@@ -43,8 +43,8 @@ import {
 const ACCESS_TTL = 10 * 60 * 1000;
 
 export function mountGithub(doc, db, hooks) {
-  const sheet = doc.getElementById('github-sheet');
-  if (!sheet) return { async refresh() {}, resume() {} };
+  const sheet = doc.getElementById('settings-sheet');
+  if (!sheet) return { async refresh() {}, resume() {}, open() {} };
 
   const clientInput = doc.getElementById('github-client-id');
   const relayInput = doc.getElementById('github-relay');
@@ -596,13 +596,17 @@ export function mountGithub(doc, db, hooks) {
     }
   }
 
-  doc.getElementById('github-button').addEventListener('click', () => {
+  function openSettings() {
+    sheet.hidden = false;
     refresh().then(() => {
-      sheet.hidden = false;
       kick();
     }).catch((error) => showError(error));
-  });
-  doc.getElementById('github-close').addEventListener('click', () => {
+  }
+
+  for (const id of ['settings-button', 'vault-button']) {
+    doc.getElementById(id)?.addEventListener('click', openSettings);
+  }
+  doc.getElementById('settings-close').addEventListener('click', () => {
     sheet.hidden = true;
   });
   sheet.addEventListener('click', (event) => {
@@ -695,6 +699,7 @@ export function mountGithub(doc, db, hooks) {
   return {
     refresh,
     resume: kick,
+    open: openSettings,
     whenChecked() {
       return probeFlight || Promise.resolve(lastAccess);
     },

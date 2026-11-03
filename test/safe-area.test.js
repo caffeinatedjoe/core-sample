@@ -55,27 +55,28 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.equal(rootBox.includes('position'), false);
 
   assert.match(html, /id="app"[^>]*class="[^"]*\bsafe-frame\b/);
-  assert.match(html, /id="notes-sheet"[^>]*class="sheet"/);
-  assert.equal(html.includes('notes-sheet" class="sheet safe-frame"'), false);
+  assert.match(html, /id="notes-sheet"[^>]*class="drawer"/);
+  assert.match(html, /id="settings-sheet"[^>]*class="sheet settings-sheet"/);
+  assert.equal(html.includes('class="sheet safe-frame"'), false);
   const sheet = rule(css, '.sheet');
   assert.match(sheet, /position:\s*absolute/);
   assert.match(sheet, /inset:\s*0/);
 
   const top = rule(css, '.top');
-  assert.match(top, /padding:\s*calc\(var\(--safe-top\) \+ 44px\)/);
+  assert.match(top, /padding:\s*calc\(var\(--safe-top\) \+ 4px\)[^;]*var\(--safe-right\)[^;]*var\(--safe-left\)/);
   assert.match(top, /background:\s*var\(--bg\)/);
   const head = rule(css, '.sheet-head');
-  assert.match(head, /padding:\s*calc\(var\(--safe-top\) \+ 44px\)/);
+  assert.match(head, /padding:\s*calc\(var\(--safe-top\) \+ 8px\)/);
   assert.match(head, /background:\s*var\(--surface\)/);
-  const build = rule(css, '.build-version');
-  assert.match(build, /position:\s*fixed/);
-  assert.match(build, /top:\s*var\(--safe-top\)/);
-  assert.equal(build.includes('bottom'), false);
-  assert.match(html, /<header class="top">\s*<button type="button" id="build-version"/);
+  assert.equal(rule(css, '.build-version').includes('position'), false);
+  assert.match(html, /id="settings-about-heading"[\s\S]*id="build-version"/);
+  const panel = rule(css, '.drawer-panel');
+  assert.match(panel, /padding:\s*calc\(var\(--safe-top\) \+ 6px\) 0 0 var\(--safe-left\)/);
+  assert.match(rule(css, '.drawer-foot'), /padding:[^;]*var\(--safe-bottom\)/);
   const editor = rule(css, '#source .cm-content');
   assert.match(editor, /padding:[^;]*var\(--safe-right\)[^;]*var\(--scroll-pad\)[^;]*var\(--safe-left\)/);
   assert.match(editor, /font-size:\s*max\(16px, 1em\)/);
-  assert.match(rule(css, '.notes-list'), /padding:\s*0 8px var\(--scroll-pad\)/);
+  assert.match(rule(css, '.settings-body'), /padding:[^;]*var\(--scroll-pad\)/);
 
   assert.match(html, /id="layout-debug"[^>]*hidden/);
   assert.match(html, /id="safe-probe"/);

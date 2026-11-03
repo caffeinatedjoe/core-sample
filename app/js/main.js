@@ -97,8 +97,10 @@ function boxLine(el) {
 }
 
 function activeScroll() {
-  const sheet = document.getElementById('notes-sheet');
-  if (sheet && !sheet.hidden) return document.getElementById('notes-list');
+  const drawer = document.getElementById('notes-sheet');
+  if (drawer?.classList.contains('is-open')) return document.getElementById('notes-list');
+  const settings = document.getElementById('settings-sheet');
+  if (settings && !settings.hidden) return settings.querySelector('.settings-body');
   return document.querySelector('#source .cm-scroller') || document.getElementById('source');
 }
 

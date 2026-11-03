@@ -23,6 +23,8 @@ const SHELL = [
   './js/checklist.js',
   './js/live-rules.js',
   './js/live-editor.js',
+  './js/drawer.js',
+  './js/drawer-gesture.js',
   './vendor/codemirror.js',
   './js/version.js',
   './js/viewport.js',

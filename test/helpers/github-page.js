@@ -1,4 +1,4 @@
-// A minimal page for mountGithub: the sheet's elements, document and window
+// A minimal page for mountGithub: the Settings sheet's elements, document and window
 // listeners, and a clipboard. Shared by the sign-in tests.
 import { DEVICE_PAGE } from '../../app/js/github-device.js';
 
@@ -40,19 +40,19 @@ export function element(id) {
 
 export function page(fetchImpl) {
   const ids = [
-    'github-sheet', 'github-client-id', 'github-relay', 'github-repo', 'github-branch', 'github-root',
+    'settings-sheet', 'github-client-id', 'github-relay', 'github-repo', 'github-branch', 'github-root',
     'github-status', 'github-auth-failure', 'github-device', 'github-signin-state', 'github-user-code', 'github-verify',
     'github-try-again', 'github-target', 'github-login', 'github-sign-in-again', 'github-storage',
     'github-choice', 'github-confirm-replace',
     'github-disconnect-confirm', 'github-erase-confirm', 'github-connect', 'github-export-backup', 'github-file-bar',
-    'github-file-status', 'github-button', 'github-close', 'github-save-config', 'github-open-github',
+    'github-file-status', 'settings-button', 'vault-button', 'settings-close', 'github-save-config', 'github-open-github',
     'github-check-now', 'github-cancel', 'github-save-repo', 'github-download', 'github-alongside',
     'github-export-replace', 'github-disconnect', 'github-disconnect-yes', 'github-erase',
     'github-erase-yes', 'github-push', 'github-pull',
   ];
   const nodes = {};
   for (const id of ids) nodes[id] = element(id);
-  for (const id of ['github-sheet', 'github-device', 'github-try-again', 'github-target', 'github-sign-in-again', 'github-auth-failure', 'github-choice', 'github-confirm-replace', 'github-disconnect-confirm', 'github-erase-confirm', 'github-file-bar']) {
+  for (const id of ['settings-sheet', 'github-device', 'github-try-again', 'github-target', 'github-sign-in-again', 'github-auth-failure', 'github-choice', 'github-confirm-replace', 'github-disconnect-confirm', 'github-erase-confirm', 'github-file-bar']) {
     nodes[id].hidden = true;
   }
   nodes['github-verify'].href = DEVICE_PAGE;

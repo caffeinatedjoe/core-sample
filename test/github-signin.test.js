@@ -74,7 +74,7 @@ test('a pending sign-in survives a reload, then the repo field is shown and focu
     await until(() => second.nodes['github-repo'].focused);
     assert.equal(await loadPendingFlow(db), null);
     assert.equal(second.nodes['github-target'].hidden, false);
-    assert.equal(second.nodes['github-sheet'].hidden, false);
+    assert.equal(second.nodes['settings-sheet'].hidden, false);
     assert.equal(second.nodes['github-repo'].focused, true);
     assert.equal(second.nodes['github-repo'].scrolled, true);
     assert.equal(second.nodes['github-device'].hidden, true);
@@ -463,12 +463,12 @@ test('the startup check paints the saved sign-in before a timeout and never show
     assert.equal((await loadGithubSettings(db)).token, TOKEN);
     assert.equal(calls, 1);
 
-    seen.nodes['github-button'].click();
+    seen.nodes['settings-button'].click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(calls, 1);
 
     clock += 10 * 60 * 1000;
-    seen.nodes['github-button'].click();
+    seen.nodes['settings-button'].click();
     await until(() => calls === 2);
     await app.whenChecked();
     assert.equal(seen.nodes['github-connect'].hidden, true);

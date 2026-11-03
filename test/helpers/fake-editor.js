@@ -43,6 +43,7 @@ export function fakeEditorFactory(createElement) {
         hooks.onTap(planPreviewClick(node), node.closest('[data-live]') || node, { preventDefault() {} });
       },
       focus() {},
+      blur() {},
       hasFocus: () => false,
       measure() {},
       scrollToPos() {},
