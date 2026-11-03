@@ -1,4 +1,5 @@
 import { redact } from './github-redact.js';
+import { isIgnoredPath } from './vault-paths.js';
 
 export function cleanClientId(value) {
   const id = String(value ?? '').trim();
@@ -124,6 +125,7 @@ export function listVaultEntries(treeResponse, root, { allowTruncated = false } 
       local = item.path.slice(prefix.length);
     }
     if (!local || local.split('/').some((part) => !part || part === '.' || part === '..')) continue;
+    if (isIgnoredPath(local)) continue;
     entries.push({
       path: local,
       sha: typeof item.sha === 'string' ? item.sha : '',
@@ -185,7 +187,7 @@ export function selectMarkdown(treeResponse, root) {
       if (!item.path.startsWith(prefix)) continue;
       local = item.path.slice(prefix.length);
     }
-    if (!local || local.endsWith('/')) continue;
+    if (!local || local.endsWith('/') || isIgnoredPath(local)) continue;
     notes.push({ localPath: local, repoPath: item.path, sha: item.sha });
   }
   notes.sort((a, b) => a.localPath.localeCompare(b.localPath));
@@ -353,20 +355,23 @@ function responseHeaders(response) {
   return out;
 }
 
-export async function githubRequest(fetchImpl, url, { token, method = 'GET', body, secrets = [], etag = '' } = {}) {
+export async function githubRequest(fetchImpl, url, { token, method = 'GET', body, secrets = [], etag = '', signal } = {}) {
   if (token && String(url).includes(token)) throw new Error('The request was refused.');
   const headers = githubHeaders(token);
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (etag) headers['If-None-Match'] = etag;
+  const init = {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  };
+  if (signal) init.signal = signal;
   let response;
   try {
-    response = await fetchImpl(url, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      cache: 'no-store',
-    });
+    response = await fetchImpl(url, init);
   } catch {
+    if (signal && signal.aborted) throw new Error('GitHub took too long to answer.');
     throw new Error('GitHub could not be reached. The copy on this device was kept.');
   }
   let text = '';

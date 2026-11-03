@@ -1,6 +1,9 @@
 import { getMeta, listFiles, putFile, setMeta } from './db.js';
+import { isIgnoredPath } from './vault-paths.js';
 
 export const WELCOME_PATH = 'Welcome.md';
+
+export const DOT_NAME_ERROR = 'Names starting with a dot are kept for Obsidian and Git. Use another name.';
 
 export const WELCOME_MD = `# Welcome
 
@@ -52,6 +55,7 @@ export function notePathFromName(name, existingPaths, folder = '') {
   if (/[\\/\u0000-\u001f]/.test(raw) || raw === '.' || raw === '..') {
     throw new Error('Use a name without slashes.');
   }
+  if (raw.startsWith('.')) throw new Error(DOT_NAME_ERROR);
   const path = folder ? `${folder}/${raw}.md` : `${raw}.md`;
   if (paths.includes(path)) {
     throw new Error('A note with that name already exists.');
@@ -89,6 +93,7 @@ export function notePathFromWikilink(target, existingPaths = []) {
   if (!parts.length || parts.some((part) => part === '.' || part === '..' || /[\u0000-\u001f]/.test(part))) {
     throw new Error('Use a note name.');
   }
+  if (parts.some((part) => part.startsWith('.'))) throw new Error(DOT_NAME_ERROR);
   const path = `${parts.join('/')}.md`;
   if (existingPaths.includes(path)) {
     throw new Error('A note with that name already exists.');
@@ -118,7 +123,7 @@ export function planWikilink(notes, target) {
 }
 
 export function resolveWikilink(files, target) {
-  const notes = (files || []).filter((file) => file && file.kind === 'markdown');
+  const notes = (files || []).filter((file) => file && file.kind === 'markdown' && !isIgnoredPath(file.path));
   const want = normalizePath(target);
   if (!want) return { status: 'missing' };
   if (want.includes('/')) {
@@ -158,7 +163,7 @@ export async function loadSession(db) {
   } else if (seeded !== true) {
     await setMeta(db, 'seeded', true);
   }
-  const notes = files.filter((file) => file.kind === 'markdown' && !file.trashedAt);
+  const notes = files.filter((file) => file.kind === 'markdown' && !file.trashedAt && !isIgnoredPath(file.path));
   const lastOpened = await getMeta(db, 'lastOpened');
   const editorMode = await getMeta(db, 'editorMode');
   const expanded = await getMeta(db, 'expanded');
