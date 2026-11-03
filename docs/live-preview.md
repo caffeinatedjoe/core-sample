@@ -1,0 +1,153 @@
+# Live Preview
+
+Core Sample v30 replaces the Source and Preview toggle with one editing
+surface that renders Markdown in place, the way Obsidian's Live Preview does.
+This page records how Obsidian behaves on mobile and how each behavior maps to
+Core Sample.
+
+## How Obsidian does it
+
+Obsidian's editor is CodeMirror 6. The note is always plain Markdown text.
+Live Preview changes only what is drawn: a view plugin walks the Markdown
+syntax tree for the visible part of the note and adds decorations. Mark
+decorations style text (bold, headings, links). Replace decorations hide
+syntax characters or swap a range for a widget (bullets, checkboxes, images,
+rules). Where the selection is, the syntax comes back as raw text so it can
+be edited. Nothing is rewritten, so undo, copy and the saved file are the raw
+Markdown.
+
+Obsidian has three views: Reading, Live Preview and Source mode. Live Preview
+is the default editing mode, and the help says it "can eliminate the need to
+switch to Reading view".
+
+### What is revealed, and how much
+
+| Construct | Rendered as | Raw syntax comes back when |
+| --- | --- | --- |
+| `#` heading marks | Larger, bold line; marks hidden | the cursor is on that line (per line) |
+| `**bold**`, `*italic*`, `_italic_`, `~~strike~~`, `` `code` `` | Styled text; markers hidden | the selection touches that span (per span) |
+| `[text](url)` | Link text only | the selection touches that link (per span) |
+| `[[note]]`, `[[note\|alias]]` | Link text or alias | the selection touches that link (per span) |
+| `-`, `*`, `+` list markers | A bullet | the selection touches the marker; the bullet stays while typing on the line |
+| `1.` ordered markers | Left as text, muted | never hidden |
+| `- [ ]`, `- [x]` tasks | A tappable checkbox | the selection touches the marker |
+| `>` quotes | A left bar; `>` hidden | the cursor is on that line (per line) |
+| `> [!note]` callouts | A styled block with a title | Obsidian swaps the whole callout for a widget until the cursor enters it (per block) |
+| `---` rule | A horizontal line | the cursor is on that line |
+| Fenced code | A shaded monospace block; fences hidden | the cursor is anywhere in the block (per block) |
+| Tables | A rendered table you can edit cell by cell | Obsidian has a table editor (per block) |
+| `![[image]]`, `![](path)` | The image, inline | the cursor is on that line; the source shows above the image |
+| Frontmatter | A Properties panel | Obsidian's Properties editor; a setting shows it as source |
+
+When the editor is not focused (keyboard down, just reading), nothing is
+active, so the whole note is rendered.
+
+### Taps
+
+- A tap on rendered text places the cursor there and opens the keyboard.
+- A tap on a link opens it, internal or external. Tap and hold places the
+  cursor in the link to edit it (and since 1.9.10 on iOS, shows the context
+  menu). A link can also be edited by moving the cursor into it from beside it.
+- A tap on a checkbox toggles it without moving the cursor or opening the
+  keyboard.
+- A tap on an image opens the full-screen image viewer. Editing an image link
+  on a phone means placing the cursor beside it. This is a known complaint on
+  the Obsidian forum.
+
+### Images and embeds
+
+`![[photo.png]]`, `![[photo.png|300]]` and `![alt](path)` render as images
+in the line. Note embeds (`![[note]]`) render the other note in a box. While
+the cursor is on the line the source shows and the image stays below it, so
+the page does not jump.
+
+### Frontmatter and code
+
+Frontmatter shows as a Properties table at the top of the note. Fenced code is
+a shaded block with syntax colors. The fences and the language are hidden
+until the cursor enters the block.
+
+### Keyboard, selection and scrolling on iOS
+
+- The editor is a native `contenteditable`, so iOS draws the caret, the
+  selection handles, the loupe and the copy, paste and look-up menu itself.
+- Copy takes the raw Markdown of the selection.
+- The app resizes as the keyboard opens and closes (smoother since 1.9.10).
+  The line being typed is kept above the keyboard.
+- Only the visible part of a long note is drawn. CodeMirror keeps the rest as
+  estimated heights, so a note of thousands of lines scrolls smoothly.
+- Two-finger swipe gestures are turned off while the keyboard is up, so iOS's
+  two-finger cursor movement still works.
+
+### Mobile toolbar
+
+When editing, a scrollable row of actions sits above the keyboard. By default
+it starts with undo and redo, then actions such as indent, outdent, checklist,
+bold, internal link and tag. It can be reordered and extended with any
+command. Toggle keyboard hides the keyboard and swaps the toolbar for the
+navigation bar.
+
+## How Core Sample maps it
+
+- **One surface.** The Source and Preview buttons and the `editorMode`
+  setting are gone. The old setting is deleted on launch, and backups no
+  longer carry it. There is no separate reading view. With the keyboard down
+  the whole note is rendered, which is what Obsidian's Reading view adds on a
+  phone.
+- **Engine.** The editor is CodeMirror 6 (`@codemirror/view`, `state`,
+  `language`, `commands`) with `@lezer/markdown` and its GFM extensions. These
+  are bundled once into `app/vendor/codemirror.js` and cached by the service
+  worker, with no CDN. `@codemirror/lang-markdown` is not used: it pulls in
+  the HTML, CSS and JavaScript languages for nested code. Core Sample only
+  needs the Markdown parser that it wraps.
+- **Reveal rules.** These follow the table above. Headings, quotes and rules
+  reveal per line. Inline formatting and links reveal per span. Code fences
+  reveal per block. Bullets and checkboxes stay rendered unless the selection
+  touches the marker. The rules are in `app/js/live-rules.js`, which builds a
+  plain list of decorations from the editor state and is unit tested without
+  a DOM.
+- **Taps.** Links, wiki-links, checkboxes and images are small non-editable
+  islands. A tap on one is handled on `mousedown` with `preventDefault`, so
+  the caret does not move and the keyboard stays down. A tap anywhere else
+  places the cursor. Links and images reuse `preview-tap.js`. Internal links
+  go through the same wiki-link rules as before. External links open in the
+  browser, and `javascript:` URLs get no link.
+- **Images.** `![[image]]` and `![](path)` use the same `embeds.js` and
+  `images.js` resolution, IndexedDB copies and offline messages as the old
+  preview. A tap opens `image-viewer.js`. While the cursor is on the line, the
+  source shows and the image stays below it.
+- **Tasks.** A checkbox tap flips the one mark character with the
+  `checklist.js` parser. It changes the text in place, keeps the selection,
+  saves at once, and does not focus the editor.
+- **Text on disk.** CodeMirror splits lines only on `\n`, so `\r\n` endings,
+  tabs and trailing spaces come back exactly as typed. Rendering never edits
+  the text. The 400 ms save, flush on hide, sync and conflicts read the same
+  string as before.
+- **Layout.** A heading line has the same size with the cursor on or off it.
+  Only the hidden marks reflow. Images keep their place while their source is
+  revealed. Text uses the iOS body text style, so Dynamic Type still applies.
+  The keyboard and safe-area handling in `viewport.js` is unchanged.
+
+## Left out on purpose
+
+- The mobile editing toolbar. Undo and redo use the iOS gestures (shake,
+  three-finger swipe) and the keyboard's own undo.
+- A Properties editor. Frontmatter is shown as a muted monospace block.
+- Rendered tables, callout widgets, math and note embeds. Tables and callouts
+  are styled in place as text. `![[note]]` stays a link chip, as before.
+- Syntax colors inside code blocks.
+- List continuation on Enter. Enter inserts a plain new line, as the old
+  text box did.
+
+## Sources
+
+- Obsidian Help, Views and editing mode: https://help.obsidian.md/edit-and-read
+- Obsidian Help, Mobile app (mobile toolbar, navigation bar): https://help.obsidian.md/mobile
+- Obsidian 1.9.10 mobile changelog (undo and redo first on the toolbar, keyboard resizing, links and checkboxes in Live Preview): https://obsidian.md/changelog/2025-08-18-mobile-v1.9.10/
+- Obsidian Forum, Live Preview links on iOS (tap opens, tap and hold edits): https://forum.obsidian.md/t/suggestion-new-live-preview-behaviour-for-links-on-ios/31729
+- Obsidian Forum, editing image links on mobile: https://forum.obsidian.md/t/mobile-edit-image-links-by-tapping-the-image/78885
+- CodeMirror discussion, hiding Markdown syntax: https://discuss.codemirror.net/t/hide-markdown-syntax/7602
+- segphault/codemirror-rich-markdoc: https://github.com/segphault/codemirror-rich-markdoc
+- davidmyersdev/ink-mde: https://github.com/davidmyersdev/ink-mde
+- fedoup/markdown-editor (one CM6 view, per-line reveal, stable heading height): https://github.com/fedoup/markdown-editor
+- @yuya296/cm6-live-preview-core (per-element rich and raw states): https://www.npmjs.com/package/@yuya296/cm6-live-preview-core
