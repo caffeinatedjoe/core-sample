@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:vault-pass": "node --test --test-reporter=./scripts/vault-pass-reporter.mjs --test-reporter-destination=stdout test/fixture-vault.test.js test/fake-github.test.js test/vault-pass-*.test.js",
     "icons": "python3 scripts/render-icons.py",
     "editor": "node scripts/build-editor.mjs"
   },

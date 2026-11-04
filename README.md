@@ -23,8 +23,11 @@ Settings → GitHub (the gear at the bottom of the sidebar) stores a client id a
 ```bash
 npm install
 npm test
+npm run test:vault-pass
 python3 -m http.server -d app 8080
 ```
+
+`npm run test:vault-pass` is the scripted stand-in for a live vault pass: a fake GitHub serving `test/fixtures/vault/`, plus a few iPhone-viewport WebKit taps. It talks to 127.0.0.1 only. CI prints the pass/fail table on every push.
 
 Open `http://127.0.0.1:8080/`. Asset URLs are relative, so the same files work at `/` locally and at `/core-sample/` on GitHub Pages.
 
