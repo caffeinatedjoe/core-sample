@@ -91,6 +91,10 @@ Implemented as core-sample-shell-v35, with the rename/sync fix in core-sample-sh
 - Paste and the format-bar Image picker write original bytes locally, insert a shortest `![[filename]]`, and upload through the Git Data blob API as base64. Paths follow Custom Attachment Location v0.0.9 defaults. Note rename also renames `assets/<basename>/` when that folder exists. Unchanged attachment moves reuse the existing GitHub blob sha; one unresolvable binary does not hold the rest of the commit.
 - Attachment Manager is ignored. Core Sample does not write `app.json`.
 
+## Scripted vault pass
+
+Replaces the agent-driven live-vault tap-through. An anonymized fixture in `test/fixtures/vault/` is served by the local fake GitHub. Node checks cover sync (first download, edit/push, pull, conflict, Trash restore), sign-in (device flow, overlapping polls, 401 recheck, last-4 log, Sign in again), attachments (sidebar, embeds, paste/Image paths, folder rename with reused blob shas, missing blob skip), and Dataview TASK rollups. A few Playwright WebKit iPhone-13 standalone flows sign in, open the sidebar, edit with the format bar, add an image, and confirm sync. CI job `vault-pass` runs `npm run test:vault-pass` on every push and PR with a pass/fail summary. It does not open Joe's private vault and does not use real GitHub OAuth.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

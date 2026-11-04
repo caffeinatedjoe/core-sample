@@ -27,8 +27,30 @@ jobs:
       - run: npx playwright install --with-deps webkit
       - run: npm test
 
+  vault-pass:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps webkit
+      - name: Scripted vault pass
+        env:
+          CONFLICT_SHOTS: ${{ runner.temp }}/vault-pass-shots
+        run: npm run test:vault-pass
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-pass-shots
+          path: ${{ runner.temp }}/vault-pass-shots
+          if-no-files-found: ignore
+
   deploy:
-    needs: test
+    needs: [test, vault-pass]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
       name: github-pages
