@@ -43,6 +43,13 @@ The product is one offline client. The page calls `api.github.com` directly for 
 | `view.js` | Note screen, sidebar contents, backup, Settings wiring | 1–2, v30 |
 | `live-rules.js` | Which Markdown is rendered or raw for a caret position, task toggle | v30 |
 | `live-editor.js` | The CodeMirror view, its widgets and tap handling | v30 |
+| `tables.js` | GFM pipe tables and a one-cell write | v36 |
+| `callouts.js` | `> [!type]` callout parse and fold mark | v36 |
+| `math.js` | `$…$` / `$$…$$` to MathML | v36 |
+| `note-embeds.js` | `![[note]]` heading/block extract | v36 |
+| `frontmatter.js` | YAML properties parse and one-key write | v36 |
+| `code-highlight.js` | Small fence token colors | v36 |
+| `fold.js` | Heading section ranges and fold keys | v36 |
 | `format.js` | Toolbar wrap, toggle and insert as a text change | v32 |
 | `list-continue.js` | Enter continues a list or quote; Tab nests it | v32 |
 | `drawer-gesture.js` | Left-edge swipe rules for the sidebar | v30 |
@@ -115,7 +122,7 @@ Image embeds follow Obsidian. `![[img.png]]`, `![[img.png|300]]`, and `![[img.pn
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in Settings → About are the same string, `core-sample-shell-v35.2` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in Settings → About are the same string, `core-sample-shell-v36` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -167,7 +174,11 @@ Rendering never changes the text. The editor splits lines only on `\n`, so `\r\n
 
 The format toolbar is a rounded pill above the iOS keyboard while the editor is focused. With the keyboard up it has no bottom margin and the shell height is the visual viewport's bottom, so it sits flush on the accessory bar. Each button is a CodeMirror transaction from `format.js` (wrap, toggle, or insert). `pointerdown` is cancelled so the keyboard stays up. Hide keyboard is the only control that blurs. Enter continues lists and quotes through `list-continue.js`; Tab and the indent buttons nest and unnest. Bytes outside the touched lines stay identical, including CRLF.
 
-Left out: a Properties editor (frontmatter is muted text), rendered tables, callouts, math and note embeds, and syntax colors in code. Dataview LIST, TABLE, CALENDAR, dataviewjs, `FROM [[link]]`, and unknown functions are not run; those blocks stay as source plus "Not supported in Core Sample yet".
+v36 Live Preview adds rendered GFM tables with a cell editor, Obsidian callouts, `$…$` / `$$…$$` math as MathML (a small offline TeX subset; no KaTeX, no CDN), `![[note]]` embeds (heading and `^block` targets), a Properties panel for frontmatter, token colors in a few fence languages, and heading fold. Fold state is stored in IndexedDB meta `editorFolds` keyed by note path and heading key (`h2:title`), the same local-meta pattern as `expanded` folders. Image embeds are unchanged.
+
+Math that the subset cannot parse stays visible as the original TeX. Fence colors cover js/ts, json, python, css, html/xml, bash, yaml, markdown, and sql; anything else stays plain. Note embeds cap at 4,000 characters and never recurse. A missing or ambiguous embed says so in the box and does not create a note.
+
+Left out: Dataview LIST, TABLE, CALENDAR, dataviewjs, `FROM [[link]]`, and unknown functions are not run; those blocks stay as source plus "Not supported in Core Sample yet". Footnotes, comments, mermaid, PDF/audio/video embeds, tag chips, and HTML-as-HTML are still out.
 
 A ` ```dataview ` TASK query is a Live Preview widget. `tasks.js` parses vault task lines (any list marker, nested, tabs or spaces, any status character). `task-index.js` builds an in-memory index from IndexedDB once, then updates only paths that change. Conflict copies, backup copies, and other leftover local copies are left out of the index. `dql.js` runs a small DQL subset: `TASK`, `FROM` (`"folder"`, `#tag`, `and`/`or`/`-`), `WHERE` (`completed`, `!completed`, `fullyCompleted`, `contains(text, "...")`, `text`, `tags`, `file.name`, `file.path`, `==`/`!=`, `&&`/`||`/`!`), `SORT` (`file.name`, `text`, `completed`, asc/desc), `GROUP BY file` (the default presentation), and `LIMIT`. Query time is local. Checking a result flips one status character in the source note through the existing save path and never rewrites the query note. Anything outside the subset renders the raw block plus "Not supported in Core Sample yet".
 

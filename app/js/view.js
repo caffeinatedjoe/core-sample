@@ -52,6 +52,8 @@ import { headingOffset } from './live-rules.js';
 import { applyTaskToggle } from './tasks.js';
 import { createTaskIndex, isIndexableNote } from './task-index.js';
 import { dataviewResult } from './dql.js';
+import { rememberFolds, toggleFold } from './fold.js';
+import { describeNoteEmbed } from './note-embeds.js';
 
 const SAVE_DELAY = 400;
 
@@ -89,6 +91,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let panel = null;
   let backupStep = null;
   let current = null;
+  let folds = {};
+  let foldsByPath = {};
   let erasing = false;
   let holding = false;
   let booting = true;
@@ -247,6 +251,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     onDataviewToggle: dataviewToggle,
     onDataviewOpen: dataviewOpen,
     onPasteFiles: (images) => insertImages(images, { pasted: true }),
+    noteEmbed: (target, heading) => describeNoteEmbed(
+      files.filter((file) => file.kind === 'markdown' && !file.trashedAt),
+      target,
+      heading,
+      current?.path || '',
+    ),
+    onFold: toggleHeadingFold,
   });
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
   // Text typed before the last note loads would be replaced by it.
@@ -486,6 +497,30 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     hydrateEmbed(node, true);
   }
 
+  function applyFolds(path) {
+    folds = { ...(foldsByPath[path] || {}) };
+    source.setFolds?.(folds);
+  }
+
+  async function loadFolds(path) {
+    const all = await getMeta(db, 'editorFolds');
+    foldsByPath = all && typeof all === 'object' ? all : {};
+    applyFolds(path);
+  }
+
+  function persistFolds() {
+    if (!current) return;
+    foldsByPath = rememberFolds(foldsByPath, current.path, folds);
+    setMeta(db, 'editorFolds', foldsByPath).catch(() => {});
+  }
+
+  function toggleHeadingFold(key) {
+    if (!key) return;
+    folds = toggleFold(folds, key);
+    source.setFolds?.(folds);
+    persistFolds();
+  }
+
   function showNote(note, { heading = '', line } = {}) {
     const same = current && current.path === note.path;
     current = note;
@@ -494,6 +529,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       closeViewer();
       revokeEmbeds();
       source.load(note.content);
+      applyFolds(note.path);
+      loadFolds(note.path);
     } else {
       source.value = note.content;
     }
