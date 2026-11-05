@@ -18,6 +18,12 @@ function widgetText(widget) {
   if (widget.kind === 'link') return `⟨link ${widget.label}→${widget.href}⟩`;
   if (widget.kind === 'wikilink') return `⟨wiki ${widget.label}→${widget.target}${widget.heading ? `#${widget.heading}` : ''}⟩`;
   if (widget.kind === 'image') return `⟨img ${widget.image.kind} ${widget.image.embed || widget.image.src || widget.image.name}⟩`;
+  if (widget.kind === 'table') return '⟨table⟩';
+  if (widget.kind === 'callout') return `⟨callout ${widget.callout?.kind || ''}⟩`;
+  if (widget.kind === 'math') return `⟨math ${widget.display ? 'block' : 'inline'} ${widget.tex}⟩`;
+  if (widget.kind === 'note-embed') return `⟨note ${widget.target}${widget.heading ? `#${widget.heading}` : ''}⟩`;
+  if (widget.kind === 'properties') return '⟨properties⟩';
+  if (widget.kind === 'fold') return '';
   return '?';
 }
 
@@ -32,6 +38,7 @@ function visible(doc, cursor = null) {
     .sort((a, b) => (a.from ?? a.at) - (b.from ?? b.at));
   for (const spec of covering) {
     const start = spec.from ?? spec.at;
+    if (spec.type === 'widget' && start < at) continue;
     out += doc.slice(at, start);
     if (spec.type === 'widget') {
       out += widgetText(spec.widget);
@@ -93,8 +100,9 @@ test('wiki-links render as their alias or target and reveal per span', () => {
   assert.equal(visible(doc, doc.indexOf('plan]]')), 'go [[Projects/Plan|the plan]] or ⟨wiki Today→Inbox#Today⟩ now');
 });
 
-test('a note embed keeps the bang and shows a wiki-link chip, as the old preview did', () => {
-  assert.equal(visible('![[Other note]]'), '!⟨wiki Other note→Other note⟩');
+test('a note embed is a box off the caret and source on it', () => {
+  assert.equal(visible('![[Other note]]'), '⟨note Other note⟩');
+  assert.equal(visible('![[Other note]]', 3), '![[Other note]]⟨note Other note⟩');
 });
 
 test('bullets become dots unless the cursor touches the marker; ordered numbers stay', () => {
@@ -170,10 +178,14 @@ test('images render in place off the line and below their source on it', () => {
   assert.equal(image.widget.image.width, 300);
 });
 
-test('frontmatter is a muted block with no other rendering', () => {
+test('frontmatter is a Properties widget off the caret and muted source on it', () => {
   const doc = '---\ntitle: **x**\ntags: [a]\n---\n# Body';
-  assert.equal(visible(doc), '---\ntitle: **x**\ntags: [a]\n---\nBody');
-  const fm = specsOf(doc).filter((s) => s.cls === 'cm-frontmatter');
+  assert.equal(visible(doc), '⟨properties⟩\n\n\n\nBody');
+  const widget = specsOf(doc).find((s) => s.widget?.kind === 'properties');
+  assert.equal(widget.widget.fields[0].key, 'title');
+  const raw = visible(doc, 0);
+  assert.match(raw, /^---\ntitle: \*\*x\*\*\ntags: \[a\]\n---\n/);
+  const fm = specsOf(doc, 0).filter((s) => s.cls === 'cm-frontmatter');
   assert.equal(fm.length, 4);
 });
 

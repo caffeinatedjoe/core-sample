@@ -91,6 +91,18 @@ Implemented as core-sample-shell-v35, with the rename/sync fix in core-sample-sh
 - Paste and the format-bar Image picker write original bytes locally, insert a shortest `![[filename]]`, and upload through the Git Data blob API as base64. Paths follow Custom Attachment Location v0.0.9 defaults. Note rename also renames `assets/<basename>/` when that folder exists. Unchanged attachment moves reuse the existing GitHub blob sha; one unresolvable binary does not hold the rest of the commit.
 - Attachment Manager is ignored. Core Sample does not write `app.json`.
 
+## v36 — Live Preview richness
+
+Implemented as core-sample-shell-v36. See [docs/live-preview.md](docs/live-preview.md).
+
+- GFM pipe tables render as a table; tap a cell to edit it. Untouched cells and the delimiter row stay byte for byte.
+- `> [!type]` / `> [!type] Title` callouts render as a block; the source comes back when the caret is in the quote.
+- `$…$` and `$$…$$` render as MathML from a small offline TeX subset.
+- `![[Note]]`, `![[Note#Heading]]`, and `![[Note#^block]]` embed the other note in a box. Images still use `embeds.js`.
+- Frontmatter is a Properties panel. Editing one key rewrites only that value.
+- A few fence languages get token colors. Unknown languages stay plain.
+- Heading sections fold. The folded set is stored in IndexedDB `editorFolds` for that path.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

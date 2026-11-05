@@ -156,10 +156,34 @@ async function seedVault(page) {
   }, INDEX);
 }
 
+// Playwright fill() on CodeMirror can leave Welcome.md in place once heading
+// fold widgets sit in the DOM. Replace the document through the editor.
+async function writeNote(page, text) {
+  const live = await page.locator('#source .cm-content').count();
+  if (!live) {
+    await page.locator('#source').fill(text);
+    return;
+  }
+  await page.evaluate(async (text) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    if (view.state.doc.toString() === text) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+    });
+  }, text);
+  await page.waitForFunction(async (text) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    return view?.state.doc.toString() === text;
+  }, text);
+}
+
 // Old builds (v15, v16) still have the textarea and the Preview button.
 async function showNote(page) {
   const live = await page.locator('#source .cm-content').count();
-  await page.locator(live ? '#source .cm-content' : '#source').fill(NOTE);
+  await writeNote(page, NOTE);
   await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
   await seedVault(page);
   if (live) {
@@ -204,6 +228,8 @@ async function previewState(page) {
     return {
       build: document.getElementById('build-version')?.textContent || '',
       tasks: preview?.querySelectorAll('.task-toggle').length || 0,
+      noteEmbeds: preview?.querySelectorAll('.cm-note-embed').length || 0,
+      images: preview?.querySelectorAll('img.embed-image').length || 0,
       embed: html.includes('data-embed="image-1710000000000.png"'),
       code: html.includes('<pre') || html.includes('<code'),
       literal: html.includes('![['),
@@ -232,6 +258,8 @@ function assertPainted(state, label) {
   assert.equal(state.code, false, label);
   assert.equal(state.literal, false, label);
   assert.equal(state.tasks, 3, label);
+  assert.equal(state.noteEmbeds, 0, `${label} note-embeds`);
+  assert.equal(state.images, 1, `${label} images`);
   assert.equal(state.fallback, false, label);
   assert.ok(state.natural > 0, label);
   assert.ok(state.width > 20 && state.height > 20, `${label} ${state.width}x${state.height}`);
@@ -284,7 +312,7 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.2';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v36';
     });
     await showNote(page);
     await page.waitForFunction(() => {
@@ -422,9 +450,9 @@ test('webkit fetches a bare filename from the attachment folder when the file li
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.2';
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v36';
     });
-    await page.locator('#source .cm-content').fill(NOTE);
+    await writeNote(page, NOTE);
     await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
     await page.evaluate(async () => {
       const db = await new Promise((resolve, reject) => {
@@ -587,13 +615,13 @@ test('webkit keeps the task image through a cold v15 to v16 to v20 update', { ti
     assert.equal(on16.tasks, 3);
     if (on15.natural > 0) assert.ok(on16.natural > 0, 'v16 dropped a painted image');
 
-    await advance(appDir, 'core-sample-shell-v35.2');
+    await advance(appDir, 'core-sample-shell-v36');
     await page.waitForFunction(() => {
       const img = document.querySelector('#source img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     }, null, { timeout: 20000 });
     const on17 = await previewState(page);
-    assert.equal(on17.build, 'core-sample-shell-v35.2');
+    assert.equal(on17.build, 'core-sample-shell-v36');
     assertPainted(on17, 'v18');
 
     const cached = await page.evaluate(async () => {
@@ -621,7 +649,7 @@ test('webkit keeps the task image through a cold v15 to v16 to v20 update', { ti
     if (cached.some((row) => row.blob && row.size > 0)) {
       await page.evaluate(() => localStorage.setItem('core-sample-offline', '1'));
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await ready('core-sample-shell-v35.2');
+      await ready('core-sample-shell-v36');
       await page.waitForFunction(() => {
         const img = document.querySelector('#source img.embed-image');
         return Boolean(img && img.complete && img.naturalWidth > 0);

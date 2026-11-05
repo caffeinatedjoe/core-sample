@@ -2,8 +2,15 @@
 // count as active, lists what to draw: line classes, styled spans, hidden
 // syntax and widgets. Nothing here edits the text or touches the DOM.
 import { GFM, Language, defineLanguageFacet, markdownParser, syntaxTree } from '../vendor/codemirror.js';
+import { parseCallout, parseCalloutLine } from './callouts.js';
 import { parseTask } from './checklist.js';
+import { highlightCode, languageOf } from './code-highlight.js';
+import { foldedRanges, headingSections } from './fold.js';
+import { parseProperties } from './frontmatter.js';
 import { describeImage, isSafeUrl, parseWikilink } from './markdown.js';
+import { findMath } from './math.js';
+import { parseNoteEmbed } from './note-embeds.js';
+import { parseTable } from './tables.js';
 
 export const markdownLanguage = new Language(defineLanguageFacet(), markdownParser.configure([GFM]), [], 'markdown');
 
@@ -94,6 +101,15 @@ function scanLine(text, offset, inlineCode) {
         index = image.next;
         continue;
       }
+      if (text.startsWith('![[', index)) {
+        const end = text.indexOf(']]', index + 3);
+        const parsed = end === -1 ? null : parseNoteEmbed(text.slice(index + 3, end));
+        if (parsed) {
+          found.push({ kind: 'note-embed', from: offset + index, to: offset + end + 2, link: parsed });
+          index = end + 2;
+          continue;
+        }
+      }
     }
     if (text.startsWith('[[', index)) {
       const end = text.indexOf(']]', index + 2);
@@ -111,7 +127,7 @@ function scanLine(text, offset, inlineCode) {
 
 // `ranges` are the selection ranges to reveal raw syntax around. Pass none
 // when the editor is not focused so the whole note renders.
-export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length } = {}) {
+export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length, folds = {} } = {}) {
   const { doc } = state;
   const tree = syntaxTree(state);
   const specs = [];
@@ -134,10 +150,26 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
     return touches(ranges, line.from, line.to);
   };
 
+  const sections = headingSections(doc);
+
   const fmEnd = frontmatterEnd(doc);
   if (fmEnd >= 0 && from <= fmEnd) {
-    for (let pos = doc.lineAt(from).from; pos <= Math.min(fmEnd, to); pos = doc.lineAt(pos).to + 1) {
-      addLine(pos, 'cm-frontmatter');
+    if (touches(ranges, 0, fmEnd)) {
+      for (let pos = doc.lineAt(Math.max(from, 0)).from; pos <= Math.min(fmEnd, to); pos = doc.lineAt(pos).to + 1) {
+        addLine(pos, 'cm-frontmatter');
+      }
+    } else {
+      const open = doc.line(1);
+      const close = doc.lineAt(fmEnd);
+      let bodyFrom = open.to;
+      if (doc.sliceString(bodyFrom, bodyFrom + 1) === '\n') bodyFrom += 1;
+      const props = parseProperties(doc.sliceString(bodyFrom, close.from), bodyFrom);
+      replace(open.from, open.to, { kind: 'properties', fields: props.fields });
+      for (let n = open.number + 1; n <= close.number; n += 1) {
+        const line = doc.line(n);
+        addLine(line.from, 'cm-fm-rest');
+        hide(line.from, line.to);
+      }
     }
   }
 
@@ -179,6 +211,15 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
         } else {
           replace(item.from, item.to, { kind: 'image', image: item.image });
         }
+      } else if (item.kind === 'note-embed') {
+        const { target, heading, label } = item.link;
+        const widget = { kind: 'note-embed', target, heading: heading || '', label };
+        if (touches(ranges, item.from, item.to)) {
+          mark(item.from, item.to, 'cm-embed-source');
+          specs.push({ type: 'widget', at: item.to, widget });
+        } else {
+          replace(item.from, item.to, widget);
+        }
       } else if (touches(ranges, item.from, item.to)) {
         mark(item.from, item.to, 'cm-wikilink-source');
       } else {
@@ -201,6 +242,15 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
       const heading = /^ATXHeading(\d)$/.exec(name);
       if (heading) {
         addLine(node.from, `cm-heading cm-h${heading[1]}`);
+        const section = sections.find((item) => item.lineFrom === doc.lineAt(node.from).from);
+        if (section?.hasBody) {
+          specs.push({
+            type: 'widget',
+            at: section.lineFrom,
+            side: -1,
+            widget: { kind: 'fold', key: section.key, folded: Boolean(folds[section.key]) },
+          });
+        }
         return undefined;
       }
       const setext = /^SetextHeading(\d)$/.exec(name);
@@ -244,6 +294,18 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
       }
       if (name === 'Image') return overlapsClaim(node.from, node.to) ? false : undefined;
       if (name === 'Blockquote') {
+        const open = doc.lineAt(node.from);
+        const callout = parseCalloutLine(open.text);
+        if (callout && !touches(ranges, node.from, node.to)) {
+          const parsed = parseCallout(doc.sliceString(node.from, node.to), node.from);
+          replace(open.from, open.to, { kind: 'callout', callout: parsed || { ...callout, body: '', lineCount: 1 } });
+          for (let n = open.number + 1; n <= doc.lineAt(node.to).number; n += 1) {
+            const line = doc.line(n);
+            addLine(line.from, 'cm-callout-rest');
+            hide(line.from, line.to);
+          }
+          return false;
+        }
         for (let pos = Math.max(node.from, from); pos <= Math.min(node.to, to); pos = doc.lineAt(pos).to + 1) addLine(pos, 'cm-quote');
         return undefined;
       }
@@ -302,6 +364,14 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
           replace(open.from, open.to, { kind: 'fence', info });
           if (closed) hide(close.from, close.to);
         }
+        if (closed && languageOf(info) && lang !== 'dataview' && lang !== 'dataviewjs') {
+          let bodyFrom = open.to;
+          if (doc.sliceString(bodyFrom, bodyFrom + 1) === '\n') bodyFrom += 1;
+          const body = doc.sliceString(bodyFrom, close.from);
+          for (const tok of highlightCode(body, info)) {
+            mark(bodyFrom + tok.from, bodyFrom + tok.to, tok.cls);
+          }
+        }
         return false;
       }
       if (name === 'CodeBlock') {
@@ -309,12 +379,57 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length 
         return false;
       }
       if (name === 'Table') {
+        const table = parseTable(doc.sliceString(node.from, node.to), node.from);
+        if (table && !touches(ranges, node.from, node.to)) {
+          const open = doc.lineAt(node.from);
+          replace(open.from, open.to, { kind: 'table', table });
+          for (let n = open.number + 1; n <= doc.lineAt(node.to).number; n += 1) {
+            const line = doc.line(n);
+            addLine(line.from, 'cm-table-rest');
+            hide(line.from, line.to);
+          }
+          return false;
+        }
         for (let pos = Math.max(node.from, from); pos <= Math.min(node.to, to); pos = doc.lineAt(pos).to + 1) addLine(pos, 'cm-table');
         return false;
       }
       return undefined;
     },
   });
+
+  const skipMath = [...blocks, ...inlineCode];
+  if (fmEnd >= 0) skipMath.push({ from: 0, to: fmEnd });
+  const covered = specs.filter((spec) => spec.type === 'replace' || spec.type === 'hide');
+  const overlapsCovered = (a, b) => covered.some((spec) => spec.from < b && spec.to > a);
+  for (const math of findMath(doc.sliceString(0, doc.length), skipMath)) {
+    if (math.to < from || math.from > to) continue;
+    if (overlapsCovered(math.from, math.to)) continue;
+    if (touches(ranges, math.from, math.to)) mark(math.from, math.to, 'cm-math-source');
+    else if (doc.lineAt(math.from).number === doc.lineAt(math.to).number) {
+      replace(math.from, math.to, { kind: 'math', tex: math.tex, display: math.display });
+    } else {
+      const open = doc.lineAt(math.from);
+      const close = doc.lineAt(math.to);
+      replace(open.from, open.to, { kind: 'math', tex: math.tex, display: math.display });
+      for (let n = open.number + 1; n <= close.number; n += 1) {
+        const line = doc.line(n);
+        addLine(line.from, 'cm-math-rest');
+        hide(line.from, line.to);
+      }
+    }
+  }
+
+  for (const range of foldedRanges(sections, folds)) {
+    if (touches(ranges, range.from, range.to)) continue;
+    const start = doc.lineAt(range.from);
+    const last = range.to <= start.to ? start : doc.lineAt(Math.max(start.from, range.to - 1));
+    for (let n = start.number + 1; n <= last.number; n += 1) {
+      const line = doc.line(n);
+      if (line.from >= range.to) break;
+      addLine(line.from, 'cm-fold-rest');
+      hide(line.from, line.to);
+    }
+  }
 
   const out = [];
   for (const [at, cls] of lineClasses) {

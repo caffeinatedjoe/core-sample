@@ -133,6 +133,40 @@ navigation bar.
   the source note at that line. Rendering never edits the query note.
   LIST, TABLE, CALENDAR, dataviewjs, and unknown functions stay as the
   raw block plus "Not supported in Core Sample yet".
+- **Tables.** A GFM pipe table is a real `<table>` while the caret is
+  outside it. Tap or click a cell to edit that cell. A shorter value is
+  padded so later pipes on that row stay put; a longer value moves only
+  the rest of that row. The delimiter row and every other cell are left
+  alone. Long-press the table to put the caret in the source.
+- **Callouts.** `> [!note]`, `> [!warning] Title`, and the usual
+  Obsidian types (`tip`, `info`, `danger`, …) become a titled block.
+  `+` / `-` after the type folds the body in the widget and writes that
+  mark back. The raw quote comes back when the caret is anywhere in the
+  block.
+- **Math.** `$x^2$` and `$$…$$` become MathML. Safari paints MathML, so
+  there is no KaTeX bundle, no fonts, and no CDN. The subset is
+  fractions, scripts, roots, Greek, a short operator list, and
+  `\text` / `\mathrm` / `\mathbf`. Anything else stays as the original
+  TeX in a muted span. `$10` is money, not math.
+- **Note embeds.** `![[Note]]`, `![[Note#Heading]]`, and
+  `![[Note#^block]]` draw the other note in a box. Image embeds
+  (`![[photo.png]]`) are unchanged. A missing note says "Note not on
+  this phone". More than one match, a self-embed, or a missing heading
+  or block is also named. The box is capped at 4,000 characters and
+  does not nest another note embed. Tap the title to open the note.
+- **Properties.** Closed `---` frontmatter is a Properties panel. Tap a
+  value to edit it, or tap a boolean. Only that value is rewritten;
+  key order, comments, and untouched lines stay. With the caret in the
+  YAML the source is still there for anything the panel does not model
+  (multiline `|` blocks stay raw).
+- **Fence colors.** js/ts, json, python, css, html/xml, bash, yaml,
+  markdown, and sql get keyword / string / comment / number marks. No
+  extra language packs. Other info strings stay plain monospace.
+- **Heading fold.** A chevron on a heading with a body folds through
+  the next same-or-higher heading. Folded keys live in IndexedDB meta
+  `editorFolds` as `{ "Note.md": { "h2:plan": true } }`, the same
+  local-meta pattern as expanded folders. A caret inside a folded
+  section unfolds it for that moment so the line can be edited.
 - **Text on disk.** CodeMirror splits lines only on `\n`, so `\r\n` endings,
   tabs and trailing spaces come back exactly as typed. Rendering never edits
   the text. The 400 ms save, flush on hide, sync and conflicts read the same
@@ -236,13 +270,17 @@ instead of pinning to `offsetTop + height`.
 
 ## Left out on purpose
 
-- A Properties editor. Frontmatter is shown as a muted monospace block.
-- Rendered tables, callout widgets, math and note embeds. Tables and callouts
-  are styled in place as text. `![[note]]` stays a link chip, as before.
 - Dataview beyond the TASK subset in [DECISIONS.md](../DECISIONS.md) (LIST,
   TABLE, CALENDAR, dataviewjs, `FROM [[link]]`, unknown functions). Those
   blocks stay visible as source plus a short unsupported note.
-- Syntax colors inside code blocks.
+- Footnotes, `%%` comments, mermaid, PDF/audio/video embeds, tag chips,
+  and HTML rendered as HTML.
+- A full TeX engine. Math is a small MathML subset; no KaTeX, no CDN.
+- Highlight.js / Prism / extra Lezer languages. Fence colors are a
+  short token list for the languages above.
+- Nested note embeds, Dataview inside an embed, and creating a note by
+  tapping a missing embed (the box says it is missing; a wikilink still
+  creates).
 - The sidebar's Search field does not switch between views the way
   Obsidian's chevron does (Files, Search, Bookmarks and others). Core Sample
   has one panel. Bookmarks, tags and a vault switcher are not built; there

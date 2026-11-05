@@ -81,19 +81,17 @@ test('webkit format toolbar sits above the keyboard and scrolls sideways', { tim
 test('webkit the sync flag is a 44pt dot and the toolbar sits flush in dark mode', { timeout: 90000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
-    await page.evaluate(() => {
+    const header = await page.evaluate(() => {
       const node = document.getElementById('sync-status');
       node.textContent = 'Synced · 12 conflict copies';
       node.hidden = false;
       node.setAttribute('aria-disabled', 'false');
       node.setAttribute('data-alert', 'copies');
       node.setAttribute('data-tone', 'attention');
-    });
-    const header = await page.evaluate(() => {
       const notes = document.getElementById('notes-button').getBoundingClientRect();
-      const flag = document.getElementById('sync-status').getBoundingClientRect();
-      const style = getComputedStyle(document.getElementById('sync-status'));
-      const dot = getComputedStyle(document.getElementById('sync-status'), '::after');
+      const flag = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      const dot = getComputedStyle(node, '::after');
       return {
         notes: { y: notes.y, height: notes.height },
         flag: { x: flag.x, y: flag.y, width: flag.width, height: flag.height },

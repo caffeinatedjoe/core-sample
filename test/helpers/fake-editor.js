@@ -54,6 +54,7 @@ export function fakeEditorFactory(createElement) {
         return true;
       },
       refreshDataview() {},
+      setFolds() {},
       posOf: () => -1,
       images: () => [],
       embedNodes: () => host.querySelectorAll('.embed'),
