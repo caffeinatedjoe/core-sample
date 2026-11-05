@@ -156,10 +156,34 @@ async function seedVault(page) {
   }, INDEX);
 }
 
+// Playwright fill() on CodeMirror can leave Welcome.md in place once heading
+// fold widgets sit in the DOM. Replace the document through the editor.
+async function writeNote(page, text) {
+  const live = await page.locator('#source .cm-content').count();
+  if (!live) {
+    await page.locator('#source').fill(text);
+    return;
+  }
+  await page.evaluate(async (text) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    if (view.state.doc.toString() === text) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+    });
+  }, text);
+  await page.waitForFunction(async (text) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    return view?.state.doc.toString() === text;
+  }, text);
+}
+
 // Old builds (v15, v16) still have the textarea and the Preview button.
 async function showNote(page) {
   const live = await page.locator('#source .cm-content').count();
-  await page.locator(live ? '#source .cm-content' : '#source').fill(NOTE);
+  await writeNote(page, NOTE);
   await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
   await seedVault(page);
   if (live) {
@@ -203,7 +227,9 @@ async function previewState(page) {
     }
     return {
       build: document.getElementById('build-version')?.textContent || '',
-      tasks: preview?.querySelectorAll('.task-toggle').length || 0,
+      tasks: preview?.querySelector('.cm-editor')
+        ? preview.querySelectorAll('.task-toggle.cm-task').length
+        : preview?.querySelectorAll('.task-toggle').length || 0,
       embed: html.includes('data-embed="image-1710000000000.png"'),
       code: html.includes('<pre') || html.includes('<code'),
       literal: html.includes('![['),
@@ -424,7 +450,7 @@ test('webkit fetches a bare filename from the attachment folder when the file li
       const status = document.getElementById('save-status')?.textContent || '';
       return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v36';
     });
-    await page.locator('#source .cm-content').fill(NOTE);
+    await writeNote(page, NOTE);
     await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
     await page.evaluate(async () => {
       const db = await new Promise((resolve, reject) => {
