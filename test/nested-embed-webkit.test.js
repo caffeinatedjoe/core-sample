@@ -227,9 +227,9 @@ async function previewState(page) {
     }
     return {
       build: document.getElementById('build-version')?.textContent || '',
-      tasks: preview?.querySelector('.cm-editor')
-        ? preview.querySelectorAll('.task-toggle.cm-task').length
-        : preview?.querySelectorAll('.task-toggle').length || 0,
+      tasks: preview?.querySelectorAll('.task-toggle').length || 0,
+      noteEmbeds: preview?.querySelectorAll('.cm-note-embed').length || 0,
+      images: preview?.querySelectorAll('img.embed-image').length || 0,
       embed: html.includes('data-embed="image-1710000000000.png"'),
       code: html.includes('<pre') || html.includes('<code'),
       literal: html.includes('![['),
@@ -258,6 +258,8 @@ function assertPainted(state, label) {
   assert.equal(state.code, false, label);
   assert.equal(state.literal, false, label);
   assert.equal(state.tasks, 3, label);
+  assert.equal(state.noteEmbeds, 0, `${label} note-embeds`);
+  assert.equal(state.images, 1, `${label} images`);
   assert.equal(state.fallback, false, label);
   assert.ok(state.natural > 0, label);
   assert.ok(state.width > 20 && state.height > 20, `${label} ${state.width}x${state.height}`);

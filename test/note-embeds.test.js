@@ -51,3 +51,17 @@ test('Live Preview draws a note embed, not a wiki chip, and keeps images as imag
   assert.ok(specs.some((spec) => spec.widget?.kind === 'image'));
   assert.equal(specs.some((spec) => spec.widget?.kind === 'wikilink' && spec.widget.target === 'Lab'), false);
 });
+
+test('a nested task image is one image widget, not a note embed', () => {
+  const doc = [
+    '- [x] parent task',
+    '\t- [x] nested task',
+    '\t\t![[image-1710000000000.png]]',
+    '\t- [x] sibling task',
+  ].join('\n');
+  const specs = liveSpecs(stateOf(doc), { ranges: [] });
+  const widgets = specs.filter((spec) => spec.widget);
+  assert.equal(widgets.filter((spec) => spec.widget.kind === 'task').length, 3);
+  assert.equal(widgets.filter((spec) => spec.widget.kind === 'image').length, 1);
+  assert.equal(widgets.filter((spec) => spec.widget.kind === 'note-embed').length, 0);
+});
