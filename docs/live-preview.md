@@ -105,7 +105,9 @@ navigation bar.
   reveal per block. Bullets and checkboxes stay rendered unless the selection
   touches the marker. The rules are in `app/js/live-rules.js`, which builds a
   plain list of decorations from the editor state and is unit tested without
-  a DOM.
+  a DOM. CodeMirror mark decorations do not wrap replace widgets, so a
+  `~~strike~~` (and bold/italic/code) around a link or wikilink copies those
+  classes onto the widget; the link stays tappable and the source is unchanged.
 - **Taps.** Links, wiki-links, checkboxes and images are small non-editable
   islands. A tap on one is handled on `touchend` with `preventDefault` (on
   `click` with a mouse), so the caret does not move and the keyboard stays

@@ -33,6 +33,10 @@ const CHECK = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true
 const HOLD_MS = 450;
 const SLOP_PX = 10;
 
+function classOf(base, extra) {
+  return extra ? `${base} ${extra}` : base;
+}
+
 function make(doc, tag, className, text) {
   const node = doc.createElement(tag);
   if (className) node.className = className;
@@ -113,7 +117,7 @@ function drawCallout(doc, spec, hooks) {
 }
 
 function drawMath(doc, spec) {
-  const node = make(doc, spec.display ? 'div' : 'span', spec.display ? 'cm-math cm-math-block' : 'cm-math');
+  const node = make(doc, spec.display ? 'div' : 'span', classOf(spec.display ? 'cm-math cm-math-block' : 'cm-math', spec.cls));
   node.dataset.live = 'math';
   setHTML(node, mathHTML(spec.tex, spec.display));
   return node;
@@ -207,15 +211,15 @@ function draw(spec, view, hooks) {
     return node;
   }
   if (spec.kind === 'link') {
-    if (!spec.href) return make(doc, 'span', 'cm-link-widget is-dead', spec.label);
-    const node = make(doc, 'a', 'cm-link-widget', spec.label);
+    if (!spec.href) return make(doc, 'span', classOf('cm-link-widget is-dead', spec.cls), spec.label);
+    const node = make(doc, 'a', classOf('cm-link-widget', spec.cls), spec.label);
     node.setAttribute('href', spec.href);
     node.rel = 'noopener';
     node.dataset.live = 'link';
     return node;
   }
   if (spec.kind === 'wikilink') {
-    const node = make(doc, 'span', 'wikilink', spec.label);
+    const node = make(doc, 'span', classOf('wikilink', spec.cls), spec.label);
     node.dataset.live = 'wikilink';
     node.dataset.wikilink = spec.target;
     node.dataset.heading = spec.heading || '';

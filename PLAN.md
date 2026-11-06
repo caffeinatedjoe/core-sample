@@ -112,6 +112,10 @@ Implemented as core-sample-shell-v37. The sidebar new-document control creates a
 - The note is written through the existing create/save/sync path (`dirty`, `origin: 'user'`), then opened with the editor focused and the drawer closed.
 - Top-left new note lands in the vault root. A folder row's New note still creates in that folder.
 
+## v38 — Strikethrough through nested links
+
+Implemented as core-sample-shell-v38. Live Preview `~~…~~` also paints nested link and wikilink widgets, so struck link text shows `text-decoration: line-through` the way Obsidian and GFM do. Source stays byte-identical.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.
