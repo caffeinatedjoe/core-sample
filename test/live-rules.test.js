@@ -90,6 +90,36 @@ test('links render as their label and reveal per span; unsafe URLs get no href',
   assert.ok(inside.startsWith('see [the **site**](https://example.com) and'));
 });
 
+test('strikethrough decorations cover nested link text', () => {
+  const doc = '~~before [link text](https://example.com) after~~';
+  const specs = specsOf(doc);
+  const strike = specs.find((s) => s.type === 'mark' && s.cls === 'cm-strike');
+  const link = specs.find((s) => s.widget?.kind === 'link');
+  assert.equal(doc.slice(strike.from, strike.to), doc);
+  assert.equal(link.widget.label, 'link text');
+  assert.equal(link.widget.href, 'https://example.com');
+  assert.ok(strike.from <= link.from && strike.to >= link.to);
+  assert.equal(link.widget.cls, 'cm-strike');
+  assert.equal(stateOf(doc).doc.toString(), doc);
+  const plain = specsOf('see [link text](https://example.com)');
+  assert.equal(plain.find((s) => s.widget?.kind === 'link').widget.cls, undefined);
+});
+
+test('strikethrough also covers a wikilink and a bold nested link', () => {
+  const doc = '~~[[Note|alias]] and **[bold](https://example.com)**~~';
+  const specs = specsOf(doc);
+  const strike = specs.find((s) => s.type === 'mark' && s.cls === 'cm-strike');
+  const wiki = specs.find((s) => s.widget?.kind === 'wikilink');
+  const link = specs.find((s) => s.widget?.kind === 'link');
+  assert.ok(strike.from <= wiki.from && strike.to >= wiki.to);
+  assert.ok(strike.from <= link.from && strike.to >= link.to);
+  assert.match(wiki.widget.cls, /\bcm-strike\b/);
+  assert.match(link.widget.cls, /\bcm-strike\b/);
+  assert.match(link.widget.cls, /\bcm-strong\b/);
+  assert.equal(link.widget.label, 'bold');
+  assert.equal(stateOf(doc).doc.toString(), doc);
+});
+
 test('reference-style brackets without a URL stay as text', () => {
   assert.equal(visible('a [ref] b'), 'a [ref] b');
 });

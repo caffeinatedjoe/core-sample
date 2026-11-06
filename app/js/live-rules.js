@@ -18,6 +18,23 @@ const CODE_NODES = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock'
 const SPAN_STYLES = { Emphasis: 'cm-em', StrongEmphasis: 'cm-strong', Strikethrough: 'cm-strike', InlineCode: 'cm-inline-code' };
 const SPAN_MARKS = new Set(['EmphasisMark', 'StrikethroughMark']);
 const LABEL_MARKS = new Set(['EmphasisMark', 'StrikethroughMark', 'CodeMark', 'Escape']);
+const SPAN_CLASS_VALUES = new Set([...Object.values(SPAN_STYLES), 'cm-task-done']);
+const NESTED_WIDGETS = new Set(['link', 'wikilink', 'math']);
+
+// CodeMirror mark decorations wrap document text, not replace widgets, so a
+// ~~strike~~ (or bold/italic/code/done) around a link would miss the widget.
+function inheritSpanClasses(specs) {
+  const marks = specs.filter((spec) => spec.type === 'mark' && SPAN_CLASS_VALUES.has(spec.cls));
+  if (!marks.length) return;
+  for (const spec of specs) {
+    if (spec.type !== 'replace' || !NESTED_WIDGETS.has(spec.widget?.kind)) continue;
+    const cls = [];
+    for (const mark of marks) {
+      if (mark.from <= spec.from && mark.to >= spec.to && !cls.includes(mark.cls)) cls.push(mark.cls);
+    }
+    if (cls.length) spec.widget.cls = cls.join(' ');
+  }
+}
 
 function touches(ranges, from, to) {
   return ranges.some((range) => range.from <= to && range.to >= from);
@@ -418,6 +435,8 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length,
       }
     }
   }
+
+  inheritSpanClasses(specs);
 
   for (const range of foldedRanges(sections, folds)) {
     if (touches(ranges, range.from, range.to)) continue;

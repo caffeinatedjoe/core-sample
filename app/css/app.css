@@ -407,6 +407,24 @@ html.is-keyboard .format-bar {
   cursor: text;
 }
 
+.cm-link-widget.cm-strike,
+.cm-link-widget.cm-task-done,
+.wikilink.cm-strike,
+.wikilink.cm-task-done {
+  text-decoration: underline line-through;
+  text-underline-offset: 2px;
+}
+
+.cm-link-widget.is-dead.cm-strike,
+.cm-link-widget.is-dead.cm-task-done {
+  text-decoration: line-through;
+}
+
+.cm-math.cm-strike,
+.cm-math.cm-task-done {
+  text-decoration: line-through;
+}
+
 .cm-bullet {
   display: inline-block;
   width: 0.7em;
