@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v36';
+export const BUILD = 'core-sample-shell-v37';
 
 const TYPES = {
   '.html': 'text/html',

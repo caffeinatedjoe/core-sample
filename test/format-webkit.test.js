@@ -15,6 +15,25 @@ async function caretAt(page, offset) {
   await page.waitForTimeout(50);
 }
 
+// Playwright fill() on CodeMirror can leave Welcome.md in place once heading
+// fold widgets sit in the DOM. Replace the document through the editor.
+async function writeNote(page, text) {
+  await page.evaluate(async (text) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    if (view.state.doc.toString() === text) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+    });
+  }, text);
+  await page.waitForFunction(async (text) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    return view?.state.doc.toString() === text;
+  }, text);
+}
+
 async function noteText(page) {
   return page.evaluate(async () => {
     const { EditorView } = await import('./vendor/codemirror.js');
@@ -147,6 +166,7 @@ test('webkit the sync flag is a 44pt dot and the toolbar sits flush in dark mode
 test('webkit Enter continues a task and ends an empty item', { timeout: 90000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await writeNote(page, TEXT);
     const at = TEXT.indexOf('trays') + 5;
     await caretAt(page, at);
     await fakeKeyboard(page, 336);
