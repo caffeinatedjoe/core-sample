@@ -3,10 +3,10 @@ import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
   makeFile,
-  notePathFromName,
   noteTitle,
   pickCurrent,
   planWikilink,
+  untitledPath,
 } from './notes.js';
 import { listBrowser, moveTargets, rememberRecent, vaultSummary } from './browser.js';
 import { buildBackup, mergeBackup, parseBackup } from './backup.js';
@@ -63,8 +63,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   const title = doc.getElementById('note-title');
   const status = doc.getElementById('save-status');
   const list = doc.getElementById('notes-list');
-  const form = doc.getElementById('new-note-form');
-  const nameInput = doc.getElementById('new-note-name');
   const formError = doc.getElementById('new-note-error');
   const search = doc.getElementById('notes-search');
   const searchCase = doc.getElementById('search-case');
@@ -991,7 +989,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     else if (panel.type === 'confirm-remove-folder') renderRemoveFolderPanel();
     else if (panel.type === 'confirm-empty') renderEmptyPanel();
     else if (panel.type === 'new-folder') renderFolderPanel();
-    else if (panel.type === 'new-note') renderNestedNotePanel();
   }
 
   function renderBackup() {
@@ -1018,7 +1015,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     panelBox.append(heading);
     if (panel.kind === 'folder') {
       panelBox.append(
-        panelButton('New note', () => { panel = { type: 'new-note', parent: panel.path }; renderPanel(); }),
+        panelButton('New note', () => createNote(panel.path)),
         panelButton('New folder', () => { panel = { type: 'new-folder', parent: panel.path }; renderPanel(); }),
       );
     }
@@ -1081,12 +1078,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function renderFolderPanel() {
     const input = namedField('', 'Folder name');
     panelBox.append(input, panelButton('Create folder', () => createFolder(panel.parent, input.value)), panelButton('Cancel', closePanel));
-    input.focus();
-  }
-
-  function renderNestedNotePanel() {
-    const input = namedField('', 'Note name');
-    panelBox.append(input, panelButton('Create', () => createNote(input.value, panel.parent)), panelButton('Cancel', closePanel));
     input.focus();
   }
 
@@ -1282,21 +1273,21 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     }
   }
 
-  async function createNote(name, folder) {
+  function occupiedPaths() {
+    return [...new Set([
+      ...files.map((file) => file.path),
+      ...(vaultPaths || []),
+    ])];
+  }
+
+  async function createNote(folder = '') {
     formError.textContent = '';
-    let path;
-    try {
-      path = notePathFromName(name, files.map((file) => file.path), folder);
-    } catch (error) {
-      formError.textContent = error.message;
-      return;
-    }
+    const path = untitledPath(occupiedPaths(), folder);
     if (!(await flushEditing())) {
       formError.textContent = "Couldn't save the note you're editing.";
       return;
     }
-    const titleText = path.split('/').pop().replace(/\.md$/i, '');
-    const note = { ...makeFile(path, `# ${titleText}\n\n`), dirty: true, origin: 'user' };
+    const note = { ...makeFile(path, ''), dirty: true, origin: 'user' };
     try {
       await putFile(db, note);
       await setMeta(db, 'lastOpened', path);
@@ -1310,7 +1301,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     await setMeta(db, 'expanded', [...expanded]);
     recent = rememberRecent(recent, path);
     await setMeta(db, 'recent', recent);
-    nameInput.value = '';
     showNote(note);
     closeSheet();
     sync?.noteEdited(note);
@@ -1409,7 +1399,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     },
     afterClose() {
       closePanel();
-      if (form) form.hidden = true;
       if (searching) setSearching(false);
     },
     blocked: () => booting || overlayOpen(),
@@ -1469,13 +1458,11 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   doc.getElementById('new-note-button')?.addEventListener('click', () => {
     formError.textContent = '';
     closePanel();
-    form.hidden = !form.hidden;
-    if (!form.hidden) nameInput.focus();
+    return createNote('');
   });
   doc.getElementById('new-folder-button').addEventListener('click', () => {
     panel = { type: 'new-folder', parent: '' };
     formError.textContent = '';
-    if (form) form.hidden = true;
     renderPanel();
   });
   doc.getElementById('export-backup')?.addEventListener('click', () => {
@@ -1499,11 +1486,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     } catch (error) {
       backupMessage(error.message);
     }
-  });
-
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    createNote(nameInput.value, '');
   });
 
   let linkNav = null;

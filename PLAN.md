@@ -103,6 +103,15 @@ Implemented as core-sample-shell-v36. See [docs/live-preview.md](docs/live-previ
 - A few fence languages get token colors. Unknown languages stay plain.
 - Heading sections fold. The folded set is stored in IndexedDB `editorFolds` for that path.
 
+## v37 — Untitled new note
+
+Implemented as core-sample-shell-v37. The sidebar new-document control creates a blank note immediately, the way Obsidian names unsaved files.
+
+- Basename is the first free name in `Untitled`, `Untitled 1`, `Untitled 2`, … (space before the number; gaps filled; case-sensitive path match against local files and the saved vault index).
+- File content is exactly `""`. No heading, frontmatter, or starter line.
+- The note is written through the existing create/save/sync path (`dirty`, `origin: 'user'`), then opened with the editor focused and the drawer closed.
+- Top-left new note lands in the vault root. A folder row's New note still creates in that folder.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

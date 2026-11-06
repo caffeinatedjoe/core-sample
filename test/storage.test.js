@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { deleteDatabase, getMeta, openDatabase, putFile, setMeta } from '../app/js/db.js';
-import { loadSession, makeFile, notePathFromName, WELCOME_PATH } from '../app/js/notes.js';
+import { loadSession, makeFile, notePathFromName, untitledPath, WELCOME_PATH } from '../app/js/notes.js';
 
 async function reopen(name) {
   return openDatabase(name);
@@ -66,7 +66,17 @@ test('seeds the welcome note once', async () => {
 test('names new notes without clobbering an existing path', () => {
   assert.equal(notePathFromName('Field notes', []), 'Field notes.md');
   assert.equal(notePathFromName('Field notes.md', []), 'Field notes.md');
-  assert.equal(notePathFromName('   ', ['Untitled.md']), 'Untitled 2.md');
+  assert.equal(notePathFromName('   ', ['Untitled.md']), 'Untitled 1.md');
   assert.throws(() => notePathFromName('Field notes', ['Field notes.md']), /already exists/);
   assert.throws(() => notePathFromName('a/b', []), /slashes/);
+});
+
+test('picks the first free Untitled name, filling gaps', () => {
+  assert.equal(untitledPath([]), 'Untitled.md');
+  assert.equal(untitledPath(['Untitled.md']), 'Untitled 1.md');
+  assert.equal(untitledPath(['Untitled.md', 'Untitled 1.md']), 'Untitled 2.md');
+  assert.equal(untitledPath(['Untitled.md', 'Untitled 2.md']), 'Untitled 1.md');
+  assert.equal(untitledPath(['untitled.md']), 'Untitled.md');
+  assert.equal(untitledPath([], 'Field'), 'Field/Untitled.md');
+  assert.equal(untitledPath(['Field/Untitled.md', 'Field/Untitled 2.md'], 'Field'), 'Field/Untitled 1.md');
 });
