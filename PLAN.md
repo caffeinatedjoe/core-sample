@@ -116,6 +116,10 @@ Implemented as core-sample-shell-v37. The sidebar new-document control creates a
 
 Implemented as core-sample-shell-v38. Live Preview `~~…~~` also paints nested link and wikilink widgets, so struck link text shows `text-decoration: line-through` the way Obsidian and GFM do. Source stays byte-identical.
 
+## v39 — Rename from the note title
+
+Implemented as core-sample-shell-v39. Tapping the open note's title edits the file name in place, through the same rename as the sidebar. Empty, unchanged, and Escape restore the title. A collision or a rejected character keeps the field and shows the existing rename error.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.
