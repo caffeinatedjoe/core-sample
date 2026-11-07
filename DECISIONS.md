@@ -122,7 +122,7 @@ Image embeds follow Obsidian. `![[img.png]]`, `![[img.png|300]]`, and `![[img.pn
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in Settings → About are the same string, `core-sample-shell-v38` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in Settings → About are the same string, `core-sample-shell-v39` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -165,6 +165,8 @@ Automatic sync uses its own 3 second debounce, not the 400ms local save. Dirty n
 ## Rename, move, and links
 
 The path is the identity. A rename or move rewrites the path, then rewrites links that resolved to that note. A path-style wikilink (`[[folder/note]]`) is pointed at the new path. A bare wikilink (`[[note]]`) is left alone when the file name is unchanged and still unique. A markdown link is rewritten when the relative path would otherwise break. Aliases and heading fragments in links stay. Links inside fenced or inline code are not touched, and an ambiguous name is not guessed. The open note is flushed before the path change. Note text is otherwise left byte for byte; a rename does not rewrite the first heading. The list, Recent, search, and the editor title show the filename without `.md`. A second line may show a short snippet of the body.
+
+Tapping that title renames the open note in place (core-sample-shell-v39). The field starts as the file name without `.md`, with the text selected. Enter, Done, or leaving the field saves through the same rename as a sidebar long-press. Escape, a blank name, or the same name puts the title back. A name that already exists, or one with a slash or other rejected character, keeps the field and shows that rename error under the title. The caret and scroll stay. The folder and the `.md` suffix stay.
 
 ## Live Preview editor
 

@@ -89,6 +89,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let panel = null;
   let backupStep = null;
   let current = null;
+  let titleEdit = null;
   let folds = {};
   let foldsByPath = {};
   let erasing = false;
@@ -519,20 +520,28 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     persistFolds();
   }
 
-  function showNote(note, { heading = '', line } = {}) {
+  function paintTitle() {
+    if (titleEdit) return;
+    title.replaceChildren?.();
+    title.textContent = current ? noteTitle(current) : '';
+  }
+
+  // A rename of the open note keeps the editor state. Reloading would drop
+  // the caret and scroll, and the text is the same note.
+  function showNote(note, { heading = '', line, keepPlace = false } = {}) {
     const same = current && current.path === note.path;
     current = note;
-    if (!same) {
+    if (same || keepPlace) {
+      if (source.value !== note.content) source.value = note.content;
+    } else {
       embedTicket += 1;
       closeViewer();
       revokeEmbeds();
       source.load(note.content);
       applyFolds(note.path);
       loadFolds(note.path);
-    } else {
-      source.value = note.content;
     }
-    title.textContent = noteTitle(note);
+    paintTitle();
     source.refreshDataview?.();
     if (heading) scrollToHeading(heading);
     else if (Number.isInteger(line) && line >= 0) source.scrollToLine?.(line);
@@ -545,11 +554,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function clearEditor() {
     current = null;
+    titleEdit = null;
     embedTicket += 1;
     closeViewer();
     revokeEmbeds();
     source.load('');
-    title.textContent = '';
+    paintTitle();
   }
 
   async function flushEditing() {
@@ -572,7 +582,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     if (current && pathMap && pathMap[current.path]) {
       const next = files.find((file) => file.path === pathMap[current.path] && !file.trashedAt);
       if (next) {
-        showNote(next);
+        showNote(next, { keepPlace: true });
         setMeta(db, 'lastOpened', next.path).catch(() => {});
         recent = rememberRecent(recent, next.path);
         setMeta(db, 'recent', recent).catch(() => {});
@@ -584,7 +594,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (fresh) {
         current = fresh;
         if (source.value !== fresh.content) source.value = fresh.content;
-        title.textContent = noteTitle(fresh);
+        paintTitle();
         return;
       }
     }
@@ -1141,33 +1151,113 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   }
 
   async function renameItem(name) {
+    const ok = await renamePath(panel.path, panel.kind, name);
+    if (ok) closePanel();
+    return ok;
+  }
+
+  // Sidebar long-press rename and the note-title field both come through here.
+  async function renamePath(path, kind, name) {
     formError.textContent = '';
     if (!(await flushEditing())) {
       formError.textContent = "Couldn't save the note you're editing.";
-      return;
+      return false;
     }
-    const parent = parentPath(panel.path);
+    const parent = parentPath(path);
     try {
       let result;
-      if (panel.kind === 'folder') {
-        const to = folderDestination(parent, name, folders.filter((folder) => folder !== panel.path));
-        result = planFolderRename(files, folders, panel.path, to, Date.now());
-        remapExpanded(panel.path, to);
+      if (kind === 'folder') {
+        const to = folderDestination(parent, name, folders.filter((folder) => folder !== path));
+        result = planFolderRename(files, folders, path, to, Date.now());
+        remapExpanded(path, to);
       } else {
-        const to = noteDestination(parent, name, files.map((file) => file.path).filter((path) => path !== panel.path));
-        result = planFileRename(files, panel.path, to, Date.now());
-        const moved = planRenameAttachmentFolder(result.files, result.folders || folders, panel.path, to, Date.now());
+        const to = noteDestination(parent, name, files.map((file) => file.path).filter((item) => item !== path));
+        result = planFileRename(files, path, to, Date.now());
+        const moved = planRenameAttachmentFolder(result.files, result.folders || folders, path, to, Date.now());
         if (moved) {
-          const fromFolder = noteAttachmentFolder(panel.path);
+          const fromFolder = noteAttachmentFolder(path);
           const toFolder = noteAttachmentFolder(to);
           result = mergePlans(result, moved);
           if (fromFolder && toFolder) remapExpanded(fromFolder, toFolder);
         }
       }
       await persistPlan(result);
-      closePanel();
+      return true;
     } catch (error) {
       formError.textContent = error.message;
+      return false;
+    }
+  }
+
+  function titleStem(value) {
+    return String(value ?? '').trim().replace(/\.md$/i, '').trim();
+  }
+
+  function endTitleEdit() {
+    titleEdit = null;
+    paintTitle();
+  }
+
+  function beginTitleRename() {
+    if (titleEdit || !current || current.kind === 'binary') return;
+    const input = namedField(noteTitle(current), 'Note name');
+    input.id = 'note-title-input';
+    input.className = 'note-title-input';
+    input.spellcheck = false;
+    let closed = false;
+    let busy = false;
+
+    function cancel() {
+      if (closed) return;
+      closed = true;
+      const message = formError ? formError.textContent : '';
+      if (formError) formError.textContent = '';
+      if (message && status.textContent === message) setStatus('saved');
+      endTitleEdit();
+    }
+
+    async function commit() {
+      if (closed || busy || !titleEdit) return;
+      busy = true;
+      try {
+        const stem = titleStem(input.value);
+        if (!current || !stem || stem === noteTitle(current)) {
+          cancel();
+          return;
+        }
+        const ok = await renamePath(current.path, 'note', input.value);
+        if (closed || !titleEdit) return;
+        if (!ok) {
+          setStatus('invalid', formError ? formError.textContent : '');
+          return;
+        }
+        closed = true;
+        setStatus('saved');
+        endTitleEdit();
+      } finally {
+        busy = false;
+      }
+    }
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== 'Escape') return undefined;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (event.key === 'Enter') return commit();
+      cancel();
+      return undefined;
+    });
+    input.addEventListener('blur', () => commit());
+
+    titleEdit = input;
+    source.blur?.();
+    title.textContent = '';
+    if (typeof title.replaceChildren === 'function') title.replaceChildren(input);
+    else title.append(input);
+    input.focus();
+    input.select?.();
+    if (typeof input.setSelectionRange === 'function') {
+      input.setSelectionRange(0, input.value.length);
     }
   }
 
@@ -1422,7 +1512,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       current.content = source.value;
       current.updatedAt = Date.now();
     }
-    title.textContent = noteTitle(current);
+    paintTitle();
     saver.schedule(snapshot);
   }
 
@@ -1455,6 +1545,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     searchOptions.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   searchContent?.addEventListener('change', renderList);
+  title?.addEventListener('click', () => {
+    if (titleEdit) return;
+    beginTitleRename();
+  });
   doc.getElementById('new-note-button')?.addEventListener('click', () => {
     formError.textContent = '';
     closePanel();
@@ -1770,7 +1864,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (typed) continue;
       current = file;
       source.value = file.content;
-      title.textContent = noteTitle(current);
+      paintTitle();
     }
     renderList();
   }
