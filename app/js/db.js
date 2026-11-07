@@ -47,6 +47,56 @@ export function putFile(db, file) {
   return run(db, 'files', 'readwrite', (store) => store.put(file));
 }
 
+// Editor saves own the text. Sync owns SHAs and conflict fields. A snapshot
+// taken before an acknowledgement must not restore the old base.
+export function mergeLocalSave(stored, snapshot) {
+  if (!stored) return { ...snapshot };
+  return {
+    ...stored,
+    content: snapshot.content,
+    dirty: snapshot.dirty === true,
+    updatedAt: snapshot.updatedAt,
+    kind: snapshot.kind || stored.kind,
+    encoding: snapshot.encoding || stored.encoding,
+  };
+}
+
+export function updateFile(db, path, decide) {
+  if (typeof path !== 'string' || !path) {
+    return Promise.reject(new Error('A note needs a path.'));
+  }
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('files', 'readwrite');
+    const store = tx.objectStore('files');
+    const request = store.get(path);
+    let next;
+    request.onsuccess = () => {
+      try {
+        next = decide(request.result);
+        if (next) {
+          if (typeof next.path !== 'string' || !next.path) {
+            throw new Error('A note needs a path.');
+          }
+          store.put(next);
+        }
+      } catch (error) {
+        tx.abort();
+        reject(error);
+      }
+    };
+    tx.oncomplete = () => resolve(next);
+    tx.onerror = () => reject(tx.error || new Error('Could not save notes'));
+    tx.onabort = () => reject(tx.error || new Error('Could not save notes'));
+  });
+}
+
+export function saveLocalFile(db, snapshot) {
+  if (!snapshot || typeof snapshot.path !== 'string' || !snapshot.path) {
+    return Promise.reject(new Error('A note needs a path.'));
+  }
+  return updateFile(db, snapshot.path, (stored) => mergeLocalSave(stored, snapshot));
+}
+
 export function getFile(db, path) {
   return run(db, 'files', 'readonly', (store) => store.get(path));
 }

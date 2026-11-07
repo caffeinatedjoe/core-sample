@@ -120,6 +120,10 @@ Implemented as core-sample-shell-v38. Live Preview `~~…~~` also paints nested 
 
 Implemented as core-sample-shell-v39. Tapping the open note's title edits the file name in place, through the same rename as the sidebar. Empty, unchanged, and Escape restore the title. A collision or a rejected character keeps the field and shows the existing rename error.
 
+## v40 — Acknowledge in-flight edits
+
+Implemented as core-sample-shell-v40. A successful GitHub write records that blob SHA as the note's base even if the user typed more while the ref update was in flight. The newer local text stays, stays dirty, and syncs on the next pass. A local save merges remote metadata instead of replacing the whole record, so a stale editor snapshot cannot restore the old base.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

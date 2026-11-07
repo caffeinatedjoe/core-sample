@@ -1,6 +1,6 @@
 // Automatic sync. The local-save clock is separate and must already have
 // written the note before a debounced run pushes it.
-import { commitFiles, deleteImages, deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteImages, deleteOps, getFile, getMeta, listFiles, listOps, putFile, putOp, setMeta, updateFile } from './db.js';
 import {
   decodeUtf8Base64,
   encodeBytesBase64,
@@ -1707,23 +1707,25 @@ export function createAutoSync({
 
     const settled = [];
     for (const item of written) {
-      const fresh = await getFile(db, item.path);
-      if (!fresh) continue;
-      if (fileFingerprint(fresh) !== item.content) {
-        await ensureOp(fresh, settings);
-        continue;
-      }
-      const next = {
-        ...fresh,
-        remoteSha: item.sha,
-        baseSha: item.sha,
-        dirty: false,
-        conflict: false,
-        syncedAt: writtenDate,
-        syncedCommit: commitSha,
-      };
-      await putFile(db, next);
-      await deleteOps(db, [fresh.path]);
+      // Record this write as the new base even if the user typed more while
+      // the ref update was in flight. Keep the newer text, keep it dirty, and
+      // queue another pass. Skipping the SHA here made the next sync a conflict.
+      const next = await updateFile(db, item.path, (fresh) => {
+        if (!fresh) return null;
+        const changed = fileFingerprint(fresh) !== item.content;
+        return {
+          ...fresh,
+          remoteSha: item.sha,
+          baseSha: item.sha,
+          dirty: changed,
+          conflict: false,
+          syncedAt: writtenDate,
+          syncedCommit: commitSha,
+        };
+      });
+      if (!next) continue;
+      if (next.dirty) await ensureOp(next, settings);
+      else await deleteOps(db, [next.path]);
       settled.push(next);
     }
     for (const item of deletions) {
