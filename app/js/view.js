@@ -1,4 +1,4 @@
-import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, saveLocalFile, setMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -135,11 +135,17 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     delay: SAVE_DELAY,
     write: async (note) => {
       if (erasing) return undefined;
-      await putFile(db, note);
+      const saved = await saveLocalFile(db, note);
       const index = files.findIndex((item) => item.path === note.path);
-      if (index >= 0) files[index] = { ...files[index], ...note };
-      updateIndexPath(note);
-      if (note.dirty) await sync?.noteEdited(note);
+      if (index >= 0) files[index] = { ...files[index], ...saved };
+      if (current && current.path === saved.path) {
+        current.baseSha = saved.baseSha;
+        current.remoteSha = saved.remoteSha;
+        current.syncedAt = saved.syncedAt;
+        current.syncedCommit = saved.syncedCommit;
+      }
+      updateIndexPath(saved);
+      if (saved.dirty) await sync?.noteEdited(saved);
     },
     onStatus: (state) => setStatus(state),
   });
@@ -1856,12 +1862,21 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function applySyncedFiles(nextFiles) {
     for (const file of nextFiles || []) {
       const index = files.findIndex((item) => item.path === file.path);
+      const at = index >= 0 ? index : files.length;
       if (index >= 0) files[index] = file;
       else files.push(file);
       updateIndexPath(file);
       if (!current || current.path !== file.path) continue;
       const typed = source.value !== current.content && source.value !== file.content;
       if (typed) continue;
+      if (file.dirty && source.value !== file.content) {
+        const content = current.content;
+        const updatedAt = current.updatedAt;
+        Object.assign(current, file, { content, dirty: true, updatedAt });
+        files[at] = current;
+        paintTitle();
+        continue;
+      }
       current = file;
       source.value = file.content;
       paintTitle();
