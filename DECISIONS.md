@@ -19,7 +19,7 @@ The product is one offline client. The page calls `api.github.com` directly for 
 - `app/` is the site uploaded to GitHub Pages. URLs are relative, so the same files work at `/core-sample/` and at a local `/`.
 - `app/js/` keeps parsing, storage, and save policy out of the DOM so `node --test` can import them.
 - `test/` holds the tests. `fake-indexeddb` and Playwright's WebKit are devDependencies.
-- `scripts/render-icons.py` builds the PNGs from `app/icons/source/core-sample-icon-source-v2.jpg`.
+- `scripts/render-icons.py` builds the PNGs from `app/icons/source/core-sample-icon-full-v3.png`, itself cropped from `app/icons/source/core-sample-icon-source-v3.jpg`.
 - `worker/` is the device-flow relay. GitHub Pages publishes `app/` only. Joe deploys the Worker himself.
 
 ## Modules
@@ -122,7 +122,7 @@ Image embeds follow Obsidian. `![[img.png]]`, `![[img.png|300]]`, and `![[img.pn
 
 Manifest `start_url` and `scope` are `./`, resolved against the manifest URL. On Pages that is `/core-sample/`. The file is `manifest.json` so GitHub Pages serves it as `application/json`, which browsers accept. The service worker is registered as `./sw.js`; its scope is that directory.
 
-Cache name and the build id in Settings → About are the same string, `core-sample-shell-v40` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
+Cache name and the build id in Settings → About are the same string, `core-sample-shell-v41` (`APP_BUILD` in `app/js/version.js`, `CACHE` in `app/sw.js`). Bump both when a shell file changes. The test fails if they diverge.
 
 The installed app stayed on the old shell because the v1 worker returned cached `index.html` and scripts whenever they were in the cache (`if (cached) return cached` in that worker's `fromCacheOrNetwork`). The open document keeps running the JavaScript it already loaded. v1 never called `registration.update()`, never set `updateViaCache: 'none'`, and had no `controllerchange` reload. iOS standalone also checks for a new `sw.js` less often than a Safari tab. The phone therefore kept executing the cached v1 bundle — the one whose preview still said the target note doesn't exist — after the site was already serving the fix. v2 was still cache-first, so the next bump would stall the same way.
 
@@ -138,7 +138,7 @@ Cross-origin requests and anything that is not the shell are ignored. Note text 
 
 ## Icons
 
-The current icon source is `app/icons/source/core-sample-icon-source-v2.jpg`. The first source file stays in that directory. `scripts/render-icons.py` crops inside the light bezel (`x 76..434`, `y 79..437`) and extends each corner's tile-edge color outward, so the PNGs are opaque and full-bleed. iOS applies its own corner mask. Filenames include `v11` because an existing Home Screen icon is a copy taken at Add to Home Screen, and a new URL only helps the next add. The maskable 512 keeps the cylinder inside the center 80%.
+The current icon source is `app/icons/source/core-sample-icon-source-v3.jpg`. Earlier source files stay in that directory. The 1024 master `app/icons/source/core-sample-icon-full-v3.png` is cropped inside the light bezel (`x 77..436`, `y 77..441`) with square corners filled from the tile edge, so the PNGs are opaque and full-bleed. iOS applies its own corner mask. Filenames include `v41` because an existing Home Screen icon is a copy taken at Add to Home Screen, and a new URL only helps the next add. The maskable 512 keeps the cylinder inside the center 80%.
 
 ## GitHub connection
 

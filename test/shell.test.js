@@ -70,12 +70,12 @@ test('the service worker caches every file the shell loads', () => {
 
 test('iOS icon PNGs exist at the sizes a home screen needs', () => {
   const expected = {
-    'icons/icon-v11-180.png': 180,
-    'icons/icon-v11-192.png': 192,
-    'icons/icon-v11-512.png': 512,
-    'icons/icon-v11-512-maskable.png': 512,
-    'icons/icon-v11-32.png': 32,
-    'icons/icon-v11-16.png': 16,
+    'icons/icon-v41-180.png': 180,
+    'icons/icon-v41-192.png': 192,
+    'icons/icon-v41-512.png': 512,
+    'icons/icon-v41-512-maskable.png': 512,
+    'icons/icon-v41-32.png': 32,
+    'icons/icon-v41-16.png': 16,
   };
   for (const [file, size] of Object.entries(expected)) {
     const png = pngSize(file);
@@ -83,9 +83,15 @@ test('iOS icon PNGs exist at the sizes a home screen needs', () => {
     assert.equal(png.height, size, file);
     assert.equal(png.colorType, 2, `${file} is opaque RGB`);
   }
-  const jpg = readFileSync(join(appDir, 'icons/source/core-sample-icon-source-v2.jpg'));
+  const jpg = readFileSync(join(appDir, 'icons/source/core-sample-icon-source-v3.jpg'));
   assert.equal(jpg.subarray(0, 2).toString('hex'), 'ffd8');
-  const previous = readFileSync(join(appDir, 'icons/source/core-sample-icon-source.jpg'));
+  const previous = readFileSync(join(appDir, 'icons/source/core-sample-icon-source-v2.jpg'));
   assert.equal(previous.subarray(0, 2).toString('hex'), 'ffd8');
-  assert.equal(existsSync(join(appDir, 'icons/favicon-v11.ico')), true);
+  const first = readFileSync(join(appDir, 'icons/source/core-sample-icon-source.jpg'));
+  assert.equal(first.subarray(0, 2).toString('hex'), 'ffd8');
+  const master = pngSize('icons/source/core-sample-icon-full-v3.png');
+  assert.equal(master.width, 1024);
+  assert.equal(master.height, 1024);
+  assert.equal(master.colorType, 2, 'master is opaque RGB');
+  assert.equal(existsSync(join(appDir, 'icons/favicon-v41.ico')), true);
 });
