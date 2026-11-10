@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v40';
+const CACHE = 'core-sample-shell-v41';
 
 const SHELL = [
   './',
@@ -54,13 +54,13 @@ const SHELL = [
   './js/vault-paths.js',
   './js/github-store.js',
   './js/github-ui.js',
-  './icons/icon-v11-180.png',
-  './icons/icon-v11-192.png',
-  './icons/icon-v11-512.png',
-  './icons/icon-v11-512-maskable.png',
-  './icons/icon-v11-32.png',
-  './icons/icon-v11-16.png',
-  './icons/favicon-v11.ico',
+  './icons/icon-v41-180.png',
+  './icons/icon-v41-192.png',
+  './icons/icon-v41-512.png',
+  './icons/icon-v41-512-maskable.png',
+  './icons/icon-v41-32.png',
+  './icons/icon-v41-16.png',
+  './icons/favicon-v41.ico',
 ];
 
 self.addEventListener('install', (event) => {

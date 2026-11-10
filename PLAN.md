@@ -124,6 +124,10 @@ Implemented as core-sample-shell-v39. Tapping the open note's title edits the fi
 
 Implemented as core-sample-shell-v40. A successful GitHub write records that blob SHA as the note's base even if the user typed more while the ref update was in flight. The newer local text stays, stays dirty, and syncs on the next pass. A local save merges remote metadata instead of replacing the whole record, so a stale editor snapshot cannot restore the old base.
 
+## v41 — Third home screen icon
+
+Implemented as core-sample-shell-v41. Replaces the v2/v11 icon with Joe's third concept: a stacked purple and teal cylinder with linked notes on a dark tile. The v3 source stays next to the earlier sources. Icons are `icon-v41-*`.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

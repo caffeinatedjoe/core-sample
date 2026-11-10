@@ -28,7 +28,7 @@ python3 -m http.server -d app 8080
 
 Open `http://127.0.0.1:8080/`. Asset URLs are relative, so the same files work at `/` locally and at `/core-sample/` on GitHub Pages.
 
-Icons are built from `app/icons/source/core-sample-icon-source-v2.jpg`. After replacing that file, run `npm run icons` (needs Pillow) and commit the PNGs.
+Icons are built from `app/icons/source/core-sample-icon-full-v3.png` (Joe's concept is `app/icons/source/core-sample-icon-source-v3.jpg`). After replacing those files, run `npm run icons` (needs Pillow) and commit the PNGs.
 
 ## Install on an iPhone
 
