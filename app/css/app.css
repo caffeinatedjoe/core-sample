@@ -88,6 +88,12 @@ body,
    shell fills its parent instead. When the keyboard is up, --shell-h is
    the visual viewport's bottom so the format toolbar sits flush on it. */
 @media (display-mode: standalone) {
+  /* Home-screen PWAs may report env(safe-area-inset-top) as 0 while still
+     drawing under the status bar (iPhone 13 portrait ≈ 47px). */
+  :root {
+    --safe-top: max(env(safe-area-inset-top, 0px), 47px);
+  }
+
   html {
     height: calc(100lvh - var(--keyboard-inset));
   }

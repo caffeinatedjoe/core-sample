@@ -146,7 +146,7 @@ Implemented as core-sample-shell-v45. The format bar adds 💬. Sending from the
 
 ## v46 — Comment sheet safe area at full height
 
-Implemented as core-sample-shell-v46. A full-height comment list or thread sheet stops below the top safe inset so the grab handle, header, and Close control stay out from under the notch and status bar. Drag snapping uses the same cap.
+Implemented as core-sample-shell-v47. A full-height comment list or thread sheet stops below the top safe inset so the grab handle, header row, and Close control stay out from under the notch and status bar. In `display-mode: standalone`, `--safe-top` is `max(env(safe-area-inset-top), 47px)` so a Home Screen PWA still clears the status bar when env reads 0. Drag snapping uses the same cap.
 
 ## Priority when a stage gets crowded
 
