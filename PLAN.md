@@ -140,6 +140,10 @@ Implemented as core-sample-shell-v43. A header chip shows the open-comment count
 
 Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlight no longer opens the thread sheet or edit pill; only a real tap does. The comment sheet grab handle and header drag to half, full, or dismiss, with touch-action disabled behind the drag. Thread entries render as chat bubbles (own vs other alignment, grouped senders, hashed author tints, unread dots and list badges from IndexedDB last-seen timestamps).
 
+## v45 — Comment sheet safe area at full height
+
+Implemented as core-sample-shell-v45. A full-height comment list or thread sheet stops below the top safe inset so the grab handle, header, and Close control stay out from under the notch and status bar. Drag snapping uses the same cap.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.
