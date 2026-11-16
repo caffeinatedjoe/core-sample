@@ -144,6 +144,10 @@ Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlig
 
 Implemented as core-sample-shell-v45. The format bar adds 💬. Sending from the composer creates anchors and the first entry in one editor transaction; cancel closes a draft without writing. With no selection, the current line’s text is used, skipping leading list, quote, and heading markers. Creation is disabled inside tables and fenced or indented code. Anchor rules match Document Comments v0.1.19, including U+200B before markers at line starts when needed. Entry ⋯ and long-press menus support edit (own entries), delete, and react. Reactions serialize as `+👍 me` and `+@N emoji names`. The sheet header can delete a comment while keeping the highlighted text. Orphans offer Delete and Re-anchor (select text, then Attach here). Resolve and list tabs update after each write. All changes use editor transactions.
 
+## v46 — Comment sheet safe area at full height
+
+Implemented as core-sample-shell-v46. A full-height comment list or thread sheet stops below the top safe inset so the grab handle, header, and Close control stay out from under the notch and status bar. Drag snapping uses the same cap.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

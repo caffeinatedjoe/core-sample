@@ -42,6 +42,9 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(css, /--safe-right:\s*env\(safe-area-inset-right/);
   assert.match(css, /--safe-bottom:\s*env\(safe-area-inset-bottom/);
   assert.match(css, /--safe-left:\s*env\(safe-area-inset-left/);
+  assert.match(css, /--comment-sheet-full-inset:\s*calc\(var\(--safe-top\) \+ var\(--comment-sheet-gap-top\)\)/);
+  const fullSheet = rule(css, '.comment-sheet[data-size="full"] .comment-sheet-card');
+  assert.match(fullSheet, /height:\s*calc\(100% - var\(--comment-sheet-full-inset\)\)/);
   const frame = rule(css, '.safe-frame');
   assert.match(frame, /height:\s*100%/);
   assert.equal(frame.includes('position'), false);

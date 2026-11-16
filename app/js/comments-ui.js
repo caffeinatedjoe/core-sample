@@ -23,6 +23,20 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function sheetHeightLimits(doc, appHeight) {
+  const root = doc.documentElement;
+  const style = doc.defaultView?.getComputedStyle(root);
+  const parse = (name) => {
+    const raw = style?.getPropertyValue(name).trim();
+    const value = raw ? Number.parseFloat(raw) : 0;
+    return Number.isFinite(value) ? value : 0;
+  };
+  const topClear = parse('--comment-sheet-full-inset') || parse('--safe-top') + parse('--comment-sheet-gap-top');
+  const min = appHeight * 0.35;
+  const max = Math.max(min, appHeight - topClear);
+  return { min, max, topClear };
+}
+
 const TAP_MS = 500;
 const SLOP_PX = 10;
 const FLICK_VEL = 0.35;
@@ -833,8 +847,9 @@ export function mountComments(doc, hooks = {}) {
     if (drag.samples.length > 6) drag.samples.shift();
     if (card) {
       const height = sheetHeight();
-      const base = drag.size === 'full' ? height : height * 0.5;
-      card.style.setProperty('--comment-sheet-drag', `${clamp(base - dy, height * 0.35, height)}px`);
+      const { min, max } = sheetHeightLimits(doc, height);
+      const base = drag.size === 'full' ? max : height * 0.5;
+      card.style.setProperty('--comment-sheet-drag', `${clamp(base - dy, min, max)}px`);
     }
     if (event.cancelable) event.preventDefault();
   }
