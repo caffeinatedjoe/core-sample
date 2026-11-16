@@ -28,7 +28,7 @@ test('webkit full comment sheet keeps handle and close below the top safe inset'
       document.documentElement.style.setProperty('--safe-top', `${inset}px`, 'important');
     }, SAFE_TOP);
     const safeTop = await page.evaluate(() => {
-      return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-top'));
+      return parseFloat(getComputedStyle(document.getElementById('safe-probe')).paddingTop);
     });
     assert.equal(safeTop, SAFE_TOP, 'stubbed safe-top must beat app.css :root env() in WebKit tests');
     await blurEditor(page);

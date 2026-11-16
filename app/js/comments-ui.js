@@ -24,14 +24,17 @@ function clamp(value, min, max) {
 }
 
 function sheetHeightLimits(doc, appHeight) {
-  const root = doc.documentElement;
-  const style = doc.defaultView?.getComputedStyle(root);
-  const parse = (name) => {
-    const raw = style?.getPropertyValue(name).trim();
+  const view = doc.defaultView;
+  const rootStyle = view?.getComputedStyle(doc.documentElement);
+  const probe = doc.getElementById('safe-probe');
+  const probeStyle = probe && view?.getComputedStyle(probe);
+  const px = (raw) => {
     const value = raw ? Number.parseFloat(raw) : 0;
     return Number.isFinite(value) ? value : 0;
   };
-  const topClear = parse('--comment-sheet-full-inset') || parse('--safe-top') + parse('--comment-sheet-gap-top');
+  const safeTop = probeStyle ? px(probeStyle.paddingTop) : px(rootStyle?.getPropertyValue('--safe-top'));
+  const gap = px(rootStyle?.getPropertyValue('--comment-sheet-gap-top')) || 8;
+  const topClear = safeTop + gap;
   const min = appHeight * 0.35;
   const max = Math.max(min, appHeight - topClear);
   return { min, max, topClear };
