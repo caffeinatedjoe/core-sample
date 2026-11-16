@@ -1,17 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  AUTHOR_BUBBLE_HUES,
   MARKER_GUARD,
   addComment,
   applyChanges,
   applyProtectedEdit,
   anchorRange,
+  authorBubbleHue,
   clipboardTextForRange,
   closeMarker,
+  commentHasUnread,
   commentHighlights,
   commentHideRanges,
   commentQuote,
+  commentSeenStamp,
   commentsForList,
+  entryIsUnread,
+  firstUnreadIndex,
   deleteComment,
   deleteEntry,
   editEntry,
@@ -399,4 +405,22 @@ test('relativeTime names recent stamps', () => {
   const now = Date.parse('2026-11-16T19:00:00.000Z');
   assert.equal(relativeTime('2026-11-16T18:59:30.000Z', now), 'just now');
   assert.equal(relativeTime('2026-11-16T18:10:00.000Z', now), '50m');
+});
+
+test('authorBubbleHue is stable and stays inside the palette', () => {
+  assert.equal(authorBubbleHue('grok'), authorBubbleHue('grok'));
+  assert.equal(authorBubbleHue('Grok'), authorBubbleHue('grok'));
+  assert.ok(AUTHOR_BUBBLE_HUES.includes(authorBubbleHue('grok')));
+  assert.notEqual(authorBubbleHue('grok'), authorBubbleHue('kyle'));
+});
+
+test('unread entries compare timestamps against last seen', () => {
+  const comment = parseComments(README)[0];
+  const lastSeen = '2026-06-17T10:00:00.000Z';
+  assert.equal(commentHasUnread(comment, ''), true);
+  assert.equal(firstUnreadIndex(comment, lastSeen), 1);
+  assert.equal(entryIsUnread(comment.thread[0], lastSeen), false);
+  assert.equal(entryIsUnread(comment.thread[1], lastSeen), true);
+  assert.equal(commentHasUnread(comment, '2026-06-17T12:00:00.000Z'), false);
+  assert.equal(commentSeenStamp(comment), '2026-06-17T10:05:00.000Z');
 });

@@ -1,6 +1,11 @@
 import {
+  authorBubbleHue,
+  authorInitial,
+  authorsMatch,
   commentQuote,
   commentsForList,
+  entryIsUnread,
+  firstUnreadIndex,
   isOrphan,
   relativeTime,
 } from './comments.js';
@@ -15,6 +20,19 @@ function el(doc, tag, className, text) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+const TAP_MS = 500;
+const SLOP_PX = 10;
+const FLICK_VEL = 0.35;
+
+function isTap(gesture) {
+  if (!gesture) return false;
+  if (gesture.moved) return false;
+  if (Date.now() - gesture.at > TAP_MS) return false;
+  const dx = (gesture.endX ?? gesture.x) - gesture.x;
+  const dy = (gesture.endY ?? gesture.y) - gesture.y;
+  return Math.hypot(dx, dy) <= SLOP_PX;
 }
 
 function firstEntry(comment) {
@@ -127,7 +145,10 @@ export function mountComments(doc, hooks = {}) {
     const button = el(doc, 'button', 'comment-row');
     button.type = 'button';
     button.dataset.commentId = comment.id;
+    const unread = hooks.hasUnread?.(comment.id);
+    if (unread) button.classList.add('has-unread');
     const quote = el(doc, 'p', 'comment-row-quote', commentQuote(comment, hooks.doc?.()) || 'Comment');
+    if (unread) quote.classList.add('is-unread');
     const first = firstEntry(comment);
     const preview = el(doc, 'p', 'comment-row-text', first ? first.text : '');
     const meta = el(doc, 'p', 'comment-row-meta');
@@ -135,6 +156,11 @@ export function mountComments(doc, hooks = {}) {
     const when = relativeTime(stampOf(comment));
     meta.textContent = replies ? `${replies} ${replies === 1 ? 'reply' : 'replies'} · ${when}` : when;
     button.append(quote, preview, meta);
+    if (unread) {
+      const dot = el(doc, 'span', 'comment-row-dot');
+      dot.setAttribute('aria-hidden', 'true');
+      button.append(dot);
+    }
     return button;
   }
 
@@ -169,19 +195,49 @@ export function mountComments(doc, hooks = {}) {
     const index = items.findIndex((item) => item.id === comment.id);
     if (prevBtn) prevBtn.disabled = index <= 0;
     if (nextBtn) nextBtn.disabled = index < 0 || index >= items.length - 1;
-    for (const [i, entry] of (comment.thread || []).entries()) {
-      const item = el(doc, 'article', 'comment-entry');
-      const head = el(doc, 'header', 'comment-entry-head');
-      head.append(el(doc, 'span', 'comment-entry-author', entry.author || 'me'));
-      const time = el(doc, 'button', 'comment-entry-time', exactTimes.has(i) ? (entry.timestamp || '') : relativeTime(entry.timestamp));
-      time.type = 'button';
-      time.dataset.entry = String(i);
-      if (entry.timestamp) time.setAttribute('title', entry.timestamp);
-      head.append(time);
-      const body = el(doc, 'div', 'comment-entry-body');
-      body.innerHTML = renderInlineMarkdown(entry.text || '');
-      item.append(head, body);
-      thread.append(item);
+    const selfName = hooks.author?.() || 'me';
+    const lastSeen = hooks.lastSeen?.(comment.id) || '';
+    const unreadFrom = firstUnreadIndex(comment, lastSeen);
+    const entries = comment.thread || [];
+    for (const [i, entry] of entries.entries()) {
+      if (i === unreadFrom && unreadFrom >= 0) {
+        const divider = el(doc, 'div', 'comment-new-divider');
+        divider.append(el(doc, 'span', null, 'New'));
+        thread.append(divider);
+      }
+      const author = entry.author || 'me';
+      const own = authorsMatch(author, selfName);
+      const prev = i > 0 ? entries[i - 1] : null;
+      const showMeta = !prev || !authorsMatch(author, prev.author);
+      const row = el(doc, 'article', `comment-bubble-row ${own ? 'is-own' : 'is-other'}`);
+      if (!showMeta) row.classList.add('is-grouped');
+      if (!own) {
+        if (showMeta) {
+          const avatar = el(doc, 'span', 'comment-bubble-avatar', authorInitial(author));
+          avatar.style.setProperty('--bubble-hue', String(authorBubbleHue(author)));
+          row.append(avatar);
+        } else {
+          row.append(el(doc, 'span', 'comment-bubble-avatar-spacer'));
+        }
+      }
+      const wrap = el(doc, 'div', 'comment-bubble-stack');
+      if (showMeta) {
+        const head = el(doc, 'header', 'comment-bubble-meta');
+        head.append(el(doc, 'span', 'comment-bubble-author', author));
+        const time = el(doc, 'button', 'comment-bubble-time', exactTimes.has(i) ? (entry.timestamp || '') : relativeTime(entry.timestamp));
+        time.type = 'button';
+        time.dataset.entry = String(i);
+        if (entry.timestamp) time.setAttribute('title', entry.timestamp);
+        head.append(time);
+        wrap.append(head);
+      }
+      const bubble = el(doc, 'div', `comment-bubble ${own ? 'is-own' : 'is-other'}`);
+      if (!own) bubble.style.setProperty('--bubble-hue', String(authorBubbleHue(author)));
+      if (entryIsUnread(entry, lastSeen)) bubble.classList.add('is-unread');
+      bubble.innerHTML = renderInlineMarkdown(entry.text || '');
+      wrap.append(bubble);
+      row.append(wrap);
+      thread.append(row);
     }
   }
 
@@ -222,6 +278,19 @@ export function mountComments(doc, hooks = {}) {
     if (composer) composer.hidden = false;
     paintThread();
     hooks.reveal?.(id);
+    const view = doc.defaultView;
+    const markLater = () => {
+      Promise.resolve(hooks.markSeen?.(id)).then(() => {
+        if (currentId !== id || mode !== 'thread') return;
+        paintThread();
+        if (fromList) paintList();
+      });
+    };
+    if (view?.requestAnimationFrame) {
+      view.requestAnimationFrame(() => view.requestAnimationFrame(markLater));
+    } else {
+      markLater();
+    }
   }
 
   function move(delta) {
@@ -277,7 +346,22 @@ export function mountComments(doc, hooks = {}) {
     showList();
   });
 
-  pill?.addEventListener('click', (event) => {
+  let pillGesture = null;
+  pill?.addEventListener('pointerdown', (event) => {
+    if (event.button && event.button !== 0) return;
+    pillGesture = { x: event.clientX, y: event.clientY, at: Date.now(), moved: false };
+  });
+  pill?.addEventListener('pointermove', (event) => {
+    if (!pillGesture) return;
+    if (Math.hypot(event.clientX - pillGesture.x, event.clientY - pillGesture.y) > SLOP_PX) pillGesture.moved = true;
+  });
+  pill?.addEventListener('pointerup', (event) => {
+    const gesture = pillGesture;
+    pillGesture = null;
+    if (!gesture) return;
+    gesture.endX = event.clientX;
+    gesture.endY = event.clientY;
+    if (!isTap(gesture)) return;
     event.preventDefault();
     const id = pillHits[0]?.id;
     if (id) {
@@ -286,6 +370,7 @@ export function mountComments(doc, hooks = {}) {
       showThread(id, { listOrigin: false });
     }
   });
+  pill?.addEventListener('pointercancel', () => { pillGesture = null; });
 
   scrim?.addEventListener('click', hideSheet);
   closeBtn?.addEventListener('click', hideSheet);
@@ -326,7 +411,7 @@ export function mountComments(doc, hooks = {}) {
   });
 
   thread?.addEventListener('click', (event) => {
-    const button = event.target.closest?.('.comment-entry-time');
+    const button = event.target.closest?.('.comment-bubble-time');
     if (!button) return;
     const index = Number(button.dataset.entry);
     if (exactTimes.has(index)) exactTimes.delete(index);
@@ -352,62 +437,158 @@ export function mountComments(doc, hooks = {}) {
   });
 
   let drag = null;
-  const handle = sheet.querySelector('.comment-sheet-handle') || card;
+  const handle = sheet.querySelector('.comment-sheet-handle');
   const head = sheet.querySelector('.comment-sheet-head');
 
-  function onPointerDown(event, kind) {
-    if (event.button && event.button !== 0) return;
-    drag = {
-      kind,
-      id: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      size,
-      moved: false,
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+  function sheetHeight() {
+    const app = doc.getElementById('app');
+    return app?.getBoundingClientRect?.().height || 500;
   }
 
-  function onPointerMove(event) {
+  function snapHeight(dy, vel) {
+    if (vel > FLICK_VEL) {
+      if (size === 'half') hideSheet();
+      else setSize('half');
+      return;
+    }
+    if (vel < -FLICK_VEL) {
+      setSize('full');
+      return;
+    }
+    if (dy > 90) {
+      if (size === 'half') hideSheet();
+      else setSize('half');
+      return;
+    }
+    if (dy < -60) setSize('full');
+    else setSize(size);
+  }
+
+  function onDragDown(event, surface) {
+    if (event.button && event.button !== 0) return;
+    drag = {
+      id: event.pointerId,
+      surface,
+      x: event.clientX,
+      y: event.clientY,
+      at: Date.now(),
+      size,
+      moved: false,
+      samples: [{ y: event.clientY, t: Date.now() }],
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    if (event.cancelable) event.preventDefault();
+  }
+
+  function onDragMove(event) {
     if (!drag || drag.id !== event.pointerId) return;
-    const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
-    if (Math.hypot(dx, dy) > 8) drag.moved = true;
-    if (drag.kind === 'height' && card) {
-      const app = doc.getElementById('app');
-      const height = app?.getBoundingClientRect?.().height || 500;
+    if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > SLOP_PX) drag.moved = true;
+    drag.samples.push({ y: event.clientY, t: Date.now() });
+    if (drag.samples.length > 6) drag.samples.shift();
+    if (card) {
+      const height = sheetHeight();
       const base = drag.size === 'full' ? height : height * 0.5;
       card.style.setProperty('--comment-sheet-drag', `${clamp(base - dy, height * 0.35, height)}px`);
     }
+    if (event.cancelable) event.preventDefault();
   }
 
-  function onPointerUp(event) {
+  function onDragUp(event) {
     if (!drag || drag.id !== event.pointerId) return;
-    const dx = event.clientX - drag.x;
-    const dy = event.clientY - drag.y;
-    const kind = drag.kind;
-    const moved = drag.moved;
+    const active = drag;
     drag = null;
-    if (kind === 'height') {
-      if (dy > 90 && size === 'half') hideSheet();
-      else if (dy > 90) setSize('half');
-      else if (dy < -60) setSize('full');
-      else setSize(size);
+    const dy = event.clientY - active.y;
+    const gesture = {
+      ...active,
+      endX: event.clientX,
+      endY: event.clientY,
+    };
+    let vel = 0;
+    if (active.samples.length >= 2) {
+      const a = active.samples[active.samples.length - 2];
+      const b = active.samples[active.samples.length - 1];
+      vel = (b.y - a.y) / Math.max(1, b.t - a.t);
+    }
+    if (!active.moved && active.surface === 'handle' && isTap(gesture)) {
+      setSize(size === 'full' ? 'half' : 'full');
       return;
     }
-    if (kind === 'nav' && mode === 'thread' && moved && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy)) {
-      move(dx < 0 ? 1 : -1);
+    if (!active.moved) {
+      setSize(size);
+      return;
     }
+    snapHeight(dy, vel);
   }
 
-  handle?.addEventListener('pointerdown', (event) => onPointerDown(event, 'height'));
+  function bindDragSurface(node, surface) {
+    if (!node) return;
+    const down = (event) => onDragDown(event, surface);
+    node.addEventListener('pointerdown', down);
+    node.addEventListener('touchstart', (event) => {
+      if (event.touches.length !== 1) return;
+      const point = event.touches[0];
+      onDragDown({
+        button: 0,
+        pointerId: 1,
+        clientX: point.clientX,
+        clientY: point.clientY,
+        currentTarget: node,
+        preventDefault() { event.preventDefault(); },
+        setPointerCapture() {},
+      }, surface);
+    }, { passive: false });
+  }
+
+  function headWantsDrag(event) {
+    if (event.target.closest?.('.comment-icon-btn, #comment-sheet-close, #comment-sheet-back, #comment-sheet-quote, .comment-sheet-tabs')) {
+      return false;
+    }
+    return event.target === head || head.contains(event.target);
+  }
+
+  bindDragSurface(handle, 'handle');
   head?.addEventListener('pointerdown', (event) => {
-    if (event.target.closest?.('button') && event.target !== quoteBtn) return;
-    onPointerDown(event, mode === 'thread' ? 'nav' : 'height');
+    if (!headWantsDrag(event)) return;
+    onDragDown(event, 'head');
   });
-  sheet.addEventListener('pointermove', onPointerMove);
-  sheet.addEventListener('pointerup', onPointerUp);
+  head?.addEventListener('touchstart', (event) => {
+    if (!headWantsDrag(event) || event.touches.length !== 1) return;
+    const point = event.touches[0];
+    onDragDown({
+      button: 0,
+      pointerId: 1,
+      clientX: point.clientX,
+      clientY: point.clientY,
+      currentTarget: head,
+      preventDefault() { event.preventDefault(); },
+      setPointerCapture() {},
+    }, 'head');
+  }, { passive: false });
+  sheet.addEventListener('pointermove', onDragMove);
+  sheet.addEventListener('pointerup', onDragUp);
+  sheet.addEventListener('touchmove', (event) => {
+    if (!drag || event.touches.length !== 1) return;
+    const point = event.touches[0];
+    onDragMove({
+      pointerId: drag.id,
+      clientX: point.clientX,
+      clientY: point.clientY,
+      preventDefault() { event.preventDefault(); },
+    });
+  }, { passive: false });
+  sheet.addEventListener('touchend', (event) => {
+    if (!drag) return;
+    const point = event.changedTouches[0];
+    if (!point) return;
+    onDragUp({
+      pointerId: drag.id,
+      clientX: point.clientX,
+      clientY: point.clientY,
+    });
+  });
   sheet.addEventListener('pointercancel', () => { drag = null; setSize(size); });
+  sheet.addEventListener('touchcancel', () => { drag = null; setSize(size); });
 
   return {
     paintChip,

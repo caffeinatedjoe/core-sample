@@ -136,6 +136,10 @@ Implemented as core-sample-shell-v42. Notes that use the Obsidian Document Comme
 
 Implemented as core-sample-shell-v43. A header chip shows the open-comment count and opens a list. Tapping a highlight in reading mode opens that thread; in the editor a floating pill does. The sheet is half-height, drags to full, and the reply composer sits above the keyboard. Writes go through editor transactions. Comment name (default `me`) is a setting. Creating comments, editing entries, reactions, and re-anchor wait for the next sprint.
 
+## v44 — Comment touch and sheet drag
+
+Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlight no longer opens the thread sheet or edit pill; only a real tap does. The comment sheet grab handle and header drag to half, full, or dismiss, with touch-action disabled behind the drag. Thread entries render as chat bubbles (own vs other alignment, grouped senders, hashed author tints, unread dots and list badges from IndexedDB last-seen timestamps).
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.
