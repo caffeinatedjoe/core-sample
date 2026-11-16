@@ -136,13 +136,13 @@ Implemented as core-sample-shell-v42. Notes that use the Obsidian Document Comme
 
 Implemented as core-sample-shell-v43. A header chip shows the open-comment count and opens a list. Tapping a highlight in reading mode opens that thread; in the editor a floating pill does. The sheet is half-height, drags to full, and the reply composer sits above the keyboard. Writes go through editor transactions. Comment name (default `me`) is a setting.
 
-## v44 — Document comments (create)
-
-Implemented as core-sample-shell-v44. The format bar adds 💬. Sending from the composer creates anchors and the first entry in one editor transaction; cancel closes a draft without writing. With no selection, the current line’s text is used, skipping leading list, quote, and heading markers. Creation is disabled inside tables and fenced or indented code. Anchor rules match Document Comments v0.1.19, including U+200B before markers at line starts when needed.
-
 ## v44 — Comment touch and sheet drag
 
 Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlight no longer opens the thread sheet or edit pill; only a real tap does. The comment sheet grab handle and header drag to half, full, or dismiss, with touch-action disabled behind the drag. Thread entries render as chat bubbles (own vs other alignment, grouped senders, hashed author tints, unread dots and list badges from IndexedDB last-seen timestamps).
+
+## v45 — Document comments (create and manage)
+
+Implemented as core-sample-shell-v45. The format bar adds 💬. Sending from the composer creates anchors and the first entry in one editor transaction; cancel closes a draft without writing. With no selection, the current line’s text is used, skipping leading list, quote, and heading markers. Creation is disabled inside tables and fenced or indented code. Anchor rules match Document Comments v0.1.19, including U+200B before markers at line starts when needed. Entry ⋯ and long-press menus support edit (own entries), delete, and react. Reactions serialize as `+👍 me` and `+@N emoji names`. The sheet header can delete a comment while keeping the highlighted text. Orphans offer Delete and Re-anchor (select text, then Attach here). Resolve and list tabs update after each write. All changes use editor transactions.
 
 ## Priority when a stage gets crowded
 
