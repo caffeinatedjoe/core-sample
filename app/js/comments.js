@@ -1033,6 +1033,52 @@ export function commentsAtPos(doc, pos) {
   });
 }
 
+export const AUTHOR_BUBBLE_HUES = [210, 265, 330, 28, 155, 52];
+
+export function authorBubbleHue(author) {
+  let hash = 0;
+  const name = String(author ?? '').trim().toLowerCase();
+  for (let i = 0; i < name.length; i += 1) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return AUTHOR_BUBBLE_HUES[Math.abs(hash) % AUTHOR_BUBBLE_HUES.length];
+}
+
+export function authorInitial(author) {
+  const text = String(author ?? 'me').trim();
+  return (text[0] || '?').toUpperCase();
+}
+
+export function authorsMatch(left, right) {
+  return String(left ?? 'me').trim().toLowerCase() === String(right ?? 'me').trim().toLowerCase();
+}
+
+export function commentSeenStamp(comment) {
+  let best = '';
+  for (const entry of comment?.thread || []) {
+    if (entry.timestamp && (!best || entry.timestamp > best)) best = entry.timestamp;
+  }
+  return best || new Date(0).toISOString();
+}
+
+export function entryIsUnread(entry, lastSeenIso) {
+  const stamp = Date.parse(entry?.timestamp);
+  const seen = Date.parse(lastSeenIso);
+  if (!Number.isFinite(stamp)) return false;
+  if (!Number.isFinite(seen)) return true;
+  return stamp > seen;
+}
+
+export function commentHasUnread(comment, lastSeenIso) {
+  return (comment?.thread || []).some((entry) => entryIsUnread(entry, lastSeenIso));
+}
+
+export function firstUnreadIndex(comment, lastSeenIso) {
+  const entries = comment?.thread || [];
+  for (let i = 0; i < entries.length; i += 1) {
+    if (entryIsUnread(entries[i], lastSeenIso)) return i;
+  }
+  return -1;
+}
+
 export function relativeTime(iso, now = Date.now()) {
   const then = Date.parse(iso);
   if (!Number.isFinite(then)) return iso || '';

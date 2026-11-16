@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { note, openApp, swipe, withPhone } from './helpers/webkit-app.js';
+import { note, openApp, readNote, swipe, withPhone } from './helpers/webkit-app.js';
 
 const NOTE = 'Touch comments.md';
 const TEXT = [
@@ -130,6 +130,48 @@ test('webkit comment sheet handle drag resizes and dismisses', { timeout: 120000
     await swipe(page, tapHandle, tapHandle, { selector: '.comment-sheet-handle', steps: 1, frameMs: 5 });
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
 
+    assert.deepEqual(errors, []);
+  });
+});
+
+const BUBBLE_NOTE = [
+  'We <!--c:k3f9-->ship<!--/c:k3f9--> Friday.',
+  '<!--co:k3f9 by:kyle at:2026-06-17T10:00:00.000Z status:open quote:"ship"',
+  'kyle (2026-06-17T10:00:00.000Z): Can we wait?',
+  'me (2026-06-17T10:05:00.000Z): No, Friday works.',
+  'me (2026-06-17T10:06:00.000Z): Already booked QA.',
+  'grok (2026-06-17T11:00:00.000Z): I can review Thursday night.',
+  '-->',
+].join('\n');
+
+test('webkit chat bubbles align by author and unread clears after opening', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    const path = 'Bubbles.md';
+    await openApp(page, url, [note(path, BUBBLE_NOTE)], path, {
+      commentName: 'me',
+      commentLastSeen: { k3f9: '2026-06-17T10:02:00.000Z' },
+    });
+    const before = await readNote(page, path);
+    await blurEditor(page);
+    await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
+    await page.waitForSelector('.comment-bubble.is-other');
+    await page.waitForSelector('.comment-bubble.is-unread');
+    assert.ok(await page.locator('.comment-bubble.is-own').count() >= 1);
+    const layout = await page.evaluate(() => {
+      const app = document.getElementById('app').getBoundingClientRect();
+      const mid = app.left + app.width / 2;
+      const own = document.querySelector('.comment-bubble-row.is-own .comment-bubble');
+      const other = document.querySelector('.comment-bubble-row.is-other .comment-bubble');
+      return {
+        ownRight: own?.getBoundingClientRect().right ?? 0,
+        otherLeft: other?.getBoundingClientRect().left ?? 0,
+        mid,
+      };
+    });
+    assert.ok(layout.ownRight > layout.mid, 'own bubbles sit on the right');
+    assert.ok(layout.otherLeft < layout.mid, 'other bubbles sit on the left');
+    await page.waitForFunction(() => !document.querySelector('.comment-bubble.is-unread'));
+    assert.equal((await readNote(page, path)).content, before.content);
     assert.deepEqual(errors, []);
   });
 });

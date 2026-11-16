@@ -45,7 +45,13 @@ import { createAutoSync, loadConflictRemote, syncAlert, syncAlertFocus, syncAler
 import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
 import { basename, extensionOf, mimeFor } from './embeds.js';
-import { openCommentCount, reply as replyComment, setStatus as setCommentStatus } from './comments.js';
+import {
+  commentHasUnread,
+  commentSeenStamp,
+  openCommentCount,
+  reply as replyComment,
+  setStatus as setCommentStatus,
+} from './comments.js';
 import { mountComments } from './comments-ui.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
@@ -99,6 +105,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let booting = true;
   let showResolvedComments = false;
   let commentName = 'me';
+  let commentLastSeen = {};
   let commentsUi;
 
   let sync = null;
@@ -306,6 +313,19 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     },
     jump(id) {
       source.revealComment?.(id);
+    },
+    lastSeen(id) {
+      return commentLastSeen[id] || '';
+    },
+    hasUnread(id) {
+      const match = source.comments?.().find((item) => item.id === id);
+      return Boolean(match && commentHasUnread(match, commentLastSeen[id]));
+    },
+    markSeen(id) {
+      const match = source.comments?.().find((item) => item.id === id);
+      if (!match) return;
+      commentLastSeen = { ...commentLastSeen, [id]: commentSeenStamp(match) };
+      return setMeta(db, 'commentLastSeen', commentLastSeen);
     },
     onOpen: paintFormatBar,
     onClose: paintFormatBar,
@@ -2130,6 +2150,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const savedName = await getMeta(db, 'commentName');
       commentName = String(savedName || 'me').trim() || 'me';
       if (commentNameBox) commentNameBox.value = commentName;
+      const savedSeen = await getMeta(db, 'commentLastSeen');
+      commentLastSeen = savedSeen && typeof savedSeen === 'object' ? { ...savedSeen } : {};
       // Settings reads yield. Reload the session so a vault replaced while we
       // waited (another tab, or a reload that seeded IndexedDB) is what we
       // open, instead of writing the stale lastOpened back over it.

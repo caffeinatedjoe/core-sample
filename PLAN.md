@@ -138,7 +138,7 @@ Implemented as core-sample-shell-v43. A header chip shows the open-comment count
 
 ## v44 — Comment touch and sheet drag
 
-Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlight no longer opens the thread sheet or edit pill; only a real tap does. The comment sheet grab handle and header drag to half, full, or dismiss, with touch-action disabled behind the drag.
+Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlight no longer opens the thread sheet or edit pill; only a real tap does. The comment sheet grab handle and header drag to half, full, or dismiss, with touch-action disabled behind the drag. Thread entries render as chat bubbles (own vs other alignment, grouped senders, hashed author tints, unread dots and list badges from IndexedDB last-seen timestamps).
 
 ## Priority when a stage gets crowded
 
