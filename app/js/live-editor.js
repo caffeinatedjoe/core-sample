@@ -19,6 +19,14 @@ import {
   undo,
 } from '../vendor/codemirror.js';
 import { calloutFoldChange, calloutHeight } from './callouts.js';
+import {
+  applyProtectedEdit,
+  clipboardTextForRange,
+  commentHideRanges,
+  commentHighlights,
+  parseComments,
+  stripCommentMarkup,
+} from './comments.js';
 import { basename } from './embeds.js';
 import { formatChange } from './format.js';
 import { propertyChange, propertiesHeight } from './frontmatter.js';
@@ -617,6 +625,94 @@ function indentCommand(dir) {
 }
 
 const hidden = Decoration.replace({});
+const hiddenBlock = Decoration.replace({ block: true });
+
+function commentClipboard(text, state) {
+  const range = state.selection.main;
+  const from = range.empty ? state.doc.lineAt(range.head).from : range.from;
+  const to = range.empty ? state.doc.lineAt(range.head).to : range.to;
+  const covered = state.doc.sliceString(from, to);
+  if (!range.empty && text !== covered) return stripCommentMarkup(text);
+  if (range.empty && text !== covered && text !== covered + (state.lineBreak || '\n')) {
+    return stripCommentMarkup(text);
+  }
+  return clipboardTextForRange(state.doc.toString(), from, to);
+}
+
+function commentTransactionFilter(tr) {
+  if (!tr.docChanged) return tr;
+  if (!(tr.isUserEvent('input') || tr.isUserEvent('delete'))) return tr;
+  if (
+    tr.isUserEvent('input.comment')
+    || tr.isUserEvent('input.toggle')
+    || tr.isUserEvent('input.format')
+    || tr.isUserEvent('input.callout')
+  ) return tr;
+  const start = tr.startState.doc.toString();
+  const edits = [];
+  tr.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    edits.push({ from, to, insert: inserted.toString() });
+  });
+  if (edits.length !== 1) return tr;
+  const expected = applyProtectedEdit(start, edits[0]);
+  const actual = tr.newDoc.toString();
+  if (expected === actual) return tr;
+  const change = diffChange(actual, expected);
+  if (!change) return tr;
+  return [tr, { changes: change, sequential: true }];
+}
+
+function commentDecorations(doc, showResolved) {
+  const hide = commentHideRanges(doc);
+  const marks = commentHighlights(doc, { showResolved });
+  const deco = [];
+  const atomic = [];
+  for (const range of hide) {
+    const widget = range.block ? hiddenBlock : hidden;
+    deco.push(widget.range(range.from, range.to));
+    let atomicTo = range.to;
+    if (range.block && range.to < doc.length && doc[range.to] === '\n') atomicTo = range.to + 1;
+    atomic.push(widget.range(range.from, atomicTo));
+  }
+  for (const mark of marks) {
+    deco.push(Decoration.mark({
+      class: mark.status === 'resolved' ? 'cm-comment is-resolved' : 'cm-comment',
+      attributes: { 'data-comment-id': mark.id },
+    }).range(mark.from, mark.to));
+  }
+  return {
+    decorations: Decoration.set(deco, true),
+    atomic: Decoration.set(atomic, true),
+  };
+}
+
+export function commentEditor(live = { showResolved: false, tick: 0 }) {
+  const plugin = ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.tick = live.tick;
+      const set = commentDecorations(view.state.doc.toString(), live.showResolved);
+      this.decorations = set.decorations;
+      this.atomic = set.atomic;
+    }
+
+    update(update) {
+      if (update.docChanged || update.viewportChanged || live.tick !== this.tick) {
+        this.tick = live.tick;
+        const set = commentDecorations(update.state.doc.toString(), live.showResolved);
+        this.decorations = set.decorations;
+        this.atomic = set.atomic;
+      }
+    }
+  }, {
+    decorations: (value) => value.decorations,
+    provide: (ext) => EditorView.atomicRanges.of((view) => view.plugin(ext)?.atomic || Decoration.none),
+  });
+  return [
+    EditorState.transactionFilter.of(commentTransactionFilter),
+    EditorView.clipboardOutputFilter.of(commentClipboard),
+    plugin,
+  ];
+}
 
 function decorate(view, hooks, folds) {
   const ranges = view.hasFocus ? view.state.selection.ranges : [];
@@ -693,12 +789,13 @@ export function diffChange(before, after) {
 export function createLiveEditor(host, hooks = {}) {
   const editable = new Compartment();
   let quiet = false;
-  const live = { tick: 0, folds: {} };
+  const live = { tick: 0, folds: {}, showResolved: false };
 
   const extensions = () => [
     EditorState.lineSeparator.of('\n'),
     markdownLanguage.extension,
     history(),
+    ...commentEditor(live),
     keymap.of([
       { key: 'Enter', run: enterCommand },
       { key: 'Tab', run: indentCommand(1) },
@@ -962,6 +1059,20 @@ export function createLiveEditor(host, hooks = {}) {
       live.folds = next && typeof next === 'object' ? next : {};
       live.tick += 1;
       view.dispatch({});
+    },
+    setShowResolved(value) {
+      live.showResolved = Boolean(value);
+      live.tick += 1;
+      view.dispatch({});
+    },
+    dispatchChanges(changes, userEvent = 'input.comment') {
+      if (view.state.readOnly) return false;
+      if (!changes || !changes.length) return false;
+      view.dispatch({ changes, userEvent });
+      return true;
+    },
+    comments() {
+      return parseComments(view.state.doc.toString());
     },
     posOf(node) {
       try {

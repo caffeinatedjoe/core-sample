@@ -9,6 +9,7 @@ import { foldedRanges, headingSections } from './fold.js';
 import { parseProperties } from './frontmatter.js';
 import { describeImage, isSafeUrl, parseWikilink } from './markdown.js';
 import { findMath } from './math.js';
+import { commentMarkup } from './comments.js';
 import { parseNoteEmbed } from './note-embeds.js';
 import { parseTable } from './tables.js';
 
@@ -192,11 +193,16 @@ export function liveSpecs(state, { ranges = [], from = 0, to = state.doc.length,
 
   const blocks = [];
   const inlineCode = [];
+  const markup = commentMarkup(doc.sliceString(0, doc.length));
+  const commentCovered = (a, b) => markup.some((mark) => mark.from < b && mark.to > a);
   tree.iterate({
     from,
     to,
     enter(node) {
       if (!CODE_NODES.has(node.name)) return undefined;
+      if ((node.name === 'HTMLBlock' || node.name === 'CommentBlock') && commentCovered(node.from, node.to)) {
+        return false;
+      }
       (node.name === 'InlineCode' ? inlineCode : blocks).push({ from: node.from, to: node.to });
       return false;
     },

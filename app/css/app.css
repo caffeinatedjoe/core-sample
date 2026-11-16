@@ -407,6 +407,19 @@ html.is-keyboard .format-bar {
 .cm-em { font-style: italic; }
 .cm-strike { text-decoration: line-through; }
 
+.cm-comment,
+.md-comment {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 2px;
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.cm-comment.is-resolved,
+.md-comment.is-resolved {
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
 .cm-inline-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.88em;

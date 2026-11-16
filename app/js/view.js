@@ -95,6 +95,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let erasing = false;
   let holding = false;
   let booting = true;
+  let showResolvedComments = false;
 
   let sync = null;
   let syncConflicts = false;
@@ -1551,6 +1552,15 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     searchOptions.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   searchContent?.addEventListener('change', renderList);
+  doc.getElementById('show-resolved-comments')?.addEventListener('change', async (event) => {
+    showResolvedComments = Boolean(event.target.checked);
+    source.setShowResolved?.(showResolvedComments);
+    try {
+      await setMeta(db, 'showResolvedComments', showResolvedComments);
+    } catch {
+      /* keep the in-memory choice */
+    }
+  });
   title?.addEventListener('click', () => {
     if (titleEdit) return;
     beginTitleRename();
@@ -2054,6 +2064,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         for (const folder of ancestorFolders(session.current.path)) expanded.add(folder);
       }
       deleteMeta(db, 'editorMode').catch(() => {});
+      showResolvedComments = Boolean(await getMeta(db, 'showResolvedComments'));
+      const resolvedBox = doc.getElementById('show-resolved-comments');
+      if (resolvedBox) resolvedBox.checked = showResolvedComments;
+      source.setShowResolved?.(showResolvedComments);
       if (session.current) {
         showNote(session.current);
         await setMeta(db, 'lastOpened', session.current.path);
