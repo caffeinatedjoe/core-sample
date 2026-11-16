@@ -5,6 +5,7 @@ export {
   Compartment,
   EditorSelection,
   EditorState,
+  StateField,
   Transaction,
 } from '@codemirror/state';
 export {

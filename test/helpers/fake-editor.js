@@ -57,6 +57,7 @@ export function fakeEditorFactory(createElement) {
       setFolds() {},
       setShowResolved() {},
       dispatchChanges() { return false; },
+      revealComment() {},
       comments: () => [],
       posOf: () => -1,
       images: () => [],

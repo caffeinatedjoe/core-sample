@@ -132,6 +132,10 @@ Implemented as core-sample-shell-v41. Replaces the v2/v11 icon with Joe's third 
 
 Implemented as core-sample-shell-v42. Notes that use the Obsidian Document Comments format (`<!--c:ID-->…<!--/c:ID-->` plus a `<!--co:ID …-->` thread) hide those markers in Live Preview, highlight the anchored text, and strip the markup from rendered Markdown. The on-disk format is the plugin's (v0.1.19). Markers inside code are ignored. Copy omits the markup. Partial deletes keep markers whole. Removing the highlighted text leaves the thread as an orphan. Resolved comments stay unhighlighted unless Settings → Comments → Show resolved is on.
 
+## v43 — Document comments (view and reply)
+
+Implemented as core-sample-shell-v43. A header chip shows the open-comment count and opens a list. Tapping a highlight in reading mode opens that thread; in the editor a floating pill does. The sheet is half-height, drags to full, and the reply composer sits above the keyboard. Writes go through editor transactions. Comment name (default `me`) is a setting. Creating comments, editing entries, reactions, and re-anchor wait for the next sprint.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

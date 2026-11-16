@@ -45,6 +45,8 @@ import { createAutoSync, loadConflictRemote, syncAlert, syncAlertFocus, syncAler
 import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
 import { basename, extensionOf, mimeFor } from './embeds.js';
+import { openCommentCount, reply as replyComment, setStatus as setCommentStatus } from './comments.js';
+import { mountComments } from './comments-ui.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
 import { createLiveEditor } from './live-editor.js';
@@ -96,6 +98,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let holding = false;
   let booting = true;
   let showResolvedComments = false;
+  let commentName = 'me';
+  let commentsUi;
 
   let sync = null;
   let syncConflicts = false;
@@ -240,7 +244,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function paintFormatBar() {
     const bar = doc.getElementById('format-bar');
     if (!bar) return;
-    bar.hidden = Boolean(source.readOnly) || !source.hasFocus();
+    bar.hidden = Boolean(source.readOnly) || !source.hasFocus() || Boolean(commentsUi?.showing?.());
   }
 
   const source = createEditor(host, {
@@ -264,6 +268,47 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       current?.path || '',
     ),
     onFold: toggleHeadingFold,
+    onCommentTap(id) {
+      commentsUi?.openThread(id);
+    },
+    onCommentCaret(hits, coords, extra) {
+      if (extra?.typed) commentsUi?.fadePill?.();
+      else commentsUi?.showPill?.(hits, coords);
+    },
+  });
+
+  function applyCommentChanges(changes) {
+    if (!changes || !changes.length) return false;
+    if (!source.dispatchChanges?.(changes)) return false;
+    rememberEdit();
+    commentsUi?.paintChip?.();
+    return true;
+  }
+
+  commentsUi = mountComments(doc, {
+    comments: () => source.comments?.() || [],
+    doc: () => source.value,
+    openCount: () => openCommentCount(source.value),
+    showResolved: () => showResolvedComments,
+    author: () => commentName || 'me',
+    reply(id, text) {
+      return applyCommentChanges(replyComment(source.value, id, {
+        author: commentName || 'me',
+        createdAt: new Date().toISOString(),
+        text,
+      }).changes);
+    },
+    setStatus(id, status) {
+      return applyCommentChanges(setCommentStatus(source.value, id, status).changes);
+    },
+    reveal(id) {
+      source.revealComment?.(id);
+    },
+    jump(id) {
+      source.revealComment?.(id);
+    },
+    onOpen: paintFormatBar,
+    onClose: paintFormatBar,
   });
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
   // Text typed before the last note loads would be replaced by it.
@@ -549,6 +594,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       loadFolds(note.path);
     }
     paintTitle();
+    commentsUi?.paintChip?.();
     source.refreshDataview?.();
     if (heading) scrollToHeading(heading);
     else if (Number.isInteger(line) && line >= 0) source.scrollToLine?.(line);
@@ -567,6 +613,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     revokeEmbeds();
     source.load('');
     paintTitle();
+    commentsUi?.paintChip?.();
   }
 
   async function flushEditing() {
@@ -1502,7 +1549,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   });
 
   function overlayOpen() {
-    return ['settings-sheet', 'conflict-sheet', 'image-viewer', 'file-preview'].some((id) => {
+    return ['settings-sheet', 'conflict-sheet', 'comment-sheet', 'image-viewer', 'file-preview'].some((id) => {
       const node = doc.getElementById(id);
       return node && !node.hidden;
     });
@@ -1520,6 +1567,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       current.updatedAt = Date.now();
     }
     paintTitle();
+    commentsUi?.paintChip?.();
     saver.schedule(snapshot);
   }
 
@@ -1555,10 +1603,21 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   doc.getElementById('show-resolved-comments')?.addEventListener('change', async (event) => {
     showResolvedComments = Boolean(event.target.checked);
     source.setShowResolved?.(showResolvedComments);
+    commentsUi?.paintChip?.();
     try {
       await setMeta(db, 'showResolvedComments', showResolvedComments);
     } catch {
       /* keep the in-memory choice */
+    }
+  });
+  const commentNameBox = doc.getElementById('comment-name');
+  commentNameBox?.addEventListener('change', async () => {
+    commentName = String(commentNameBox.value || '').trim() || 'me';
+    commentNameBox.value = commentName;
+    try {
+      await setMeta(db, 'commentName', commentName);
+    } catch {
+      /* keep the in-memory name */
     }
   });
   title?.addEventListener('click', () => {
@@ -2068,6 +2127,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const resolvedBox = doc.getElementById('show-resolved-comments');
       if (resolvedBox) resolvedBox.checked = showResolvedComments;
       source.setShowResolved?.(showResolvedComments);
+      const savedName = await getMeta(db, 'commentName');
+      commentName = String(savedName || 'me').trim() || 'me';
+      if (commentNameBox) commentNameBox.value = commentName;
+      commentsUi?.paintChip?.();
       if (session.current) {
         showNote(session.current);
         await setMeta(db, 'lastOpened', session.current.path);

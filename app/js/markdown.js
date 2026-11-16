@@ -57,6 +57,10 @@ function nextSpecial(text, index) {
   return index + found;
 }
 
+export function renderInlineMarkdown(text) {
+  return renderInline(text);
+}
+
 function renderInline(text) {
   let html = '';
   let index = 0;

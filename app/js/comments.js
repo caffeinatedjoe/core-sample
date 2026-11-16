@@ -315,6 +315,26 @@ export function isOrphan(comment) {
   return Boolean(comment?.body) && !isAnchored(comment);
 }
 
+export function commentsForList(comments, tab = 'open') {
+  const items = (comments || []).filter((comment) => comment.body);
+  const match = tab === 'resolved'
+    ? items.filter((comment) => comment.status === 'resolved')
+    : tab === 'all'
+      ? items
+      : items.filter((comment) => comment.status !== 'resolved');
+  return {
+    anchored: match.filter((comment) => !isOrphan(comment)),
+    orphans: match.filter((comment) => isOrphan(comment)),
+  };
+}
+
+export function commentQuote(comment, doc) {
+  if (comment?.quote) return String(comment.quote).replace(/\s+/g, ' ').trim();
+  const range = isCodeComment(comment) ? null : anchorRange(comment);
+  if (!range) return '';
+  return String(doc ?? '').slice(range.from, range.to).replace(/\s+/g, ' ').trim();
+}
+
 export function hasAnchorText(comment, doc) {
   const range = anchorRange(comment);
   if (!range || range.to <= range.from) return false;
@@ -602,9 +622,10 @@ export function commentHideRanges(doc) {
         const quote = isQuoteLine(text.slice(line.from, line.to))
           || (comment.body.from > 0 && isQuoteLine(text.slice(lineAround(text, comment.body.from - 1).from, lineAround(text, comment.body.from - 1).to)));
         if (quote) add(comment.body.from, comment.body.to, 'body', isOwnLine(text, comment.body));
-        else {
-          const range = bodyHideRange(text, comment.body);
-          add(range.from, range.to, 'body');
+        else if (isOwnLine(text, comment.body) || text.slice(comment.body.from, comment.body.to).includes('\n')) {
+          add(comment.body.from, comment.body.to, 'body', true);
+        } else {
+          add(comment.body.from, comment.body.to, 'body');
         }
       }
     }

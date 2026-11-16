@@ -10,6 +10,8 @@ import {
   closeMarker,
   commentHighlights,
   commentHideRanges,
+  commentQuote,
+  commentsForList,
   deleteComment,
   deleteEntry,
   editEntry,
@@ -375,6 +377,22 @@ test('stripCommentMarkup removes markers and bodies for preview', () => {
   assert.equal(openCommentCount(README), 1);
   assert.equal(openCommentCount(README.replace('status:open', 'status:resolved')), 0);
   assert.ok([...existingIds(README)].includes('k3f9'));
+});
+
+test('commentsForList groups orphans and honors the Open / Resolved / All tabs', () => {
+  const comments = parseComments([
+    README,
+    JOE,
+    '<!--co:gone status:open quote:"missing"\nme (2026-11-16T18:00:00.000Z): leftover\n-->',
+    'Done <!--c:r9-->old<!--/c:r9-->.\n<!--co:r9 status:resolved\nme: closed\n-->',
+  ].join('\n\n'));
+  const open = commentsForList(comments, 'open');
+  assert.deepEqual(open.anchored.map((comment) => comment.id), ['k3f9', 'g2fot']);
+  assert.deepEqual(open.orphans.map((comment) => comment.id), ['gone']);
+  const resolved = commentsForList(comments, 'resolved');
+  assert.deepEqual(resolved.anchored.map((comment) => comment.id), ['r9']);
+  assert.equal(commentsForList(comments, 'all').anchored.length, 3);
+  assert.equal(commentQuote(parseComments(README)[0]), 'ship on Friday');
 });
 
 test('relativeTime names recent stamps', () => {
