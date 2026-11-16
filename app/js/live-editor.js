@@ -42,6 +42,7 @@ import { tableCellChange, tableHeight } from './tables.js';
 const CHECK = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 6.2 4.6 9 10 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const HOLD_MS = 450;
 const SLOP_PX = 10;
+const TAP_MS = 500;
 
 function classOf(base, extra) {
   return extra ? `${base} ${extra}` : base;
@@ -797,6 +798,7 @@ export function createLiveEditor(host, hooks = {}) {
   let quiet = false;
   const live = { tick: 0, folds: {}, showResolved: false, flashId: null };
   let flashTimer = 0;
+  let commentTapOk = true;
 
   const extensions = () => [
     EditorState.lineSeparator.of('\n'),
@@ -840,6 +842,11 @@ export function createLiveEditor(host, hooks = {}) {
       }
       if (update.docChanged) hooks.onCommentCaret?.([], null, { typed: true });
       else if (update.selectionSet && update.view.hasFocus) {
+        if (!commentTapOk) {
+          commentTapOk = true;
+          hooks.onCommentCaret?.([], null, { typed: false });
+          return;
+        }
         const pos = update.state.selection.main.head;
         const hits = commentsAtPos(update.state.doc.toString(), pos);
         const coords = hits.length ? update.view.coordsAtPos(pos) : null;
@@ -907,17 +914,17 @@ export function createLiveEditor(host, hooks = {}) {
     return readOnly || !view.hasFocus;
   }
 
+  function previewCommentTap() {
+    return readOnly || !view.hasFocus || commentReadIntent;
+  }
+
   function openComment(mark) {
     const id = mark?.dataset?.commentId;
     if (id) hooks.onCommentTap?.(id);
   }
 
   function act(node, target, event, held) {
-    const mark = commentMark(target);
-    if (mark && readingTap()) {
-      openComment(mark);
-      return;
-    }
+    if (commentMark(target) && readingTap()) return;
     if (held) {
       editAt(node);
       return;
@@ -967,32 +974,98 @@ export function createLiveEditor(host, hooks = {}) {
   // A long press puts the caret inside it instead, to edit the syntax.
   let touch = null;
   let touchedAt = 0;
-  let commentReadTap = false;
+  let commentGesture = null;
+  let commentReadIntent = false;
+  const scroller = view.scrollDOM;
+
+  function isCommentTap(gesture) {
+    if (!gesture) return false;
+    if (gesture.moved || gesture.scrolled) return false;
+    if (Date.now() - gesture.at > TAP_MS) return false;
+    const x = gesture.endX ?? gesture.x;
+    const y = gesture.endY ?? gesture.y;
+    return Math.hypot(x - gesture.x, y - gesture.y) <= SLOP_PX;
+  }
+
+  function startCommentGesture(point) {
+    commentGesture = {
+      x: point.clientX,
+      y: point.clientY,
+      at: Date.now(),
+      scrollTop: scroller.scrollTop,
+      moved: false,
+      scrolled: false,
+    };
+  }
+
+  function trackCommentMove(point) {
+    if (!commentGesture) return;
+    if (Math.hypot(point.clientX - commentGesture.x, point.clientY - commentGesture.y) > SLOP_PX) {
+      commentGesture.moved = true;
+    }
+    if (scroller.scrollTop !== commentGesture.scrollTop) commentGesture.scrolled = true;
+  }
+
+  function finishCommentGesture(point) {
+    const gesture = commentGesture;
+    commentGesture = null;
+    if (!gesture) return null;
+    gesture.endX = point.clientX;
+    gesture.endY = point.clientY;
+    return gesture;
+  }
+
   const content = view.contentDOM;
+  scroller.addEventListener('scroll', () => {
+    if (commentGesture && scroller.scrollTop !== commentGesture.scrollTop) commentGesture.scrolled = true;
+  }, { passive: true });
   content.addEventListener('pointerdown', (event) => {
-    commentReadTap = Boolean(commentMark(event.target) && (readOnly || !view.hasFocus));
-    if (commentReadTap) event.preventDefault();
-  });
+    if (commentMark(event.target) && readingTap()) commentReadIntent = true;
+  }, true);
   content.addEventListener('touchstart', (event) => {
+    if (commentMark(event.target)) {
+      if (readingTap()) commentReadIntent = true;
+      const point = event.touches[0];
+      if (point) startCommentGesture(point);
+    } else {
+      commentGesture = null;
+      commentReadIntent = false;
+      commentTapOk = true;
+    }
     const node = event.touches.length === 1 ? island(event.target) : null;
     const point = event.touches[0];
     touch = node ? { node, target: event.target, x: point.clientX, y: point.clientY, at: Date.now(), moved: false } : null;
   }, { passive: true });
   content.addEventListener('touchmove', (event) => {
-    if (!touch) return;
     const point = event.touches[0];
+    if (point) trackCommentMove(point);
+    if (!touch) return;
     if (!point || Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > SLOP_PX) touch.moved = true;
   }, { passive: true });
-  content.addEventListener('touchcancel', () => { touch = null; });
+  content.addEventListener('touchcancel', () => {
+    touch = null;
+    commentGesture = null;
+    commentReadIntent = false;
+  });
   content.addEventListener('touchend', (event) => {
+    const point = event.changedTouches[0];
+    const gesture = point ? finishCommentGesture(point) : null;
     const mark = commentMark(event.target);
-    if (mark && (commentReadTap || readingTap()) && (!touch || !touch.moved)) {
-      event.preventDefault();
-      touch = null;
-      touchedAt = Date.now();
-      commentReadTap = false;
-      openComment(mark);
-      return;
+    if (mark) {
+      const tap = isCommentTap(gesture);
+      commentTapOk = tap;
+      if (tap && previewCommentTap()) {
+        event.preventDefault();
+        touchedAt = Date.now();
+        touch = null;
+        commentReadIntent = false;
+        openComment(mark);
+        return;
+      }
+      commentReadIntent = false;
+    } else {
+      commentTapOk = true;
+      commentReadIntent = false;
     }
     const started = touch;
     touch = null;
@@ -1007,15 +1080,15 @@ export function createLiveEditor(host, hooks = {}) {
       active.blur();
     }
     if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
-    if (commentMark(event.target) && (commentReadTap || readingTap())) event.preventDefault();
+    if (commentMark(event.target) && previewCommentTap()) return;
     if (island(event.target)) event.preventDefault();
   });
   content.addEventListener('click', (event) => {
     const mark = commentMark(event.target);
-    if (mark && (commentReadTap || readingTap())) {
+    if (mark && previewCommentTap()) {
       event.preventDefault();
-      commentReadTap = false;
       if (Date.now() - touchedAt < 800) return;
+      commentReadIntent = false;
       openComment(mark);
       return;
     }

@@ -508,6 +508,8 @@ html.is-keyboard .format-bar {
   margin: 8px auto 0;
   border-radius: 999px;
   background: var(--chip);
+  touch-action: none;
+  cursor: grab;
 }
 
 .comment-sheet-head {
@@ -516,7 +518,8 @@ html.is-keyboard .format-bar {
   gap: 4px;
   min-height: 44px;
   padding: 4px 8px 0 12px;
-  touch-action: pan-y;
+  touch-action: none;
+  cursor: grab;
 }
 
 .comment-sheet-quote {

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v43';
+export const BUILD = 'core-sample-shell-v44';
 
 const TYPES = {
   '.html': 'text/html',
@@ -174,9 +174,10 @@ export async function fakeKeyboard(page, inset = 336) {
 
 // Synthetic touches. Playwright WebKit has no touch-drag API and refuses
 // `new Touch()`, but the legacy document.createTouch path still works.
-export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 0, selector = '#source' } = {}) {
-  await page.evaluate(async ({ from, to, steps, frameMs, holdMs, selector }) => {
+export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 0, selector = '#source', scrollDelta = 0 } = {}) {
+  await page.evaluate(async ({ from, to, steps, frameMs, holdMs, selector, scrollDelta }) => {
     const target = document.querySelector(selector) || document.body;
+    const scroller = document.querySelector('.cm-scroller');
     const touch = (x, y) => document.createTouch(window, target, 7, x, y, x, y);
     const fire = (type, x, y, ended = false) => {
       const point = touch(x, y);
@@ -194,8 +195,11 @@ export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 
     if (holdMs) await wait(holdMs);
     for (let i = 1; i <= steps; i += 1) {
       await wait(frameMs);
-      fire('touchmove', from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps);
+      const x = from.x + ((to.x - from.x) * i) / steps;
+      const y = from.y + ((to.y - from.y) * i) / steps;
+      if (scrollDelta && scroller) scroller.scrollTop += scrollDelta / steps;
+      fire('touchmove', x, y);
     }
     fire('touchend', to.x, to.y, true);
-  }, { from, to, steps, frameMs, holdMs, selector });
+  }, { from, to, steps, frameMs, holdMs, selector, scrollDelta });
 }
