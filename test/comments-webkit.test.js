@@ -107,3 +107,88 @@ test('webkit preview tap, pill, reply, resolve, next, and composer above keyboar
     assert.deepEqual(errors, []);
   });
 });
+
+async function selectText(page, start, end) {
+  await page.evaluate(async ({ start, end }) => {
+    const { EditorView } = await import('./vendor/codemirror.js');
+    const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+    view.focus();
+    view.dispatch({ selection: { anchor: start, head: end } });
+  }, { start, end });
+}
+
+test('webkit creates, edits, reacts, and re-anchors comments', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    const body = [
+      'Plan the launch next week.',
+      '',
+      '| k | v |',
+      '| - | - |',
+      '| x | y |',
+    ].join('\n');
+    await openApp(page, url, [note('Create.md', body)], 'Create.md');
+    await focusEditor(page);
+    const planStart = body.indexOf('launch');
+    await selectText(page, planStart, planStart + 'launch next week'.length);
+    await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
+    await page.waitForFunction(() => !document.querySelector('[data-format="comment"]').disabled);
+    await page.locator('[data-format="comment"]').click();
+    await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
+    await page.locator('#comment-reply').fill('Need a QA buffer.');
+    await page.locator('#comment-send').click();
+    await page.waitForFunction(() => document.getElementById('comments-chip')?.textContent === '💬 1');
+    let source = await page.evaluate(() => document.getElementById('source').value);
+    assert.match(source, /<!--c:[A-Za-z0-9]+-->launch next week<!--\/c:/);
+    assert.match(source, /Need a QA buffer\./);
+
+    await page.locator('#comment-sheet-close').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+    await selectText(page, planStart, planStart + 'launch'.length);
+    await page.locator('[data-format="comment"]').click();
+    await page.locator('#comment-composer-cancel').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+    assert.doesNotMatch(await page.evaluate(() => document.getElementById('source').value), /<!--c:.*-->launch<!--/);
+
+    await selectText(page, planStart, planStart + 'launch next week'.length);
+    await page.locator('[data-format="comment"]').click();
+    await page.locator('#comment-composer-cancel').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+
+    await page.evaluate(async () => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+      view.focus();
+      view.dispatch({ selection: { anchor: view.state.doc.line(1).from } });
+    });
+    await page.locator('[data-format="comment"]').click();
+    await page.locator('#comment-reply').fill('Line note');
+    await page.locator('#comment-send').click();
+    source = await page.evaluate(() => document.getElementById('source').value);
+    assert.match(source, /Line note/);
+
+    await page.locator('#comment-sheet-close').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+    await page.locator('#comments-chip').click();
+    await page.locator('.comment-row').first().click();
+    await page.locator('.comment-entry-menu').first().click();
+    await page.locator('.comment-menu-item', { hasText: 'Edit' }).click();
+    await page.locator('#comment-reply').fill('Edited note');
+    await page.locator('#comment-send').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet-thread')?.textContent.includes('Edited note'));
+
+    await page.locator('.comment-entry-menu').first().click();
+    await page.locator('.comment-menu-item', { hasText: 'React' }).click();
+    await page.locator('#comment-reaction-picker [data-emoji="👍"]').click();
+    await page.waitForFunction(() => document.querySelector('.comment-reaction-chip')?.textContent.includes('👍'));
+    await page.locator('.comment-reaction-chip').first().click();
+    source = await page.evaluate(() => document.getElementById('source').value);
+    assert.doesNotMatch(source, /\+👍/);
+
+    await page.locator('#comment-sheet-more').click();
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.locator('[data-comment-action="delete"]').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+
+    assert.deepEqual(errors, []);
+  });
+});

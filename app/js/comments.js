@@ -5,7 +5,10 @@
 //  line-start.ts MARKER_GUARD, and src/editor/edits.ts). Core Sample does not
 // vendor that plugin's UI.
 
+import { isTableRow, isTableSep } from './tables.js';
+
 export const MARKER_GUARD = '\u200b';
+export const COMMENT_REACTIONS = ['👍', '❤️', '😄', '🎉', '😮', '👀', '🙏'];
 export const TERMINATOR_BREAK = '--\u200b>';
 
 const OPEN_RE = /<!--c:([A-Za-z0-9]+)-->/g;
@@ -782,15 +785,266 @@ function reactionsAfterEntryDelete(reactions, deletedEntry) {
   });
 }
 
-export function addComment(doc, from, to, input) {
+function sourceLines(doc) {
+  const lines = [];
+  let from = 0;
+  for (const text of String(doc ?? '').split('\n')) {
+    lines.push({ text, from, to: from + text.length });
+    from += text.length + 1;
+  }
+  return lines;
+}
+
+function lineIndexAt(lines, pos) {
+  return lines.findIndex((line) => pos >= line.from && pos <= line.to);
+}
+
+function unescapedPipes(line) {
+  const pipes = [];
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] !== '|') continue;
+    let slashes = 0;
+    for (let j = i - 1; j >= 0 && line[j] === '\\'; j -= 1) slashes += 1;
+    if (slashes % 2 === 0) pipes.push(i);
+  }
+  return pipes;
+}
+
+function backtickRun(doc, from, limit) {
+  let to = from;
+  while (to < limit && doc.charAt(to) === '`') to += 1;
+  return to - from;
+}
+
+function isEscapedAt(doc, position) {
+  let slashes = 0;
+  for (let cursor = position - 1; cursor >= 0 && doc.charAt(cursor) === '\\'; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+
+export function expandInlineCodeSelection(doc, from, to) {
+  const lineFrom = doc.lastIndexOf('\n', from - 1) + 1;
+  const nextLine = doc.indexOf('\n', to);
+  const lineTo = nextLine < 0 ? doc.length : nextLine;
+  let start = from;
+  let end = to;
+  for (let open = lineFrom; open < lineTo; open += 1) {
+    if (doc.charAt(open) !== '`' || isEscapedAt(doc, open)) continue;
+    const ticks = backtickRun(doc, open, lineTo);
+    const contentFrom = open + ticks;
+    let cursor = contentFrom;
+    while (cursor < lineTo) {
+      const candidate = doc.indexOf('`', cursor);
+      if (candidate < 0 || candidate >= lineTo) break;
+      const closeTicks = backtickRun(doc, candidate, lineTo);
+      if (closeTicks === ticks && !isEscapedAt(doc, candidate)) {
+        const close = candidate + closeTicks;
+        if (from > open && from < close) start = open;
+        if (to > open && to < close) end = close;
+        open = close - 1;
+        break;
+      }
+      cursor = candidate + closeTicks;
+    }
+  }
+  return { from: start, to: end };
+}
+
+function outOfWikilinks(doc, from, to) {
+  const links = [...doc.matchAll(/!?\[\[[^\]\n]*\]\]/g)].map((match) => ({
+    from: match.index,
+    to: match.index + match[0].length,
+  }));
+  const holding = (pos) => (link) => pos > link.from && pos < link.to;
+  return {
+    from: links.find(holding(from))?.from ?? from,
+    to: links.find(holding(to))?.to ?? to,
+  };
+}
+
+function textStart(doc, from) {
+  const line = lineAround(doc, from);
+  const lineText = doc.slice(line.from, line.to);
+  if (!lineText.trim()) return line.from;
+  const markup = leadingMarkup(lineText);
+  const text = line.from + markup.end;
+  if (from > text) return from;
+  return doc.charAt(text) === MARKER_GUARD ? text + 1 : text;
+}
+
+export function anchorOffBlockMarkup(doc, from, to) {
+  const start = textStart(doc, from);
+  if (start >= to) return { from: start, to: start };
+  const line = lineAround(doc, to);
+  const lineText = doc.slice(line.from, line.to);
+  let end = to;
+  const markup = leadingMarkup(lineText);
+  const textCol = line.from + markup.end;
+  if (!lineText.trim() || to <= textCol) {
+    const trimmed = doc.slice(start, line.from).trimEnd();
+    end = start + trimmed.length;
+  }
+  const code = expandInlineCodeSelection(doc, start, end);
+  return outOfWikilinks(doc, code.from, code.to);
+}
+
+function cellBounds(line) {
+  const pipes = unescapedPipes(line.text);
+  const first = pipes[0];
+  const last = pipes[pipes.length - 1];
+  const start = first !== undefined && first === line.text.search(/\S/) ? first + 1 : 0;
+  const end = last !== undefined && line.text.slice(last + 1).trim() === ''
+    ? last
+    : line.text.length;
+  return { from: line.from + start, to: line.from + Math.max(start, end) };
+}
+
+function tableAt(lines, index) {
+  for (let start = 0; start + 1 < lines.length; start += 1) {
+    const head = lines[start];
+    const delimiter = lines[start + 1];
+    if (!head || !delimiter || !isTableRow(head.text) || !isTableSep(delimiter.text)) continue;
+    let end = start + 2;
+    while (end < lines.length && isTableRow(lines[end].text) && !isTableSep(lines[end].text)) end += 1;
+    if (index >= start && index < end) return { start, end };
+    start = end - 1;
+  }
+  return null;
+}
+
+function looksLikeTableRow(line) {
+  return unescapedPipes(line).length >= 1 && /[^\s|]/.test(line);
+}
+
+export function clampToTableCells(doc, from, to) {
+  if (to <= from) return { from, to };
+  const lines = sourceLines(doc);
+  const tables = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const table = tableAt(lines, i);
+    if (table && !tables.some((item) => item.start === table.start)) tables.push(table);
+  }
+  if (!tables.length) return { from, to };
+  const fromIndex = lineIndexAt(lines, from);
+  const toIndex = lineIndexAt(lines, to);
+  const head = tables.find((table) => fromIndex >= table.start && fromIndex < table.end);
+  const tail = tables.find((table) => toIndex >= table.start && toIndex < table.end);
+  if (!head && !tail) return { from, to };
+  const start = head ? cellBounds(lines[fromIndex]).from : from;
+  const endLine = tail ? lines[toIndex] : lines[fromIndex];
+  const end = tail && endLine ? cellBounds(endLine).to : to;
+  if (end <= start) return { from, to: from };
+  return { from: start, to: end };
+}
+
+export function isInTableBody(doc, pos) {
+  const lines = sourceLines(doc);
+  const index = lineIndexAt(lines, pos);
+  if (index < 0) return false;
+  const table = tableAt(lines, index);
+  if (table) return index !== table.start + 1;
+  const text = lines[index].text;
+  if (!looksLikeTableRow(text) || isTableSep(text)) return false;
+  const prev = lines[index - 1]?.text;
+  const next = lines[index + 1]?.text;
+  if (prev && (isTableSep(prev) || (looksLikeTableRow(prev) && /-/.test(prev)))) return true;
+  return false;
+}
+
+export function anchorSelection(doc, from, to) {
+  return anchorOffBlockMarkup(doc, ...Object.values(clampToTableCells(doc, from, to)));
+}
+
+export function commentTargetRange(doc, from, to) {
   const source = String(doc ?? '');
   let start = from;
   let end = to;
   if (end < start) [start, end] = [end, start];
-  if (end === start) return err('Select some text to comment on.');
+  if (end === start) {
+    const line = lineAround(source, start);
+    const range = anchorOffBlockMarkup(source, line.from, line.to);
+    if (range.to <= range.from) return err('There is no text on this line to comment on.');
+    start = range.from;
+    end = range.to;
+  }
+  const anchored = anchorSelection(source, start, end);
+  if (anchored.to <= anchored.from) return err('Select some text to comment on.');
+  return { from: anchored.from, to: anchored.to, expected: source.slice(anchored.from, anchored.to) };
+}
+
+export function canCreateComment(doc, from, to) {
+  const source = String(doc ?? '');
+  const range = commentTargetRange(source, from, to);
+  if (range.error) return false;
+  if (isInFencedCode(source, range.from) || isInFencedCode(source, range.to - 1)) return false;
+  if (isInside(indentedCodeRanges(source), range.from) || isInside(indentedCodeRanges(source), range.to - 1)) return false;
+  if (isInTableBody(source, range.from) || isInTableBody(source, range.to - 1)) return false;
+  return true;
+}
+
+export function findHighlightAtSelection(doc, from, to) {
+  let start = from;
+  let end = to;
+  if (end < start) [start, end] = [end, start];
+  if (end === start) return null;
+  const comments = parseComments(doc).filter(isHighlight);
+  const at = (a, b) => comments.find((comment) => {
+    if (isCodeComment(comment)) return false;
+    const range = anchorRange(comment);
+    return range && range.from === a && range.to === b;
+  });
+  const exact = at(start, end);
+  if (exact) return exact;
+  const anchored = anchorSelection(doc, start, end);
+  return at(anchored.from, anchored.to) ?? null;
+}
+
+export function reactionsForEntry(comment, index) {
+  const grouped = new Map();
+  for (const reaction of comment.reactions || []) {
+    const entry = reaction.entry ?? 0;
+    if (entry !== index) continue;
+    const row = grouped.get(reaction.emoji) || { emoji: reaction.emoji, authors: [], count: 0 };
+    row.authors = [...reaction.authors];
+    row.count = row.authors.length;
+    grouped.set(reaction.emoji, row);
+  }
+  return [...grouped.values()];
+}
+
+export function addComment(doc, from, to, input) {
+  const source = String(doc ?? '');
+  if (input.targetHighlightId) {
+    const target = parseComments(source).find((item) => item.id === input.targetHighlightId);
+    if (!target?.body || !isAnchored(target)) return err('The empty comment no longer exists.');
+    if (input.text) {
+      return reply(source, target.id, {
+        author: input.author,
+        createdAt: input.createdAt,
+        text: input.text,
+      });
+    }
+    if (target.thread.length > 0) return err('The empty comment now has text. Open the comment to make changes.');
+    return deleteComment(source, target.id);
+  }
+  const target = commentTargetRange(source, from, to);
+  if (target.error) return err(target.error);
+  let start = target.from;
+  let end = target.to;
   if (input.expected !== undefined && source.slice(start, end) !== input.expected) {
     return err('The selection moved — try adding the comment again.');
   }
+  const highlight = findHighlightAtSelection(source, start, end);
+  if (highlight) {
+    return input.text
+      ? reply(source, highlight.id, {
+        author: input.author,
+        createdAt: input.createdAt,
+        text: input.text,
+      })
+      : deleteComment(source, highlight.id);
+  }
+  if (!input.text && input.allowEmpty === false) return ok([]);
   if (isInFencedCode(source, start) || isInFencedCode(source, end - 1)) {
     const target = codeSelectionTarget(source, start, end);
     if (!target) return err("Couldn't map that selection to code lines.");
@@ -915,27 +1169,45 @@ export function reanchor(doc, id, from, to) {
   let end = to;
   if (end < start) [start, end] = [end, start];
   if (end === start) return err('Select some text to comment on.');
-  const changes = [];
+  const removals = [];
   if (comment.open) {
     const range = withGuard(source, comment.open);
-    changes.push({ from: range.from, to: comment.open.to, insert: '' });
+    removals.push({ from: range.from, to: comment.open.to, insert: '' });
   }
-  if (comment.close) changes.push({ from: comment.close.from, to: comment.close.to, insert: '' });
-  const stripped = applyChanges(source, changes);
-  const map = (pos) => pos - changes.reduce((gone, change) => gone + Math.max(0, Math.min(pos, change.to) - change.from), 0);
-  const nextFrom = map(start);
-  const nextTo = map(end);
+  if (comment.close) removals.push({ from: comment.close.from, to: comment.close.to, insert: '' });
+  if (comment.body) removals.push({ from: comment.body.from, to: comment.body.to, insert: '' });
+  const mapFromOrig = (pos) => pos - removals.reduce((gone, change) => gone + Math.max(0, Math.min(pos, change.to) - change.from), 0);
+  const mapToOrig = (posStripped) => {
+    const sorted = [...removals].sort((a, b) => a.from - b.from);
+    let orig = 0;
+    let stripped = 0;
+    let cut = 0;
+    while (stripped < posStripped) {
+      while (cut < sorted.length && orig === sorted[cut].from) {
+        orig = sorted[cut].to;
+        cut += 1;
+      }
+      orig += 1;
+      stripped += 1;
+    }
+    while (cut < sorted.length && orig === sorted[cut].from) {
+      orig = sorted[cut].to;
+      cut += 1;
+    }
+    return orig;
+  };
+  const stripped = applyChanges(source, removals);
+  const nextFrom = mapFromOrig(start);
+  const nextTo = mapFromOrig(end);
   const quote = stripped.slice(nextFrom, nextTo);
   const data = { ...toCommentData(comment), quote };
-  const placed = [
-    { from: nextFrom, to: nextFrom, insert: guardFor(stripped, nextFrom) + openMarker(id) },
-    { from: nextTo, to: nextTo, insert: closeMarker(id) },
+  const paraEnd = blockEnd(stripped, nextTo);
+  const inserts = [
+    { from: mapToOrig(nextFrom), to: mapToOrig(nextFrom), insert: guardFor(stripped, nextFrom) + openMarker(id) },
+    { from: mapToOrig(nextTo), to: mapToOrig(nextTo), insert: guardFor(stripped, nextTo) + closeMarker(id) },
+    { from: mapToOrig(paraEnd), to: mapToOrig(paraEnd), insert: `\n${serializeBlock(id, data)}` },
   ];
-  if (comment.body) {
-    const mappedBody = map(comment.body.from);
-    placed.push({ from: mappedBody, to: mappedBody + (comment.body.to - comment.body.from), insert: serializeBlock(id, data) });
-  }
-  return ok([...changes, ...placed].sort((a, b) => a.from - b.from));
+  return ok([...removals, ...inserts].sort((a, b) => a.from - b.from));
 }
 
 function remapInsertAtEdges(text, comments, from, insert) {

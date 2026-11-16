@@ -23,6 +23,7 @@ import { calloutFoldChange, calloutHeight } from './callouts.js';
 import {
   applyProtectedEdit,
   clipboardTextForRange,
+  canCreateComment,
   commentHideRanges,
   commentHighlights,
   commentsAtPos,
@@ -851,6 +852,7 @@ export function createLiveEditor(host, hooks = {}) {
         const hits = commentsAtPos(update.state.doc.toString(), pos);
         const coords = hits.length ? update.view.coordsAtPos(pos) : null;
         hooks.onCommentCaret?.(hits, coords, { typed: false });
+        hooks.onSelectionChange?.();
       }
     }),
   ];
@@ -1221,6 +1223,14 @@ export function createLiveEditor(host, hooks = {}) {
       if (!changes || !changes.length) return false;
       view.dispatch({ changes, userEvent });
       return true;
+    },
+    selectionRange() {
+      const { from, to } = view.state.selection.main;
+      return { from, to };
+    },
+    canCreateComment() {
+      const { from, to } = view.state.selection.main;
+      return canCreateComment(view.state.doc.toString(), from, to);
     },
     comments() {
       return parseComments(view.state.doc.toString());
