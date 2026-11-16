@@ -1,4 +1,4 @@
-import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, saveLocalFile, setMeta } from './db.js';
+import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, saveLocalFile, setMeta, updateMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -1814,7 +1814,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   }
 
   function flushNow() {
-    if (erasing || !current) return;
+    if (erasing || booting || !current) return;
     current.content = source.value;
     saver.flush().catch(() => {});
   }
@@ -2113,7 +2113,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   return {
     flush: flushNow,
     async start() {
-      const session = await loadSession(db);
+      let session = await loadSession(db);
       files = session.files;
       folders = session.folders;
       recent = session.recent;
@@ -2130,12 +2130,23 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const savedName = await getMeta(db, 'commentName');
       commentName = String(savedName || 'me').trim() || 'me';
       if (commentNameBox) commentNameBox.value = commentName;
+      // Settings reads yield. Reload the session so a vault replaced while we
+      // waited (another tab, or a reload that seeded IndexedDB) is what we
+      // open, instead of writing the stale lastOpened back over it.
+      session = await loadSession(db);
+      files = session.files;
+      folders = session.folders;
+      recent = session.recent;
+      if (session.expanded) expanded = new Set(session.expanded);
+      taskIndex.rebuild(notesForIndex());
       commentsUi?.paintChip?.();
       if (session.current) {
         showNote(session.current);
-        await setMeta(db, 'lastOpened', session.current.path);
-        recent = rememberRecent(recent, session.current.path);
-        await setMeta(db, 'recent', recent);
+        await updateMeta(db, ['lastOpened', 'recent'], ({ lastOpened, recent: storedRecent }) => {
+          if (lastOpened && lastOpened !== session.current.path) return null;
+          recent = rememberRecent(Array.isArray(storedRecent) ? storedRecent : recent, session.current.path);
+          return { lastOpened: session.current.path, recent };
+        });
       }
       booting = false;
       holdEditor(holding);

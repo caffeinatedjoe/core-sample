@@ -84,6 +84,9 @@ export async function waitForStart(page) {
       get.onerror = () => { db.close(); resolve(false); };
     };
   }));
+  // Boot is still writing lastOpened until the editor becomes editable.
+  // Seeding before that lets the first start() clobber the seeded note.
+  await page.waitForFunction(() => document.querySelector('#source .cm-content')?.getAttribute('contenteditable') === 'true');
 }
 
 export function note(path, content, extra = {}) {
