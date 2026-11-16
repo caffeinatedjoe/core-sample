@@ -7,6 +7,7 @@ import {
   entryIsUnread,
   firstUnreadIndex,
   isOrphan,
+  reactionsForEntry,
   relativeTime,
 } from './comments.js';
 import { renderInlineMarkdown } from './markdown.js';
@@ -63,6 +64,8 @@ export function mountComments(doc, hooks = {}) {
       hidePill() {},
       close() {},
       showing() { return false; },
+      startCreate() {},
+      paintIfOpen() {},
     };
   }
 
@@ -71,6 +74,8 @@ export function mountComments(doc, hooks = {}) {
   const back = doc.getElementById('comment-sheet-back');
   const quoteBtn = doc.getElementById('comment-sheet-quote');
   const resolveBtn = doc.getElementById('comment-sheet-resolve');
+  const moreBtn = doc.getElementById('comment-sheet-more');
+  const menu = doc.getElementById('comment-sheet-menu');
   const prevBtn = doc.getElementById('comment-sheet-prev');
   const nextBtn = doc.getElementById('comment-sheet-next');
   const closeBtn = doc.getElementById('comment-sheet-close');
@@ -80,6 +85,11 @@ export function mountComments(doc, hooks = {}) {
   const composer = doc.getElementById('comment-sheet-composer');
   const replyBox = doc.getElementById('comment-reply');
   const sendBtn = doc.getElementById('comment-send');
+  const composerCancel = doc.getElementById('comment-composer-cancel');
+  const reactionPicker = doc.getElementById('comment-reaction-picker');
+  const reanchorBar = doc.getElementById('comment-reanchor-bar');
+  const reanchorAttach = doc.getElementById('comment-reanchor-attach');
+  const reanchorCancel = doc.getElementById('comment-reanchor-cancel');
 
   let mode = 'thread';
   let tab = 'open';
@@ -89,9 +99,20 @@ export function mountComments(doc, hooks = {}) {
   let exactTimes = new Set();
   let pillHits = [];
   let pillFade = 0;
+  let composerMode = 'reply';
+  let editingEntry = -1;
+  let pendingCreate = null;
+  let draftHighlightId = '';
+  let reanchorId = '';
+  let entryMenu = null;
+  let longPress = null;
 
   function comments() {
     return hooks.comments?.() || [];
+  }
+
+  function authorName() {
+    return hooks.author?.() || 'me';
   }
 
   function walkList() {
@@ -104,6 +125,15 @@ export function mountComments(doc, hooks = {}) {
 
   function current() {
     return comments().find((comment) => comment.id === currentId) || null;
+  }
+
+  function hideMenus() {
+    if (menu) menu.hidden = true;
+    if (reactionPicker) reactionPicker.hidden = true;
+    if (entryMenu) {
+      entryMenu.remove();
+      entryMenu = null;
+    }
   }
 
   function paintChip() {
@@ -125,12 +155,26 @@ export function mountComments(doc, hooks = {}) {
     hooks.onOpen?.();
   }
 
+  function clearComposer() {
+    if (replyBox) replyBox.value = '';
+    composerMode = 'reply';
+    editingEntry = -1;
+    pendingCreate = null;
+    draftHighlightId = '';
+    if (sendBtn) sendBtn.textContent = 'Send';
+    if (composerCancel) composerCancel.hidden = true;
+  }
+
   function hideSheet() {
+    hideMenus();
+    if (reanchorId) hooks.onReanchorEnd?.();
+    reanchorId = '';
+    if (reanchorBar) reanchorBar.hidden = true;
     sheet.hidden = true;
     currentId = '';
     fromList = false;
     exactTimes = new Set();
-    if (replyBox) replyBox.value = '';
+    clearComposer();
     hooks.onClose?.();
   }
 
@@ -139,6 +183,29 @@ export function mountComments(doc, hooks = {}) {
     for (const button of tabs.querySelectorAll('[data-tab]')) {
       button.setAttribute('aria-selected', button.dataset.tab === tab ? 'true' : 'false');
     }
+  }
+
+  function orphanRow(comment) {
+    const wrap = el(doc, 'div', 'comment-orphan-row');
+    wrap.append(row(comment));
+    const actions = el(doc, 'div', 'comment-orphan-actions');
+    const del = el(doc, 'button', 'comment-orphan-btn', 'Delete');
+    del.type = 'button';
+    del.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (window.confirm('Delete this comment thread?')) hooks.deleteComment?.(comment.id);
+      paintList();
+      paintChip();
+    });
+    const re = el(doc, 'button', 'comment-orphan-btn', 'Re-anchor');
+    re.type = 'button';
+    re.addEventListener('click', (event) => {
+      event.stopPropagation();
+      startReanchor(comment.id);
+    });
+    actions.append(del, re);
+    wrap.append(actions);
+    return wrap;
   }
 
   function row(comment) {
@@ -171,30 +238,60 @@ export function mountComments(doc, hooks = {}) {
     for (const comment of groups.anchored) list.append(row(comment));
     if (groups.orphans.length) {
       list.append(el(doc, 'h3', 'comment-orphan-heading', 'Text no longer in note'));
-      for (const comment of groups.orphans) list.append(row(comment));
+      for (const comment of groups.orphans) list.append(orphanRow(comment));
     }
     if (!groups.anchored.length && !groups.orphans.length) {
       list.append(el(doc, 'p', 'comment-empty', tab === 'resolved' ? 'No resolved comments' : 'No comments'));
     }
   }
 
+  function paintReactions(comment, index, parent) {
+    const bar = el(doc, 'div', 'comment-reaction-bar');
+    for (const row of reactionsForEntry(comment, index)) {
+      const chipBtn = el(doc, 'button', 'comment-reaction-chip', `${row.emoji} ${row.count}`);
+      chipBtn.type = 'button';
+      chipBtn.dataset.emoji = row.emoji;
+      chipBtn.dataset.entry = String(index);
+      if (row.authors.some((name) => canonical(name) === canonical(authorName()))) {
+        chipBtn.classList.add('is-mine');
+      }
+      bar.append(chipBtn);
+    }
+    parent.append(bar);
+  }
+
+  function canonical(name) {
+    return String(name ?? '').trim().replace(/\s+/g, '_');
+  }
+
+  function ownEntry(entry) {
+    return canonical(entry.author) === canonical(authorName());
+  }
+
   function paintThread() {
     if (!thread) return;
     thread.replaceChildren();
+    hideMenus();
     const comment = current();
-    if (!comment) return;
-    const quote = commentQuote(comment, hooks.doc?.()) || (isOrphan(comment) ? 'Text no longer in note' : 'Comment');
+  if (!comment && !pendingCreate) return;
+    const docText = hooks.doc?.() || '';
+    const quote = pendingCreate
+      ? (pendingCreate.expected || 'New comment')
+      : (commentQuote(comment, docText) || (isOrphan(comment) ? 'Text no longer in note' : 'Comment'));
     if (quoteBtn) quoteBtn.textContent = quote;
     if (resolveBtn) {
-      const resolved = comment.status === 'resolved';
+      const resolved = comment?.status === 'resolved';
+      resolveBtn.hidden = !comment || Boolean(pendingCreate);
       resolveBtn.setAttribute('aria-label', resolved ? 'Reopen' : 'Resolve');
       resolveBtn.setAttribute('aria-pressed', resolved ? 'true' : 'false');
       resolveBtn.textContent = resolved ? '↩' : '✓';
     }
+    if (moreBtn) moreBtn.hidden = !comment || Boolean(pendingCreate);
     const items = walkList();
-    const index = items.findIndex((item) => item.id === comment.id);
+    const index = comment ? items.findIndex((item) => item.id === comment.id) : -1;
     if (prevBtn) prevBtn.disabled = index <= 0;
     if (nextBtn) nextBtn.disabled = index < 0 || index >= items.length - 1;
+    if (!comment) return;
     const selfName = hooks.author?.() || 'me';
     const lastSeen = hooks.lastSeen?.(comment.id) || '';
     const unreadFrom = firstUnreadIndex(comment, lastSeen);
@@ -224,6 +321,10 @@ export function mountComments(doc, hooks = {}) {
       if (showMeta) {
         const head = el(doc, 'header', 'comment-bubble-meta');
         head.append(el(doc, 'span', 'comment-bubble-author', author));
+        const menuBtn = el(doc, 'button', 'comment-entry-menu', '⋯');
+        menuBtn.type = 'button';
+        menuBtn.dataset.entry = String(i);
+        head.append(menuBtn);
         const time = el(doc, 'button', 'comment-bubble-time', exactTimes.has(i) ? (entry.timestamp || '') : relativeTime(entry.timestamp));
         time.type = 'button';
         time.dataset.entry = String(i);
@@ -236,9 +337,25 @@ export function mountComments(doc, hooks = {}) {
       if (entryIsUnread(entry, lastSeen)) bubble.classList.add('is-unread');
       bubble.innerHTML = renderInlineMarkdown(entry.text || '');
       wrap.append(bubble);
+      paintReactions(comment, i, wrap);
       row.append(wrap);
       thread.append(row);
     }
+  }
+
+  function focusComposer() {
+    replyBox?.focus();
+    if (replyBox) {
+      const len = replyBox.value.length;
+      replyBox.setSelectionRange(len, len);
+    }
+  }
+
+  function setComposerCreate() {
+    composerMode = 'create';
+    if (sendBtn) sendBtn.textContent = 'Add';
+    if (composerCancel) composerCancel.hidden = false;
+    focusComposer();
   }
 
   function showList() {
@@ -249,6 +366,7 @@ export function mountComments(doc, hooks = {}) {
     if (back) back.hidden = true;
     if (quoteBtn) quoteBtn.hidden = true;
     if (resolveBtn) resolveBtn.hidden = true;
+    if (moreBtn) moreBtn.hidden = true;
     if (prevBtn) prevBtn.hidden = true;
     if (nextBtn) nextBtn.hidden = true;
     if (tabs) tabs.hidden = false;
@@ -259,37 +377,93 @@ export function mountComments(doc, hooks = {}) {
     paintList();
   }
 
-  function showThread(id, { listOrigin = fromList } = {}) {
+  function showThread(id, { listOrigin = fromList, create = false } = {}) {
     const comment = comments().find((item) => item.id === id);
-    if (!comment) return;
+    if (!comment && !pendingCreate) return;
     mode = 'thread';
-    currentId = id;
+    currentId = id || '';
     fromList = listOrigin;
     exactTimes = new Set();
     showSheet();
     if (back) back.hidden = !fromList;
     if (quoteBtn) quoteBtn.hidden = false;
-    if (resolveBtn) resolveBtn.hidden = false;
-    if (prevBtn) prevBtn.hidden = false;
-    if (nextBtn) nextBtn.hidden = false;
     if (tabs) tabs.hidden = true;
     if (list) list.hidden = true;
     if (thread) thread.hidden = false;
     if (composer) composer.hidden = false;
+    if (resolveBtn) resolveBtn.hidden = Boolean(pendingCreate);
+    if (moreBtn) moreBtn.hidden = Boolean(pendingCreate);
+    if (prevBtn) prevBtn.hidden = Boolean(pendingCreate);
+    if (nextBtn) nextBtn.hidden = Boolean(pendingCreate);
     paintThread();
-    hooks.reveal?.(id);
-    const view = doc.defaultView;
-    const markLater = () => {
-      Promise.resolve(hooks.markSeen?.(id)).then(() => {
-        if (currentId !== id || mode !== 'thread') return;
-        paintThread();
-        if (fromList) paintList();
-      });
-    };
-    if (view?.requestAnimationFrame) {
-      view.requestAnimationFrame(() => view.requestAnimationFrame(markLater));
-    } else {
-      markLater();
+    if (create) setComposerCreate();
+    else if (comment && id) {
+      hooks.reveal?.(id);
+      const view = doc.defaultView;
+      const markLater = () => {
+        Promise.resolve(hooks.markSeen?.(id)).then(() => {
+          if (currentId !== id || mode !== 'thread') return;
+          paintThread();
+          if (fromList) paintList();
+        });
+      };
+      if (view?.requestAnimationFrame) {
+        view.requestAnimationFrame(() => view.requestAnimationFrame(markLater));
+      } else {
+        markLater();
+      }
+    }
+  }
+
+  function startCreate(range) {
+    hideMenus();
+    hidePill();
+    pendingCreate = range;
+    draftHighlightId = '';
+    currentId = '';
+    setSize('half');
+    composerMode = 'create';
+    mode = 'thread';
+    fromList = false;
+    showSheet();
+    if (back) back.hidden = true;
+    if (quoteBtn) {
+      quoteBtn.hidden = false;
+      quoteBtn.textContent = range.expected || 'New comment';
+    }
+    if (resolveBtn) resolveBtn.hidden = true;
+    if (moreBtn) moreBtn.hidden = true;
+    if (prevBtn) prevBtn.hidden = true;
+    if (nextBtn) nextBtn.hidden = true;
+    if (tabs) tabs.hidden = true;
+    if (list) list.hidden = true;
+    if (thread) {
+      thread.hidden = false;
+      thread.replaceChildren();
+    }
+    if (composer) composer.hidden = false;
+    setComposerCreate();
+    hooks.onOpen?.();
+  }
+
+  function startReanchor(id) {
+    reanchorId = id;
+    if (reanchorBar) reanchorBar.hidden = false;
+    hideSheet();
+    hooks.onReanchorStart?.(id);
+  }
+
+  function finishReanchor() {
+    const range = hooks.selectionRange?.();
+    const id = reanchorId;
+    if (!id || !range || range.to <= range.from) return;
+    if (hooks.reanchor?.(id, range.from, range.to)) {
+      reanchorId = '';
+      if (reanchorBar) reanchorBar.hidden = true;
+      hooks.onReanchorEnd?.();
+      setSize('half');
+      showThread(id, { listOrigin: false });
+      paintChip();
     }
   }
 
@@ -340,6 +514,116 @@ export function mountComments(doc, hooks = {}) {
     }, 180);
   }
 
+  function showEntryMenu(index, anchor) {
+    hideMenus();
+    const comment = current();
+    if (!comment) return;
+    const entry = comment.thread[index];
+    if (!entry) return;
+    const panel = el(doc, 'div', 'comment-entry-menu-panel');
+    const add = (label, action) => {
+      const button = el(doc, 'button', 'comment-menu-item', label);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        panel.remove();
+        entryMenu = null;
+        action();
+      });
+      panel.append(button);
+    };
+    if (ownEntry(entry)) add('Edit', () => beginEditEntry(index));
+    add('React', () => openReactionPicker(index, anchor));
+    add('Delete entry', () => {
+      const removeAll = index === 0;
+      const ok = window.confirm(removeAll ? 'Delete this entire comment?' : 'Delete this reply?');
+      if (!ok) return;
+      if (removeAll) hooks.deleteComment?.(comment.id);
+      else hooks.deleteEntry?.(comment.id, index);
+      paintThread();
+      paintChip();
+      if (mode === 'list') paintList();
+    });
+    const rect = anchor.getBoundingClientRect();
+    const app = doc.getElementById('app');
+    const box = app?.getBoundingClientRect?.() || { left: 0, top: 0 };
+    panel.style.left = `${rect.left - box.left}px`;
+    panel.style.top = `${rect.bottom - box.top + 4}px`;
+    entryMenu = panel;
+    app?.append(panel);
+  }
+
+  function beginEditEntry(index) {
+    const comment = current();
+    if (!comment) return;
+    const entry = comment.thread[index];
+    if (!entry || !ownEntry(entry)) return;
+    composerMode = 'edit';
+    editingEntry = index;
+    if (replyBox) replyBox.value = entry.text;
+    if (sendBtn) sendBtn.textContent = 'Save';
+    if (composerCancel) composerCancel.hidden = false;
+    focusComposer();
+  }
+
+  function openReactionPicker(index, anchor) {
+    if (!reactionPicker) return;
+    reactionPicker.dataset.entry = String(index);
+    reactionPicker.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    const app = doc.getElementById('app');
+    const box = app?.getBoundingClientRect?.() || { left: 0, top: 0 };
+    reactionPicker.style.left = `${Math.max(8, rect.left - box.left)}px`;
+    reactionPicker.style.top = `${rect.bottom - box.top + 4}px`;
+  }
+
+  function submitComposer() {
+    const text = replyBox?.value || '';
+    if (!text.trim() && composerMode !== 'edit') {
+      cancelComposer();
+      return;
+    }
+    if (composerMode === 'create' && pendingCreate) {
+      if (!hooks.createComment?.(pendingCreate, text)) return;
+      pendingCreate = null;
+      clearComposer();
+      paintChip();
+      return;
+    }
+    if (composerMode === 'edit' && editingEntry >= 0 && currentId) {
+      if (!text.trim()) return;
+      if (hooks.editEntry?.(currentId, editingEntry, text)) {
+        clearComposer();
+        paintThread();
+      }
+      return;
+    }
+    if (!text.trim() || !currentId) return;
+    if (hooks.reply?.(currentId, text)) {
+      replyBox.value = '';
+      paintThread();
+      paintChip();
+      if (mode === 'list') paintList();
+    }
+  }
+
+  function cancelComposer() {
+    if (composerMode === 'create') {
+      if (draftHighlightId) hooks.cancelDraft?.(draftHighlightId);
+      pendingCreate = null;
+      hideSheet();
+      return;
+    }
+    if (composerMode === 'edit') {
+      clearComposer();
+      return;
+    }
+    if (draftHighlightId) {
+      hooks.cancelDraft?.(draftHighlightId);
+      draftHighlightId = '';
+      hideSheet();
+    }
+  }
+
   chip?.addEventListener('click', () => {
     hidePill();
     tab = 'open';
@@ -387,9 +671,29 @@ export function mountComments(doc, hooks = {}) {
     const comment = current();
     if (!comment) return;
     const next = comment.status === 'resolved' ? 'open' : 'resolved';
-    if (hooks.setStatus?.(comment.id, next)) paintThread();
-    paintChip();
-    if (mode === 'list') paintList();
+    if (hooks.setStatus?.(comment.id, next)) {
+      paintThread();
+      paintChip();
+      if (mode === 'list') paintList();
+    }
+  });
+
+  moreBtn?.addEventListener('click', () => {
+    if (!menu) return;
+    menu.hidden = !menu.hidden;
+  });
+
+  menu?.addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-comment-action]');
+    if (!button || !currentId) return;
+    menu.hidden = true;
+    const action = button.dataset.commentAction;
+    if (action === 'delete' && window.confirm('Delete this comment? The highlighted text will stay.')) {
+      if (hooks.deleteComment?.(currentId)) {
+        hideSheet();
+        paintChip();
+      }
+    }
   });
 
   prevBtn?.addEventListener('click', () => move(-1));
@@ -412,28 +716,69 @@ export function mountComments(doc, hooks = {}) {
 
   thread?.addEventListener('click', (event) => {
     const button = event.target.closest?.('.comment-bubble-time');
-    if (!button) return;
-    const index = Number(button.dataset.entry);
-    if (exactTimes.has(index)) exactTimes.delete(index);
-    else exactTimes.add(index);
+    if (button) {
+      const index = Number(button.dataset.entry);
+      if (exactTimes.has(index)) exactTimes.delete(index);
+      else exactTimes.add(index);
+      paintThread();
+      return;
+    }
+    const menuBtn = event.target.closest?.('.comment-entry-menu');
+    if (menuBtn) {
+      showEntryMenu(Number(menuBtn.dataset.entry), menuBtn);
+      return;
+    }
+    const reaction = event.target.closest?.('.comment-reaction-chip');
+    if (reaction && currentId) {
+      hooks.toggleReaction?.(currentId, Number(reaction.dataset.entry), reaction.dataset.emoji);
+      paintThread();
+    }
+  });
+
+  thread?.addEventListener('pointerdown', (event) => {
+    const item = event.target.closest?.('.comment-bubble-row');
+    if (!item || event.target.closest('button')) return;
+    const menuBtn = item.querySelector('.comment-entry-menu');
+    if (!menuBtn) return;
+    const index = Number(menuBtn.dataset.entry);
+    longPress = doc.defaultView?.setTimeout(() => {
+      showEntryMenu(index, menuBtn);
+      longPress = null;
+    }, 520);
+  });
+  thread?.addEventListener('pointerup', () => {
+    if (longPress) doc.defaultView?.clearTimeout(longPress);
+    longPress = null;
+  });
+  thread?.addEventListener('pointercancel', () => {
+    if (longPress) doc.defaultView?.clearTimeout(longPress);
+    longPress = null;
+  });
+
+  reactionPicker?.addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-emoji]');
+    if (!button || !currentId) return;
+    const index = Number(reactionPicker.dataset.entry || 0);
+    hooks.toggleReaction?.(currentId, index, button.dataset.emoji);
+    reactionPicker.hidden = true;
     paintThread();
   });
 
-  sendBtn?.addEventListener('click', () => {
-    const text = replyBox?.value || '';
-    if (!text.trim() || !currentId) return;
-    if (hooks.reply?.(currentId, text)) {
-      replyBox.value = '';
-      paintThread();
-      paintChip();
-    }
-  });
+  sendBtn?.addEventListener('click', submitComposer);
+  composerCancel?.addEventListener('click', cancelComposer);
 
   replyBox?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      sendBtn?.click();
+      submitComposer();
     }
+  });
+
+  reanchorAttach?.addEventListener('click', finishReanchor);
+  reanchorCancel?.addEventListener('click', () => {
+    reanchorId = '';
+    if (reanchorBar) reanchorBar.hidden = true;
+    hooks.onReanchorEnd?.();
   });
 
   let drag = null;
@@ -602,12 +947,19 @@ export function mountComments(doc, hooks = {}) {
       setSize('half');
       showThread(id, { listOrigin: false });
     },
+    startCreate,
     showPill,
     hidePill,
     fadePill,
     close: hideSheet,
     showing() {
       return !sheet.hidden;
+    },
+    paintIfOpen() {
+      if (sheet.hidden) return;
+      if (mode === 'list') paintList();
+      else paintThread();
+      paintChip();
     },
   };
 }

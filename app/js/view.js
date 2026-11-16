@@ -46,11 +46,22 @@ import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
 import { basename, extensionOf, mimeFor } from './embeds.js';
 import {
+  addComment,
+  applyChanges,
+  canCreateComment,
   commentHasUnread,
   commentSeenStamp,
+  commentTargetRange,
+  deleteComment,
+  deleteEntry,
+  editEntry,
+  existingIds,
+  generateId,
   openCommentCount,
+  reanchor,
   reply as replyComment,
   setStatus as setCommentStatus,
+  toggleReaction,
 } from './comments.js';
 import { mountComments } from './comments-ui.js';
 import { mountConflictScreen } from './conflict-ui.js';
@@ -252,6 +263,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     const bar = doc.getElementById('format-bar');
     if (!bar) return;
     bar.hidden = Boolean(source.readOnly) || !source.hasFocus() || Boolean(commentsUi?.showing?.());
+    const commentBtn = bar.querySelector('[data-format="comment"]');
+    if (commentBtn) {
+      const range = source.selectionRange?.() || { from: 0, to: 0 };
+      const allowed = canCreateComment(source.value, range.from, range.to);
+      commentBtn.disabled = !allowed;
+      commentBtn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+    }
   }
 
   const source = createEditor(host, {
@@ -282,6 +300,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (extra?.typed) commentsUi?.fadePill?.();
       else commentsUi?.showPill?.(hits, coords);
     },
+    onSelectionChange: paintFormatBar,
   });
 
   function applyCommentChanges(changes) {
@@ -289,6 +308,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     if (!source.dispatchChanges?.(changes)) return false;
     rememberEdit();
     commentsUi?.paintChip?.();
+    commentsUi?.paintIfOpen?.();
     return true;
   }
 
@@ -298,6 +318,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     openCount: () => openCommentCount(source.value),
     showResolved: () => showResolvedComments,
     author: () => commentName || 'me',
+    selectionRange: () => source.selectionRange?.() || { from: 0, to: 0 },
     reply(id, text) {
       return applyCommentChanges(replyComment(source.value, id, {
         author: commentName || 'me',
@@ -305,8 +326,47 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         text,
       }).changes);
     },
+    createComment(range, text) {
+      const createdAt = new Date().toISOString();
+      const id = generateId(existingIds(source.value));
+      const result = addComment(source.value, range.from, range.to, {
+        id,
+        author: commentName || 'me',
+        createdAt,
+        text,
+        expected: range.expected,
+      });
+      if (result.error || !applyCommentChanges(result.changes)) return false;
+      commentsUi.openThread(id);
+      source.revealComment?.(id);
+      return true;
+    },
+    cancelDraft(id) {
+      return applyCommentChanges(deleteComment(source.value, id).changes);
+    },
+    editEntry(id, index, text) {
+      return applyCommentChanges(editEntry(source.value, id, index, text).changes);
+    },
+    deleteEntry(id, index) {
+      return applyCommentChanges(deleteEntry(source.value, id, index).changes);
+    },
+    deleteComment(id) {
+      return applyCommentChanges(deleteComment(source.value, id).changes);
+    },
+    toggleReaction(id, entry, emoji) {
+      return applyCommentChanges(toggleReaction(source.value, id, {
+        entry,
+        emoji,
+        author: commentName || 'me',
+      }).changes);
+    },
+    reanchor(id, from, to) {
+      return applyCommentChanges(reanchor(source.value, id, from, to).changes);
+    },
     setStatus(id, status) {
-      return applyCommentChanges(setCommentStatus(source.value, id, status).changes);
+      const ok = applyCommentChanges(setCommentStatus(source.value, id, status).changes);
+      if (ok) commentsUi.paintIfOpen?.();
+      return ok;
     },
     reveal(id) {
       source.revealComment?.(id);
@@ -327,6 +387,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       commentLastSeen = { ...commentLastSeen, [id]: commentSeenStamp(match) };
       return setMeta(db, 'commentLastSeen', commentLastSeen);
     },
+    onReanchorStart() {
+      paintFormatBar();
+    },
+    onReanchorEnd() {
+      paintFormatBar();
+    },
     onOpen: paintFormatBar,
     onClose: paintFormatBar,
   });
@@ -346,6 +412,14 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (action === 'dismiss') {
         source.blur();
         paintFormatBar();
+        return;
+      }
+      if (action === 'comment') {
+        if (button.disabled) return;
+        const range = source.selectionRange?.() || { from: 0, to: 0 };
+        const target = commentTargetRange(source.value, range.from, range.to);
+        if (target.error) return;
+        commentsUi?.startCreate?.({ ...target });
         return;
       }
       source.format?.(action);

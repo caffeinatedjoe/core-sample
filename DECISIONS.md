@@ -27,7 +27,7 @@ The product is one offline client. The page calls `api.github.com` directly for 
 | Module | Role | Stage |
 | --- | --- | --- |
 | `comments.js` | Document Comments parse, serialize, hide ranges, and edits | v42 |
-| `comments-ui.js` | Comment chip, edit pill, and thread/list sheet | v43 |
+| `comments-ui.js` | Comment chip, sheet, create, and manage UI | v44 |
 | `checklist.js` | Task markers, fence rules, toggle | 1 |
 | `tasks.js` | Vault task parse, tags, byte-identical toggle | v34 |
 | `task-index.js` | In-memory task index, incremental path updates | v34 |

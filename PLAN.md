@@ -134,7 +134,11 @@ Implemented as core-sample-shell-v42. Notes that use the Obsidian Document Comme
 
 ## v43 — Document comments (view and reply)
 
-Implemented as core-sample-shell-v43. A header chip shows the open-comment count and opens a list. Tapping a highlight in reading mode opens that thread; in the editor a floating pill does. The sheet is half-height, drags to full, and the reply composer sits above the keyboard. Writes go through editor transactions. Comment name (default `me`) is a setting. Creating comments, editing entries, reactions, and re-anchor wait for the next sprint.
+Implemented as core-sample-shell-v43. A header chip shows the open-comment count and opens a list. Tapping a highlight in reading mode opens that thread; in the editor a floating pill does. The sheet is half-height, drags to full, and the reply composer sits above the keyboard. Writes go through editor transactions. Comment name (default `me`) is a setting.
+
+## v44 — Document comments (create)
+
+Implemented as core-sample-shell-v44. The format bar adds 💬. Sending from the composer creates anchors and the first entry in one editor transaction; cancel closes a draft without writing. With no selection, the current line’s text is used, skipping leading list, quote, and heading markers. Creation is disabled inside tables and fenced or indented code. Anchor rules match Document Comments v0.1.19, including U+200B before markers at line starts when needed.
 
 ## v44 — Comment touch and sheet drag
 

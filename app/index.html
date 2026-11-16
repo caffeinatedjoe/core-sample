@@ -86,6 +86,7 @@
         <button type="button" data-format="highlight" aria-label="Highlight" class="format-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4-9.5 9.5H5.5v-4zM14 8l2 2"></path><path d="M5 19.5h14"></path></svg>
         </button>
+        <button type="button" data-format="comment" aria-label="Add comment" class="format-btn format-comment">💬</button>
         <button type="button" data-format="rule" aria-label="Horizontal rule" class="format-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M8 7h8M8 17h8"></path></svg>
         </button>
@@ -274,6 +275,7 @@
           <button type="button" id="comment-sheet-back" class="sheet-done" hidden>Back</button>
           <button type="button" id="comment-sheet-quote" class="comment-sheet-quote"></button>
           <button type="button" id="comment-sheet-resolve" class="comment-icon-btn" aria-label="Resolve">✓</button>
+          <button type="button" id="comment-sheet-more" class="comment-icon-btn" aria-label="Comment options">⋯</button>
           <button type="button" id="comment-sheet-prev" class="comment-icon-btn" aria-label="Previous comment">‹</button>
           <button type="button" id="comment-sheet-next" class="comment-icon-btn" aria-label="Next comment">›</button>
           <button type="button" id="comment-sheet-close" class="sheet-done">Close</button>
@@ -287,9 +289,27 @@
         <div id="comment-sheet-thread" class="comment-sheet-thread"></div>
         <div id="comment-sheet-composer" class="comment-sheet-composer">
           <textarea id="comment-reply" rows="2" enterkeyhint="enter" aria-label="Reply"></textarea>
+          <button type="button" id="comment-composer-cancel" class="comment-composer-cancel" hidden>Cancel</button>
           <button type="button" id="comment-send">Send</button>
         </div>
+        <div id="comment-sheet-menu" class="comment-sheet-menu" hidden>
+          <button type="button" data-comment-action="delete">Delete comment</button>
+        </div>
       </div>
+    </div>
+    <div id="comment-reaction-picker" class="comment-reaction-picker" hidden role="menu" aria-label="React">
+      <button type="button" data-emoji="👍" aria-label="Thumbs up">👍</button>
+      <button type="button" data-emoji="❤️" aria-label="Heart">❤️</button>
+      <button type="button" data-emoji="😄" aria-label="Smile">😄</button>
+      <button type="button" data-emoji="🎉" aria-label="Celebrate">🎉</button>
+      <button type="button" data-emoji="😮" aria-label="Surprised">😮</button>
+      <button type="button" data-emoji="👀" aria-label="Eyes">👀</button>
+      <button type="button" data-emoji="🙏" aria-label="Thanks">🙏</button>
+    </div>
+    <div id="comment-reanchor-bar" class="comment-reanchor-bar" hidden>
+      <p>Select text in the note, then tap Attach here</p>
+      <button type="button" id="comment-reanchor-attach">Attach here</button>
+      <button type="button" id="comment-reanchor-cancel">Cancel</button>
     </div>
     <div id="conflict-sheet" class="sheet conflict-sheet" hidden>
       <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="conflict-heading">
