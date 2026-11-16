@@ -22,7 +22,8 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --comment-sheet-gap-top: 8px;
-  --comment-sheet-full-inset: calc(var(--safe-top) + var(--comment-sheet-gap-top));
+  --comment-sheet-safe-top: var(--safe-top);
+  --comment-sheet-full-inset: calc(var(--comment-sheet-safe-top) + var(--comment-sheet-gap-top));
   --keyboard-inset: 0px;
   --shell-h: 100%;
   --scroll-pad: var(--safe-bottom);
@@ -88,6 +89,11 @@ body,
    shell fills its parent instead. When the keyboard is up, --shell-h is
    the visual viewport's bottom so the format toolbar sits flush on it. */
 @media (display-mode: standalone) {
+  :root {
+    /* Joe iPhone 13 PWA: env() is usually 47px; cap the sheet when it reads 0. */
+    --comment-sheet-safe-top: max(env(safe-area-inset-top, 0px), 47px);
+  }
+
   html {
     height: calc(100lvh - var(--keyboard-inset));
   }

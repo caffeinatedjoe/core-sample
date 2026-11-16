@@ -32,7 +32,8 @@ function sheetHeightLimits(doc, appHeight) {
     const value = raw ? Number.parseFloat(raw) : 0;
     return Number.isFinite(value) ? value : 0;
   };
-  const safeTop = probeStyle ? px(probeStyle.paddingTop) : px(rootStyle?.getPropertyValue('--safe-top'));
+  const sheetSafe = px(rootStyle?.getPropertyValue('--comment-sheet-safe-top'));
+  const safeTop = sheetSafe || (probeStyle ? px(probeStyle.paddingTop) : px(rootStyle?.getPropertyValue('--safe-top')));
   const gap = px(rootStyle?.getPropertyValue('--comment-sheet-gap-top')) || 8;
   const topClear = safeTop + gap;
   const min = appHeight * 0.35;

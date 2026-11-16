@@ -10,7 +10,61 @@ const TEXT = [
   '-->',
 ].join('\n');
 
+const VIEWPORT = { width: 390, height: 844 };
 const SAFE_TOP = 47;
+
+const HEADER_IDS = [
+  'comment-sheet-quote',
+  'comment-sheet-resolve',
+  'comment-sheet-more',
+  'comment-sheet-prev',
+  'comment-sheet-next',
+  'comment-sheet-close',
+];
+
+function assertChromeTops(chrome, inset, label) {
+  for (const [name, top] of Object.entries(chrome)) {
+    assert.ok(top >= inset, `${label} ${name} top ${top} must clear inset ${inset}`);
+  }
+}
+
+async function readThreadHeaderChrome(page) {
+  return page.evaluate(({ headerIds }) => {
+    const tops = { handle: visibleTop(document.querySelector('.comment-sheet-handle')) ?? -1 };
+    for (const id of headerIds) {
+      const top = visibleTop(document.getElementById(id));
+      if (top != null) tops[id] = top;
+    }
+    const card = document.querySelector('.comment-sheet-card')?.getBoundingClientRect();
+    return { tops, cardTop: card?.top ?? -1 };
+
+    function visibleTop(el) {
+      if (!el || el.hidden) return null;
+      const box = el.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) return null;
+      return box.top;
+    }
+  }, { headerIds: HEADER_IDS });
+}
+
+async function readListHeaderChrome(page) {
+  return page.evaluate(() => {
+    const tops = { handle: visibleTop(document.querySelector('.comment-sheet-handle')) ?? -1 };
+    const close = visibleTop(document.getElementById('comment-sheet-close'));
+    if (close != null) tops.close = close;
+    const tab = visibleTop(document.querySelector('.comment-sheet-tabs button[aria-selected="true"]'));
+    if (tab != null) tops.tab = tab;
+    const card = document.querySelector('.comment-sheet-card')?.getBoundingClientRect();
+    return { tops, cardTop: card?.top ?? -1 };
+
+    function visibleTop(el) {
+      if (!el || el.hidden) return null;
+      const box = el.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) return null;
+      return box.top;
+    }
+  });
+}
 
 async function blurEditor(page) {
   await page.evaluate(async () => {
@@ -21,16 +75,24 @@ async function blurEditor(page) {
   await page.waitForFunction(() => !document.querySelector('#source .cm-editor')?.classList.contains('cm-focused'));
 }
 
-test('webkit full comment sheet keeps handle and close below the top safe inset', { timeout: 120000 }, async (t) => {
+test('webkit full comment sheet keeps handle and header below the top safe inset', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
+    await page.setViewportSize(VIEWPORT);
+
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    assert.equal(
+      await page.evaluate(() => document.querySelector('meta[name="viewport"]')?.content.includes('viewport-fit=cover')),
+      true,
+      'viewport-fit=cover is required for env(safe-area-inset-*)',
+    );
     await page.evaluate((inset) => {
       document.documentElement.style.setProperty('--safe-top', `${inset}px`, 'important');
+      document.documentElement.style.setProperty('--comment-sheet-safe-top', `${inset}px`, 'important');
     }, SAFE_TOP);
     const safeTop = await page.evaluate(() => {
-      return parseFloat(getComputedStyle(document.getElementById('safe-probe')).paddingTop);
+      return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--comment-sheet-safe-top'));
     });
-    assert.equal(safeTop, SAFE_TOP, 'stubbed safe-top must beat app.css :root env() in WebKit tests');
+    assert.equal(safeTop, SAFE_TOP, 'stubbed inset must match iPhone 13 portrait notch (47px)');
     await blurEditor(page);
     await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
@@ -46,39 +108,20 @@ test('webkit full comment sheet keeps handle and close below the top safe inset'
     });
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
 
-    const chrome = await page.evaluate((inset) => {
-      const handleEl = document.querySelector('.comment-sheet-handle');
-      const close = document.getElementById('comment-sheet-close');
-      const card = document.querySelector('.comment-sheet-card');
-      const handle = handleEl.getBoundingClientRect();
-      const closeBox = close.getBoundingClientRect();
-      const cardBox = card.getBoundingClientRect();
-      return {
-        handleTop: handle.top,
-        handleBottom: handle.bottom,
-        closeTop: closeBox.top,
-        closeBottom: closeBox.bottom,
-        cardTop: cardBox.top,
-        inset,
-      };
-    }, SAFE_TOP);
-
-    assert.ok(chrome.cardTop >= chrome.inset, `card top ${chrome.cardTop} clears inset ${chrome.inset}`);
-    assert.ok(chrome.handleTop >= chrome.inset, `handle top ${chrome.handleTop} clears inset ${chrome.inset}`);
-    assert.ok(chrome.closeTop >= chrome.inset, `close top ${chrome.closeTop} clears inset ${chrome.inset}`);
-    assert.ok(chrome.closeBottom > chrome.inset, 'close button is tappable below the status bar');
+    const thread = await readThreadHeaderChrome(page);
+    assert.ok(thread.cardTop >= SAFE_TOP, `card top ${thread.cardTop} clears inset ${SAFE_TOP}`);
+    assertChromeTops(thread.tops, SAFE_TOP, 'thread sheet');
 
     await page.locator('#comment-sheet-close').click();
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
     await page.locator('#comments-chip').click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet-list')?.hidden);
-    const listChrome = await page.evaluate((inset) => {
-      const handle = document.querySelector('.comment-sheet-handle').getBoundingClientRect();
-      const close = document.getElementById('comment-sheet-close').getBoundingClientRect();
-      return { handleTop: handle.top, closeTop: close.top, inset };
-    }, SAFE_TOP);
-    assert.ok(listChrome.handleTop >= listChrome.inset);
-    assert.ok(listChrome.closeTop >= listChrome.inset);
+
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
+
+    const list = await readListHeaderChrome(page);
+    assert.ok(list.cardTop >= SAFE_TOP, `list card top ${list.cardTop} clears inset ${SAFE_TOP}`);
+    assertChromeTops(list.tops, SAFE_TOP, 'list sheet');
 
     assert.deepEqual(errors, []);
   });
