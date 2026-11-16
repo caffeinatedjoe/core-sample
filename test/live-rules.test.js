@@ -219,6 +219,13 @@ test('frontmatter is a Properties widget off the caret and muted source on it', 
   assert.equal(fm.length, 4);
 });
 
+test('document-comment HTML is not treated as a code block, so inner markdown still renders', () => {
+  const doc = '\u200b<!--c:ab1-->**Hello**<!--/c:ab1--> world\n<!--co:ab1 status:open\nme: hi\n-->';
+  const styles = specsOf(doc).filter((spec) => spec.type === 'mark').map((spec) => spec.cls);
+  assert.equal(styles.includes('cm-strong'), true);
+  assert.equal(visible(doc).includes('Hello'), true);
+});
+
 test('with no active ranges the whole note renders, so an unfocused editor reads like the old preview', () => {
   const doc = '# T\n- [ ] a **b** [[c]]';
   assert.equal(visible(doc), 'T\n☐ a b ⟨wiki c→c⟩');

@@ -31,6 +31,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"></rect><path d="M9.5 4.5v15"></path></svg>
       </button>
       <h1 id="note-title" class="note-title"></h1>
+      <button type="button" id="comments-chip" class="comments-chip" hidden>💬 0</button>
       <button type="button" id="sync-status" class="sync-status" aria-live="polite" aria-disabled="true" hidden></button>
       <p id="save-status" class="save-status" role="status"></p>
     </header>
@@ -250,10 +251,43 @@
             <p id="backup-status" class="github-note" role="status"></p>
             <input id="backup-file" type="file" accept="application/json,.json" hidden>
           </section>
+          <section class="settings-group" aria-labelledby="settings-comments-heading">
+            <h3 id="settings-comments-heading">Comments</h3>
+            <label>Comment name
+              <input id="comment-name" autocomplete="nickname" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="me">
+            </label>
+            <label class="check-row"><input id="show-resolved-comments" type="checkbox"> Show resolved</label>
+          </section>
           <section class="settings-group" aria-labelledby="settings-about-heading">
             <h3 id="settings-about-heading">About</h3>
             <button type="button" id="build-version" class="build-version" aria-label="Build, tap for layout details"></button>
           </section>
+        </div>
+      </div>
+    </div>
+    <button type="button" id="comment-pill" class="comment-pill" hidden></button>
+    <div id="comment-sheet" class="comment-sheet" hidden>
+      <button type="button" id="comment-sheet-scrim" class="comment-sheet-scrim" aria-label="Close comments"></button>
+      <div class="comment-sheet-card" role="dialog" aria-modal="true" aria-labelledby="comment-sheet-quote">
+        <div class="comment-sheet-handle" aria-hidden="true"></div>
+        <header class="comment-sheet-head">
+          <button type="button" id="comment-sheet-back" class="sheet-done" hidden>Back</button>
+          <button type="button" id="comment-sheet-quote" class="comment-sheet-quote"></button>
+          <button type="button" id="comment-sheet-resolve" class="comment-icon-btn" aria-label="Resolve">✓</button>
+          <button type="button" id="comment-sheet-prev" class="comment-icon-btn" aria-label="Previous comment">‹</button>
+          <button type="button" id="comment-sheet-next" class="comment-icon-btn" aria-label="Next comment">›</button>
+          <button type="button" id="comment-sheet-close" class="sheet-done">Close</button>
+        </header>
+        <div id="comment-sheet-tabs" class="comment-sheet-tabs" hidden>
+          <button type="button" data-tab="open" aria-selected="true">Open</button>
+          <button type="button" data-tab="resolved">Resolved</button>
+          <button type="button" data-tab="all">All</button>
+        </div>
+        <div id="comment-sheet-list" class="comment-sheet-list" hidden></div>
+        <div id="comment-sheet-thread" class="comment-sheet-thread"></div>
+        <div id="comment-sheet-composer" class="comment-sheet-composer">
+          <textarea id="comment-reply" rows="2" enterkeyhint="enter" aria-label="Reply"></textarea>
+          <button type="button" id="comment-send">Send</button>
         </div>
       </div>
     </div>

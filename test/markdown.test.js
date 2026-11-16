@@ -49,6 +49,20 @@ line two
   assert.match(html, /line one<br>line two/);
 });
 
+test('strips document comment markers and wraps the anchored text', () => {
+  const html = renderMarkdown('We should <!--c:k3f9-->ship on Friday<!--/c:k3f9-->.\n<!--co:k3f9 status:open quote:"ship on Friday"\nme: Thursday?\n-->');
+  assert.equal(html.includes('<!--c:'), false);
+  assert.equal(html.includes('<!--co:'), false);
+  assert.match(html, /<span class="md-comment" data-comment-id="k3f9">ship on Friday<\/span>/);
+  const resolved = renderMarkdown('A <!--c:r1-->done<!--/c:r1-->.\n<!--co:r1 status:resolved\nme: ok\n-->');
+  assert.equal(resolved.includes('data-comment-id="r1"'), false);
+  assert.match(resolved, /A done\./);
+  const shown = renderMarkdown('A <!--c:r1-->done<!--/c:r1-->.\n<!--co:r1 status:resolved\nme: ok\n-->', { showResolved: true });
+  assert.match(shown, /class="md-comment is-resolved" data-comment-id="r1"/);
+  const list = renderMarkdown('- \u200b<!--c:g2fot-->**Onboarded fast:** Admin.<!--/c:g2fot-->\n<!--co:g2fot status:open quote:"**Onboarded fast:** Admin."\nme: punchier\n-->');
+  assert.match(list, /data-comment-id="g2fot"><strong>Onboarded fast:<\/strong> Admin\./);
+});
+
 test('escapes HTML and refuses javascript links', () => {
   const html = renderMarkdown('<script>alert(1)</script>\n\n[click](javascript:alert(1))\n\n<img src=x onerror=alert(1)>');
   assert.equal(html.includes('<script>'), false);

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v41';
+export const BUILD = 'core-sample-shell-v43';
 
 const TYPES = {
   '.html': 'text/html',
@@ -84,6 +84,9 @@ export async function waitForStart(page) {
       get.onerror = () => { db.close(); resolve(false); };
     };
   }));
+  // Boot is still writing lastOpened until the editor becomes editable.
+  // Seeding before that lets the first start() clobber the seeded note.
+  await page.waitForFunction(() => document.querySelector('#source .cm-content')?.getAttribute('contenteditable') === 'true');
 }
 
 export function note(path, content, extra = {}) {

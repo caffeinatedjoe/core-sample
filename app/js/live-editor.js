@@ -6,6 +6,7 @@ import {
   Decoration,
   EditorState,
   EditorView,
+  StateField,
   ViewPlugin,
   WidgetType,
   defaultKeymap,
@@ -19,6 +20,15 @@ import {
   undo,
 } from '../vendor/codemirror.js';
 import { calloutFoldChange, calloutHeight } from './callouts.js';
+import {
+  applyProtectedEdit,
+  clipboardTextForRange,
+  commentHideRanges,
+  commentHighlights,
+  commentsAtPos,
+  parseComments,
+  stripCommentMarkup,
+} from './comments.js';
 import { basename } from './embeds.js';
 import { formatChange } from './format.js';
 import { propertyChange, propertiesHeight } from './frontmatter.js';
@@ -617,6 +627,98 @@ function indentCommand(dir) {
 }
 
 const hidden = Decoration.replace({});
+const hiddenBlock = Decoration.replace({ block: true });
+
+function commentClipboard(text, state) {
+  const range = state.selection.main;
+  const from = range.empty ? state.doc.lineAt(range.head).from : range.from;
+  const to = range.empty ? state.doc.lineAt(range.head).to : range.to;
+  const covered = state.doc.sliceString(from, to);
+  if (!range.empty && text !== covered) return stripCommentMarkup(text);
+  if (range.empty && text !== covered && text !== covered + (state.lineBreak || '\n')) {
+    return stripCommentMarkup(text);
+  }
+  return clipboardTextForRange(state.doc.toString(), from, to);
+}
+
+function commentTransactionFilter(tr) {
+  if (!tr.docChanged) return tr;
+  if (!(tr.isUserEvent('input') || tr.isUserEvent('delete'))) return tr;
+  if (
+    tr.isUserEvent('input.comment')
+    || tr.isUserEvent('input.toggle')
+    || tr.isUserEvent('input.format')
+    || tr.isUserEvent('input.callout')
+  ) return tr;
+  const start = tr.startState.doc.toString();
+  const edits = [];
+  tr.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    edits.push({ from, to, insert: inserted.toString() });
+  });
+  if (edits.length !== 1) return tr;
+  const expected = applyProtectedEdit(start, edits[0]);
+  const actual = tr.newDoc.toString();
+  if (expected === actual) return tr;
+  const change = diffChange(actual, expected);
+  if (!change) return tr;
+  return [tr, { changes: change, sequential: true }];
+}
+
+function commentDecorations(doc, live = {}) {
+  const hide = commentHideRanges(doc);
+  const marks = commentHighlights(doc, { showResolved: live.showResolved });
+  const deco = [];
+  const atomic = [];
+  for (const range of hide) {
+    let from = range.from;
+    let to = range.to;
+    if (from < to && doc[from] === '\n' && doc.slice(from, to).includes('\n', 1)) from += 1;
+    const spansLines = range.block || doc.slice(from, to).includes('\n');
+    const widget = spansLines ? hiddenBlock : hidden;
+    if (to <= from) continue;
+    deco.push(widget.range(from, to));
+    let atomicTo = to;
+    if (spansLines && to < doc.length && doc[to] === '\n') atomicTo = to + 1;
+    atomic.push(widget.range(from, atomicTo));
+  }
+  for (const mark of marks) {
+    const cls = [
+      mark.status === 'resolved' ? 'cm-comment is-resolved' : 'cm-comment',
+      live.flashId === mark.id ? 'is-flash' : '',
+    ].filter(Boolean).join(' ');
+    deco.push(Decoration.mark({
+      class: cls,
+      attributes: { 'data-comment-id': mark.id },
+    }).range(mark.from, mark.to));
+  }
+  return {
+    decorations: Decoration.set(deco, true),
+    atomic: Decoration.set(atomic, true),
+  };
+}
+
+export function commentEditor(live = { showResolved: false, tick: 0 }) {
+  const field = StateField.define({
+    create(state) {
+      return { tick: live.tick, ...commentDecorations(state.doc.toString(), live) };
+    },
+    update(value, tr) {
+      if (tr.docChanged || live.tick !== value.tick) {
+        return { tick: live.tick, ...commentDecorations(tr.state.doc.toString(), live) };
+      }
+      return value;
+    },
+    provide: (f) => [
+      EditorView.decorations.from(f, (value) => value.decorations),
+      EditorView.atomicRanges.of((view) => view.state.field(f, false)?.atomic || Decoration.none),
+    ],
+  });
+  return [
+    EditorState.transactionFilter.of(commentTransactionFilter),
+    EditorView.clipboardOutputFilter.of(commentClipboard),
+    field,
+  ];
+}
 
 function decorate(view, hooks, folds) {
   const ranges = view.hasFocus ? view.state.selection.ranges : [];
@@ -693,12 +795,14 @@ export function diffChange(before, after) {
 export function createLiveEditor(host, hooks = {}) {
   const editable = new Compartment();
   let quiet = false;
-  const live = { tick: 0, folds: {} };
+  const live = { tick: 0, folds: {}, showResolved: false, flashId: null };
+  let flashTimer = 0;
 
   const extensions = () => [
     EditorState.lineSeparator.of('\n'),
     markdownLanguage.extension,
     history(),
+    ...commentEditor(live),
     keymap.of([
       { key: 'Enter', run: enterCommand },
       { key: 'Tab', run: indentCommand(1) },
@@ -733,6 +837,13 @@ export function createLiveEditor(host, hooks = {}) {
       if (update.focusChanged) {
         if (update.view.hasFocus) hooks.onFocus?.();
         else hooks.onBlur?.();
+      }
+      if (update.docChanged) hooks.onCommentCaret?.([], null, { typed: true });
+      else if (update.selectionSet && update.view.hasFocus) {
+        const pos = update.state.selection.main.head;
+        const hits = commentsAtPos(update.state.doc.toString(), pos);
+        const coords = hits.length ? update.view.coordsAtPos(pos) : null;
+        hooks.onCommentCaret?.(hits, coords, { typed: false });
       }
     }),
   ];
@@ -787,7 +898,26 @@ export function createLiveEditor(host, hooks = {}) {
     view.focus();
   }
 
+  function commentMark(target) {
+    const origin = target?.nodeType === 1 ? target : target?.parentElement;
+    return origin?.closest?.('.cm-comment, .md-comment') || null;
+  }
+
+  function readingTap() {
+    return readOnly || !view.hasFocus;
+  }
+
+  function openComment(mark) {
+    const id = mark?.dataset?.commentId;
+    if (id) hooks.onCommentTap?.(id);
+  }
+
   function act(node, target, event, held) {
+    const mark = commentMark(target);
+    if (mark && readingTap()) {
+      openComment(mark);
+      return;
+    }
     if (held) {
       editAt(node);
       return;
@@ -837,7 +967,12 @@ export function createLiveEditor(host, hooks = {}) {
   // A long press puts the caret inside it instead, to edit the syntax.
   let touch = null;
   let touchedAt = 0;
+  let commentReadTap = false;
   const content = view.contentDOM;
+  content.addEventListener('pointerdown', (event) => {
+    commentReadTap = Boolean(commentMark(event.target) && (readOnly || !view.hasFocus));
+    if (commentReadTap) event.preventDefault();
+  });
   content.addEventListener('touchstart', (event) => {
     const node = event.touches.length === 1 ? island(event.target) : null;
     const point = event.touches[0];
@@ -850,6 +985,15 @@ export function createLiveEditor(host, hooks = {}) {
   }, { passive: true });
   content.addEventListener('touchcancel', () => { touch = null; });
   content.addEventListener('touchend', (event) => {
+    const mark = commentMark(event.target);
+    if (mark && (commentReadTap || readingTap()) && (!touch || !touch.moved)) {
+      event.preventDefault();
+      touch = null;
+      touchedAt = Date.now();
+      commentReadTap = false;
+      openComment(mark);
+      return;
+    }
     const started = touch;
     touch = null;
     if (!started || started.moved || !started.node.isConnected) return;
@@ -863,9 +1007,18 @@ export function createLiveEditor(host, hooks = {}) {
       active.blur();
     }
     if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
+    if (commentMark(event.target) && (commentReadTap || readingTap())) event.preventDefault();
     if (island(event.target)) event.preventDefault();
   });
   content.addEventListener('click', (event) => {
+    const mark = commentMark(event.target);
+    if (mark && (commentReadTap || readingTap())) {
+      event.preventDefault();
+      commentReadTap = false;
+      if (Date.now() - touchedAt < 800) return;
+      openComment(mark);
+      return;
+    }
     const node = island(event.target);
     if (!node) return;
     event.preventDefault();
@@ -962,6 +1115,42 @@ export function createLiveEditor(host, hooks = {}) {
       live.folds = next && typeof next === 'object' ? next : {};
       live.tick += 1;
       view.dispatch({});
+    },
+    setShowResolved(value) {
+      live.showResolved = Boolean(value);
+      live.tick += 1;
+      view.dispatch({});
+    },
+    revealComment(id) {
+      const marks = commentHighlights(view.state.doc.toString(), { showResolved: true });
+      const mark = marks.find((item) => item.id === id);
+      const pos = mark ? mark.from : parseComments(view.state.doc.toString()).find((item) => item.id === id)?.body?.from;
+      if (pos != null) {
+        view.dispatch({
+          effects: EditorView.scrollIntoView(Math.max(0, pos), { y: 'start', yMargin: 16 }),
+        });
+      }
+      live.flashId = id;
+      live.tick += 1;
+      view.dispatch({});
+      const win = view.dom.ownerDocument.defaultView;
+      if (flashTimer) win.clearTimeout(flashTimer);
+      flashTimer = win.setTimeout(() => {
+        if (live.flashId === id) {
+          live.flashId = null;
+          live.tick += 1;
+          view.dispatch({});
+        }
+      }, 900);
+    },
+    dispatchChanges(changes, userEvent = 'input.comment') {
+      if (view.state.readOnly) return false;
+      if (!changes || !changes.length) return false;
+      view.dispatch({ changes, userEvent });
+      return true;
+    },
+    comments() {
+      return parseComments(view.state.doc.toString());
     },
     posOf(node) {
       try {
