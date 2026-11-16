@@ -23,13 +23,14 @@ async function blurEditor(page) {
 
 test('webkit full comment sheet keeps handle and close below the top safe inset', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
-    await page.addInitScript((inset) => {
-      const style = document.createElement('style');
-      style.textContent = `:root { --safe-top: ${inset}px; }`;
-      document.documentElement.appendChild(style);
-    }, SAFE_TOP);
-
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await page.evaluate((inset) => {
+      document.documentElement.style.setProperty('--safe-top', `${inset}px`, 'important');
+    }, SAFE_TOP);
+    const safeTop = await page.evaluate(() => {
+      return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-top'));
+    });
+    assert.equal(safeTop, SAFE_TOP, 'stubbed safe-top must beat app.css :root env() in WebKit tests');
     await blurEditor(page);
     await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
