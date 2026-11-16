@@ -24,9 +24,15 @@ async function blurEditor(page) {
 test('webkit full comment sheet keeps handle and close below the top safe inset', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await page.addInitScript((inset) => {
-      const style = document.createElement('style');
-      style.textContent = `:root { --safe-top: ${inset}px; }`;
-      document.documentElement.appendChild(style);
+      const apply = () => {
+        document.documentElement.style.setProperty('--safe-top', `${inset}px`);
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', apply, { once: true });
+      } else {
+        apply();
+      }
+      window.addEventListener('load', apply, { once: true });
     }, SAFE_TOP);
 
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
