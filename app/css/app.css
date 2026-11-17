@@ -509,6 +509,27 @@ html.is-keyboard .format-bar {
   border-radius: 0;
 }
 
+.comment-sheet.is-dragging .comment-sheet-card {
+  height: var(--comment-sheet-drag-max, calc(100% - var(--comment-sheet-full-inset)));
+  max-height: none;
+  border-radius: 0;
+  will-change: transform;
+}
+
+.comment-sheet.is-dragging[data-size="full"] .comment-sheet-card {
+  height: var(--comment-sheet-drag-max, calc(100% - var(--comment-sheet-full-inset)));
+}
+
+.comment-sheet-card.is-snap-animating {
+  transition: transform 220ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comment-sheet-card.is-snap-animating {
+    transition: none;
+  }
+}
+
 .comment-sheet-handle {
   flex: none;
   width: 36px;
