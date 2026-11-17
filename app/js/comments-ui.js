@@ -174,6 +174,7 @@ export function mountComments(doc, hooks = {}) {
     card?.style.removeProperty('height');
     card?.style.removeProperty('transform');
     card?.classList.remove('is-snap-animating');
+    composer?.style.removeProperty('transform');
     sheet.classList.remove('is-dragging');
   }
 
@@ -939,9 +940,19 @@ export function mountComments(doc, hooks = {}) {
     return Math.max(0, state.fullHeight - state.appHeight * 0.5);
   }
 
-  function applyDragTransform(translateY) {
+  function composerCounterY(translateY, state) {
+    if (!state) return 0;
+    const max = Math.max(0, state.fullHeight - state.chromeHeight - state.composerHeight);
+    return Math.min(Math.max(translateY, 0), max);
+  }
+
+  function applyDragTransform(translateY, state) {
     if (!card) return;
     card.style.transform = `translate3d(0, ${translateY}px, 0)`;
+    if (!composer || !state) return;
+    const counter = composerCounterY(translateY, state);
+    if (counter > 0) composer.style.transform = `translate3d(0, ${-counter}px, 0)`;
+    else composer.style.removeProperty('transform');
   }
 
   function measureSheet() {
@@ -953,6 +964,8 @@ export function mountComments(doc, hooks = {}) {
     const restingTopFull = appRect.bottom - fullHeight;
     const rect = card?.getBoundingClientRect?.();
     const translateY = rect ? rect.top - restingTopFull : restingTranslateY({ appHeight, fullHeight }, size);
+    const chromeHeight = chrome?.getBoundingClientRect?.().height ?? 0;
+    const composerHeight = composer?.getBoundingClientRect?.().height ?? 0;
     return {
       appHeight,
       limits,
@@ -960,6 +973,8 @@ export function mountComments(doc, hooks = {}) {
       restingTopFull,
       translateY,
       size,
+      chromeHeight,
+      composerHeight,
     };
   }
 
@@ -970,7 +985,7 @@ export function mountComments(doc, hooks = {}) {
       dragRaf = 0;
       if (!drag || drag.pendingTranslateY == null) return;
       drag.translateY = rubberband(drag.pendingTranslateY);
-      applyDragTransform(drag.translateY);
+      applyDragTransform(drag.translateY, drag);
       drag.pendingTranslateY = null;
     });
   }
@@ -980,7 +995,7 @@ export function mountComments(doc, hooks = {}) {
     sheet.classList.add('is-dragging');
     card.style.height = `${state.fullHeight}px`;
     card.style.removeProperty('--comment-sheet-drag');
-    applyDragTransform(state.translateY);
+    applyDragTransform(state.translateY, state);
   }
 
   function finishDragMotion(active, targetY, done) {
@@ -990,7 +1005,7 @@ export function mountComments(doc, hooks = {}) {
     }
     const startY = active.translateY;
     if (prefersReducedMotion() || Math.abs(targetY - startY) < 0.5) {
-      applyDragTransform(targetY);
+      applyDragTransform(targetY, active);
       done?.();
       return;
     }
@@ -1001,7 +1016,7 @@ export function mountComments(doc, hooks = {}) {
         return;
       }
       card.classList.add('is-snap-animating');
-      applyDragTransform(targetY);
+      applyDragTransform(targetY, active);
       let settled = false;
       const onEnd = (event) => {
         if (settled) return;
@@ -1076,6 +1091,8 @@ export function mountComments(doc, hooks = {}) {
       appHeight: state.appHeight,
       limits: state.limits,
       fullHeight: state.fullHeight,
+      chromeHeight: state.chromeHeight,
+      composerHeight: state.composerHeight,
       restingTopFull: state.restingTopFull,
       startTranslateY: state.translateY,
       translateY: state.translateY,
@@ -1112,7 +1129,7 @@ export function mountComments(doc, hooks = {}) {
     }
     if (active.pendingTranslateY != null) {
       active.translateY = rubberband(active.pendingTranslateY);
-      applyDragTransform(active.translateY);
+      applyDragTransform(active.translateY, active);
       active.pendingTranslateY = null;
     }
     const gesture = {

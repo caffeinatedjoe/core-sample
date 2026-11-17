@@ -160,6 +160,10 @@ Implemented as core-sample-shell-v49. The thread header keeps only previous/next
 
 Implemented as core-sample-shell-v50. The grabber pill and prev/next arrows share one 44pt chrome row. The head overlays that row so hidden arrows no longer reserve a second row of height. Thread content starts immediately below the chrome in both single- and multi-comment threads, without a layout shift when the arrows toggle.
 
+## v51 — Comment sheet composer pinned during drag
+
+Implemented as core-sample-shell-v51. While the sheet card moves with `translateY` at full drag height, the reply composer counter-translates so it stays on the visible bottom edge (iOS sheet pattern). Chrome and composer heights are measured once at pointer down; snap animation eases both transforms together. The composer stacks above the thread with an opaque surface background.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.
