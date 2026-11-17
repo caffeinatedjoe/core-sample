@@ -164,6 +164,10 @@ Implemented as core-sample-shell-v50. The grabber pill and prev/next arrows shar
 
 Implemented as core-sample-shell-v51. While the sheet card moves with `translateY` at full drag height, the reply composer counter-translates so it stays on the visible bottom edge (iOS sheet pattern). Chrome and composer heights are measured once at pointer down; snap animation eases both transforms together. The composer stacks above the thread with an opaque surface background.
 
+## v52 — Comment sheet overlay chrome and composer inset
+
+Implemented as core-sample-shell-v52. The grabber row is an absolute overlay so the thread and list scroll from the card top under a surface gradient. Bottom safe-area and keyboard inset sit on the composer with an opaque surface fill below it so thread bubbles never show through during drag or snap. Thread spacing follows an 8pt grid (grouped bubbles, quote line, composer hairline).
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

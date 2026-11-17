@@ -1024,6 +1024,7 @@ export function mountComments(doc, hooks = {}) {
         settled = true;
         card.removeEventListener('transitionend', onEnd);
         card.classList.remove('is-snap-animating');
+        composer?.style.removeProperty('transform');
         done?.();
       };
       card.addEventListener('transitionend', onEnd);

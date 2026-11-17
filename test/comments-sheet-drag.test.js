@@ -227,11 +227,10 @@ test('webkit composer stays pinned to the sheet bottom while dragging', { timeou
         const card = document.querySelector('.comment-sheet-card');
         const cardBox = card?.getBoundingClientRect();
         const app = document.getElementById('app')?.getBoundingClientRect();
-        const padBottom = card ? parseFloat(getComputedStyle(card).paddingBottom) || 0 : 0;
-        const sheetBottom = (cardBox && app
-          ? Math.min(cardBox.bottom, app.bottom) - padBottom
-          : (cardBox?.bottom ?? -1) - padBottom);
         const composerBox = composer?.getBoundingClientRect();
+        const sheetBottom = cardBox && app
+          ? Math.min(cardBox.bottom, app.bottom)
+          : (composerBox?.bottom ?? -1);
         const textareaBox = textarea?.getBoundingClientRect();
         const viewH = app?.bottom ?? window.innerHeight;
         return {

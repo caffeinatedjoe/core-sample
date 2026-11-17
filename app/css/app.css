@@ -501,7 +501,6 @@ html.is-keyboard .format-bar {
   color: var(--ink);
   padding-left: var(--safe-left);
   padding-right: var(--safe-right);
-  padding-bottom: max(var(--safe-bottom), 8px, var(--comment-keyboard, 0px));
   box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
 }
 
@@ -546,11 +545,15 @@ html.is-keyboard .format-bar {
 }
 
 .comment-sheet-chrome {
-  flex: none;
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
   height: 44px;
   touch-action: none;
   cursor: grab;
+  background: linear-gradient(to bottom, var(--surface) 60%, transparent);
 }
 
 .comment-sheet-handle {
@@ -588,7 +591,7 @@ html.is-keyboard .format-bar {
   overflow: hidden;
   width: 100%;
   min-height: 44px;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   padding: 8px 0;
   border: 0;
   background: transparent;
@@ -623,7 +626,9 @@ html.is-keyboard .format-bar {
 
 .comment-sheet-tabs {
   display: flex;
+  flex: none;
   gap: 8px;
+  margin-top: 44px;
   padding: 4px 16px 8px;
 }
 
@@ -650,12 +655,14 @@ html.is-keyboard .format-bar {
   overflow: auto;
   overscroll-behavior: contain;
   padding: 0 16px 12px;
+  scroll-padding-top: 44px;
 }
 
 .comment-sheet-thread {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
+  padding-top: 44px;
 }
 
 .comment-row {
@@ -747,20 +754,27 @@ html.is-keyboard .format-bar {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   max-width: 100%;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
 }
 
-.comment-bubble-row.is-own {
-  justify-content: flex-end;
+.comment-bubble-row:not(.is-grouped):not(:has(+ .comment-bubble-row.is-grouped)) {
+  margin-bottom: 12px;
 }
 
-.comment-bubble-row.is-grouped {
-  margin-top: -4px;
-  margin-bottom: 2px;
+.comment-bubble-row.is-grouped:has(+ .comment-bubble-row:not(.is-grouped)) {
+  margin-bottom: 12px;
+}
+
+.comment-bubble-row:last-child {
+  margin-bottom: 12px;
+}
+
+.comment-bubble-row.is-own {
+  justify-content: flex-end;
 }
 
 .comment-bubble-avatar,
@@ -861,17 +875,31 @@ html.is-keyboard .format-bar {
 }
 
 .comment-sheet.is-dragging .comment-sheet-composer {
-  position: relative;
-  z-index: 2;
-  background: var(--surface);
+  z-index: 4;
 }
 
 .comment-sheet-composer {
+  position: relative;
+  z-index: 2;
   flex: none;
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 8px 16px 0;
+  padding: 8px 16px;
+  padding-bottom: max(var(--safe-bottom), 8px, var(--comment-keyboard, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.comment-sheet-composer::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 2000px;
+  background: var(--surface);
+  pointer-events: none;
 }
 
 .comment-sheet-composer textarea {
