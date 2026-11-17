@@ -8,19 +8,14 @@ const TEXT = [
   '<!--co:k3f9 by:kyle at:2026-06-17T10:00:00.000Z status:open quote:"ship"',
   'kyle (2026-06-17T10:00:00.000Z): Can we wait?',
   '-->',
+  'Then <!--c:ab12-->launch<!--/c:ab12--> next.',
+  '<!--co:ab12 by:me at:2026-11-16T11:00:00.000Z status:open quote:"launch"',
+  'me (2026-11-16T11:00:00.000Z): after QA',
+  '-->',
 ].join('\n');
 
 const VIEWPORT = { width: 390, height: 844 };
 const SAFE_TOP = 47;
-
-const THREAD_HEADER_IDS = [
-  'comment-sheet-quote',
-  'comment-sheet-resolve',
-  'comment-sheet-more',
-  'comment-sheet-prev',
-  'comment-sheet-next',
-  'comment-sheet-close',
-];
 
 function assertChromeTops(chrome, inset, label) {
   for (const [name, top] of Object.entries(chrome)) {
@@ -29,9 +24,9 @@ function assertChromeTops(chrome, inset, label) {
 }
 
 async function readThreadChrome(page) {
-  return page.evaluate(({ headerIds }) => {
+  return page.evaluate(() => {
     const tops = { handle: visibleTop(document.querySelector('.comment-sheet-handle')) ?? -1 };
-    for (const id of headerIds) {
+    for (const id of ['comment-sheet-prev', 'comment-sheet-next']) {
       const top = visibleTop(document.getElementById(id));
       if (top != null) tops[id] = top;
     }
@@ -44,14 +39,12 @@ async function readThreadChrome(page) {
       if (box.width < 1 || box.height < 1) return null;
       return box.top;
     }
-  }, { headerIds: THREAD_HEADER_IDS });
+  });
 }
 
 async function readListChrome(page) {
   return page.evaluate(() => {
     const tops = { handle: visibleTop(document.querySelector('.comment-sheet-handle')) ?? -1 };
-    const close = visibleTop(document.getElementById('comment-sheet-close'));
-    if (close != null) tops.close = close;
     const tab = visibleTop(document.querySelector('.comment-sheet-tabs button[aria-selected="true"]'));
     if (tab != null) tops.tab = tab;
     const card = document.querySelector('.comment-sheet-card')?.getBoundingClientRect();
@@ -110,8 +103,16 @@ test('webkit full comment sheet keeps handle and header below the top safe inset
     const thread = await readThreadChrome(page);
     assert.ok(thread.cardTop >= SAFE_TOP, `card top ${thread.cardTop} clears inset ${SAFE_TOP}`);
     assertChromeTops(thread.tops, SAFE_TOP, 'thread sheet');
+    assert.ok(thread.tops['comment-sheet-next'] != null, 'next arrow is visible on the first of two comments');
+    const hits = await page.evaluate(() => {
+      const next = document.getElementById('comment-sheet-next').getBoundingClientRect();
+      const chrome = document.querySelector('.comment-sheet-chrome').getBoundingClientRect();
+      return { nextW: next.width, nextH: next.height, chromeH: chrome.height };
+    });
+    assert.ok(hits.nextW >= 44 && hits.nextH >= 44, `next hit ${hits.nextW}x${hits.nextH} must be at least 44pt`);
+    assert.ok(hits.chromeH >= 48, `drag chrome ${hits.chromeH} must be at least 48pt`);
 
-    await page.locator('#comment-sheet-close').click();
+    await page.evaluate(() => document.getElementById('comment-sheet-scrim')?.click());
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
     await page.locator('#comments-chip').click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet-list')?.hidden);

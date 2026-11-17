@@ -10,8 +10,13 @@ const TEXT = [
   '-->',
   '',
   'Then <!--c:ab12-->launch<!--/c:ab12--> next.',
-  '<!--co:ab12 by:me at:2026-06-17T11:00:00.000Z status:open quote:"launch"',
-  'me (2026-06-17T11:00:00.000Z): after QA',
+  '<!--co:ab12 by:me at:2026-11-16T11:00:00.000Z status:open quote:"launch"',
+  'me (2026-11-16T11:00:00.000Z): after QA',
+  '-->',
+  '',
+  'Finally <!--c:cd34-->ship it<!--/c:cd34-->.',
+  '<!--co:cd34 by:me at:2026-11-16T12:00:00.000Z status:open quote:"ship it"',
+  'me (2026-11-16T12:00:00.000Z): last call',
   '-->',
 ].join('\n');
 
@@ -43,11 +48,51 @@ async function caretInComment(page, id) {
   }, id);
 }
 
+async function closeSheet(page) {
+  // Headless WebKit has a 0 top inset, so a full sheet covers the scrim.
+  // The same click handler runs for a tap on the exposed strip on device.
+  await page.evaluate(() => document.getElementById('comment-sheet-scrim')?.click());
+  await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+}
+
+async function arrowState(page) {
+  return page.evaluate(() => ({
+    prev: document.getElementById('comment-sheet-prev')?.hidden !== false,
+    next: document.getElementById('comment-sheet-next')?.hidden !== false,
+    prevHidden: Boolean(document.getElementById('comment-sheet-prev')?.hidden),
+    nextHidden: Boolean(document.getElementById('comment-sheet-next')?.hidden),
+  }));
+}
+
+async function longPressBubble(page, selector = '.comment-bubble') {
+  const box = await page.locator(selector).first().boundingBox();
+  assert.ok(box, 'bubble to long-press');
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.evaluate(async ({ selector, from }) => {
+    const target = document.querySelector(selector);
+    const fire = (type, buttons) => target.dispatchEvent(new PointerEvent(type, {
+      pointerId: 31,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: from.x,
+      clientY: from.y,
+      button: 0,
+      buttons,
+      bubbles: true,
+      cancelable: true,
+    }));
+    fire('pointerdown', 1);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    fire('pointerup', 0);
+  }, { selector, from });
+  await page.waitForFunction(() => !document.getElementById('comment-action-sheet')?.hidden);
+}
+
 test('webkit preview tap, pill, reply, resolve, next, and composer above keyboard', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
     await page.waitForSelector('.cm-comment');
-    await page.waitForFunction(() => document.getElementById('comments-chip')?.textContent === '💬 2');
+    await page.waitForFunction(() => document.getElementById('comments-chip')?.textContent === '💬 3');
     assert.equal(await page.locator('#comments-chip').isVisible(), true);
     await shot(page, 'comments-chip.png');
 
@@ -64,15 +109,14 @@ test('webkit preview tap, pill, reply, resolve, next, and composer above keyboar
     const afterReply = await page.evaluate(() => document.getElementById('source').value);
     assert.match(afterReply, /me \(20\d\d-.+\): QA can take Thursday\./);
 
-    await page.locator('#comment-sheet-resolve').click();
-    await page.waitForFunction(() => document.getElementById('comment-sheet-resolve')?.getAttribute('aria-pressed') === 'true');
-    await page.waitForFunction(() => document.getElementById('comments-chip')?.textContent === '💬 1');
+    await longPressBubble(page, '.comment-bubble');
+    await page.locator('.comment-action-rows button', { hasText: 'Resolve thread' }).click();
+    await page.waitForFunction(() => document.getElementById('comments-chip')?.textContent === '💬 2');
     assert.match(await page.evaluate(() => document.getElementById('source').value), /status:resolved/);
 
     await page.locator('#comment-sheet-next').click();
     await page.waitForFunction(() => document.getElementById('comment-sheet-quote')?.textContent.includes('launch'));
-    await page.locator('#comment-sheet-close').click();
-    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+    await closeSheet(page);
 
     await focusEditor(page);
     await caretInComment(page, 'ab12');
@@ -84,6 +128,7 @@ test('webkit preview tap, pill, reply, resolve, next, and composer above keyboar
     assert.match(await page.locator('#comment-sheet-quote').textContent(), /launch/);
 
     await page.locator('#comment-reply').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
     await fakeKeyboard(page, 336);
     const place = await page.evaluate(() => {
       const app = document.getElementById('app').getBoundingClientRect();
@@ -94,16 +139,93 @@ test('webkit preview tap, pill, reply, resolve, next, and composer above keyboar
     assert.ok(place.composerTop < place.appBottom, 'composer stays on the shrunk shell');
     await shot(page, 'comments-keyboard.png');
 
-    await page.locator('#comment-sheet-close').click();
-    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+    await closeSheet(page);
     await page.locator('#comments-chip').click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet-list')?.hidden);
     assert.equal(await page.locator('#comment-sheet-tabs').isHidden(), false);
+    assert.equal(await page.locator('#comment-sheet-back').count(), 0);
     await page.locator('.comment-row').first().click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet-thread')?.hidden);
-    await page.locator('#comment-sheet-back').click();
-    await page.waitForFunction(() => !document.getElementById('comment-sheet-list')?.hidden);
+    assert.match(await page.locator('#comment-sheet-quote').textContent(), /./);
 
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit arrows hide at the ends and on a single comment', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await blurEditor(page);
+    await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
+    await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
+    let arrows = await arrowState(page);
+    assert.equal(arrows.prevHidden, true, 'first comment hides previous');
+    assert.equal(arrows.nextHidden, false, 'first comment shows next');
+
+    await page.locator('#comment-sheet-next').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet-quote')?.textContent.includes('launch'));
+    arrows = await arrowState(page);
+    assert.equal(arrows.prevHidden, false, 'middle comment shows previous');
+    assert.equal(arrows.nextHidden, false, 'middle comment shows next');
+
+    await page.locator('#comment-sheet-next').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet-quote')?.textContent.includes('ship it'));
+    arrows = await arrowState(page);
+    assert.equal(arrows.prevHidden, false, 'last comment shows previous');
+    assert.equal(arrows.nextHidden, true, 'last comment hides next');
+
+    await closeSheet(page);
+    const single = [
+      'Only <!--c:one1-->one<!--/c:one1--> here.',
+      '<!--co:one1 by:me at:2026-11-16T12:00:00.000Z status:open quote:"one"',
+      'me (2026-11-16T12:00:00.000Z): solo',
+      '-->',
+    ].join('\n');
+    await openApp(page, url, [note('Single.md', single)], 'Single.md');
+    await blurEditor(page);
+    await page.locator('.cm-comment[data-comment-id="one1"]').click();
+    await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
+    arrows = await arrowState(page);
+    assert.equal(arrows.prevHidden, true, 'single comment hides previous');
+    assert.equal(arrows.nextHidden, true, 'single comment hides next');
+
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit composer focus snaps full and keeps the latest entry above it', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    const body = [
+      'We <!--c:k3f9-->ship<!--/c:k3f9--> Friday.',
+      '<!--co:k3f9 by:kyle at:2026-06-17T10:00:00.000Z status:open quote:"ship"',
+      'kyle (2026-06-17T10:00:00.000Z): Can we wait?',
+      'me (2026-06-17T10:05:00.000Z): No, Friday works.',
+      'me (2026-06-17T10:06:00.000Z): Already booked QA.',
+      'grok (2026-06-17T11:00:00.000Z): I can review Thursday night.',
+      'me (2026-06-17T11:05:00.000Z): Latest note sits above the composer.',
+      '-->',
+    ].join('\n');
+    await openApp(page, url, [note(NOTE, body)], NOTE);
+    await blurEditor(page);
+    await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
+    await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
+    assert.equal(await page.locator('#comment-sheet').getAttribute('data-size'), 'half');
+    await page.locator('#comment-reply').click();
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
+    const layout = await page.evaluate(() => {
+      const last = [...document.querySelectorAll('.comment-bubble-row')].at(-1)?.getBoundingClientRect();
+      const composer = document.querySelector('.comment-sheet-composer')?.getBoundingClientRect();
+      const thread = document.getElementById('comment-sheet-thread');
+      return {
+        lastBottom: last?.bottom ?? -1,
+        lastTop: last?.top ?? -1,
+        composerTop: composer?.top ?? -1,
+        text: thread?.textContent || '',
+      };
+    });
+    assert.match(layout.text, /Latest note sits above the composer/);
+    assert.ok(layout.lastBottom <= layout.composerTop + 4, `latest ${layout.lastBottom} should sit above composer ${layout.composerTop}`);
+    assert.ok(layout.lastTop < layout.composerTop, 'latest entry is visible above the composer');
     assert.deepEqual(errors, []);
   });
 });
@@ -117,7 +239,7 @@ async function selectText(page, start, end) {
   }, { start, end });
 }
 
-test('webkit creates, edits, reacts, and re-anchors comments', { timeout: 120000 }, async (t) => {
+test('webkit creates, edits, reacts, and deletes from the action sheet', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     const body = [
       'Plan the launch next week.',
@@ -134,6 +256,7 @@ test('webkit creates, edits, reacts, and re-anchors comments', { timeout: 120000
     await page.waitForFunction(() => !document.querySelector('[data-format="comment"]').disabled);
     await page.locator('[data-format="comment"]').click();
     await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
+    assert.equal(await page.locator('#comment-sheet').getAttribute('data-size'), 'full');
     await page.locator('#comment-reply').fill('Need a QA buffer.');
     await page.locator('#comment-send').click();
     await page.waitForFunction(() => document.getElementById('comments-chip')?.textContent === '💬 1');
@@ -141,8 +264,7 @@ test('webkit creates, edits, reacts, and re-anchors comments', { timeout: 120000
     assert.match(source, /<!--c:[A-Za-z0-9]+-->launch next week<!--\/c:/);
     assert.match(source, /Need a QA buffer\./);
 
-    await page.locator('#comment-sheet-close').click();
-    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+    await closeSheet(page);
     await selectText(page, planStart, planStart + 'launch'.length);
     await page.locator('[data-format="comment"]').click();
     await page.locator('#comment-composer-cancel').click();
@@ -161,32 +283,29 @@ test('webkit creates, edits, reacts, and re-anchors comments', { timeout: 120000
       view.dispatch({ selection: { anchor: view.state.doc.line(1).from } });
     });
     await page.locator('[data-format="comment"]').click();
+    assert.equal(await page.locator('#comment-sheet').getAttribute('data-size'), 'full');
     await page.locator('#comment-reply').fill('Line note');
     await page.locator('#comment-send').click();
     source = await page.evaluate(() => document.getElementById('source').value);
     assert.match(source, /Line note/);
+    await page.waitForFunction(() => document.getElementById('comment-sheet-thread')?.textContent.includes('Line note'));
 
-    await page.locator('#comment-sheet-close').click();
-    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
-    await page.locator('#comments-chip').click();
-    await page.locator('.comment-row').first().click();
-    await page.locator('.comment-entry-menu').first().click();
-    await page.locator('.comment-menu-item', { hasText: 'Edit' }).click();
+    await longPressBubble(page, '.comment-bubble.is-own');
+    await page.locator('.comment-action-rows button', { hasText: 'Edit' }).click();
     await page.locator('#comment-reply').fill('Edited note');
     await page.locator('#comment-send').click();
     await page.waitForFunction(() => document.getElementById('comment-sheet-thread')?.textContent.includes('Edited note'));
 
-    await page.locator('.comment-entry-menu').first().click();
-    await page.locator('.comment-menu-item', { hasText: 'React' }).click();
-    await page.locator('#comment-reaction-picker [data-emoji="👍"]').click();
+    await longPressBubble(page, '.comment-bubble.is-own');
+    await page.locator('#comment-action-reactions [data-emoji="👍"]').click();
     await page.waitForFunction(() => document.querySelector('.comment-reaction-chip')?.textContent.includes('👍'));
     await page.locator('.comment-reaction-chip').first().click();
     source = await page.evaluate(() => document.getElementById('source').value);
     assert.doesNotMatch(source, /\+👍/);
 
-    await page.locator('#comment-sheet-more').click();
     page.once('dialog', (dialog) => dialog.accept());
-    await page.locator('[data-comment-action="delete"]').click();
+    await longPressBubble(page, '.comment-bubble');
+    await page.locator('.comment-action-rows button', { hasText: 'Delete comment' }).click();
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
 
     assert.deepEqual(errors, []);

@@ -1,4 +1,5 @@
 import {
+  COMMENT_REACTIONS,
   authorBubbleHue,
   authorInitial,
   authorsMatch,
@@ -35,9 +36,8 @@ function sheetHeightLimits(doc, appHeight) {
   const safeTop = probeStyle ? px(probeStyle.paddingTop) : px(rootStyle?.getPropertyValue('--safe-top'));
   const gap = px(rootStyle?.getPropertyValue('--comment-sheet-gap-top')) || 8;
   const topClear = safeTop + gap;
-  const min = appHeight * 0.35;
-  const max = Math.max(min, appHeight - topClear);
-  return { min, max, topClear };
+  const max = Math.max(0, appHeight - topClear);
+  return { max, topClear };
 }
 
 const TAP_MS = 500;
@@ -45,6 +45,11 @@ const SLOP_PX = 10;
 const FLICK_VEL = 0.35;
 const SNAP_MS = 220;
 const VELOCITY_WINDOW_MS = 100;
+const LONG_PRESS_MS = 450;
+const CLOSE_VISIBLE = 0.25;
+const FULL_NEAR_PX = 80;
+const RUBBER = 1 / 3;
+const REPLY_LINES = 5;
 
 function isTap(gesture) {
   if (!gesture) return false;
@@ -89,15 +94,10 @@ export function mountComments(doc, hooks = {}) {
   }
 
   const card = sheet.querySelector('.comment-sheet-card');
+  const chrome = sheet.querySelector('.comment-sheet-chrome');
   const scrim = doc.getElementById('comment-sheet-scrim');
-  const back = doc.getElementById('comment-sheet-back');
-  const quoteBtn = doc.getElementById('comment-sheet-quote');
-  const resolveBtn = doc.getElementById('comment-sheet-resolve');
-  const moreBtn = doc.getElementById('comment-sheet-more');
-  const menu = doc.getElementById('comment-sheet-menu');
   const prevBtn = doc.getElementById('comment-sheet-prev');
   const nextBtn = doc.getElementById('comment-sheet-next');
-  const closeBtn = doc.getElementById('comment-sheet-close');
   const tabs = doc.getElementById('comment-sheet-tabs');
   const list = doc.getElementById('comment-sheet-list');
   const thread = doc.getElementById('comment-sheet-thread');
@@ -105,7 +105,11 @@ export function mountComments(doc, hooks = {}) {
   const replyBox = doc.getElementById('comment-reply');
   const sendBtn = doc.getElementById('comment-send');
   const composerCancel = doc.getElementById('comment-composer-cancel');
-  const reactionPicker = doc.getElementById('comment-reaction-picker');
+  const actionSheet = doc.getElementById('comment-action-sheet');
+  const actionScrim = doc.getElementById('comment-action-scrim');
+  const actionReactions = doc.getElementById('comment-action-reactions');
+  const actionRows = doc.getElementById('comment-action-rows');
+  const actionCancel = doc.getElementById('comment-action-cancel');
   const reanchorBar = doc.getElementById('comment-reanchor-bar');
   const reanchorAttach = doc.getElementById('comment-reanchor-attach');
   const reanchorCancel = doc.getElementById('comment-reanchor-cancel');
@@ -123,10 +127,11 @@ export function mountComments(doc, hooks = {}) {
   let pendingCreate = null;
   let draftHighlightId = '';
   let reanchorId = '';
-  let entryMenu = null;
   let longPress = null;
+  let suppressBubbleClick = false;
   let drag = null;
   let dragRaf = 0;
+  let keyboardRaf = 0;
 
   function comments() {
     return hooks.comments?.() || [];
@@ -148,13 +153,13 @@ export function mountComments(doc, hooks = {}) {
     return comments().find((comment) => comment.id === currentId) || null;
   }
 
+  function hideActionSheet() {
+    if (actionSheet) actionSheet.hidden = true;
+    suppressBubbleClick = false;
+  }
+
   function hideMenus() {
-    if (menu) menu.hidden = true;
-    if (reactionPicker) reactionPicker.hidden = true;
-    if (entryMenu) {
-      entryMenu.remove();
-      entryMenu = null;
-    }
+    hideActionSheet();
   }
 
   function paintChip() {
@@ -174,18 +179,27 @@ export function mountComments(doc, hooks = {}) {
 
   function setSize(next) {
     size = next;
-    sheet.dataset.size = next;
-    card?.style.removeProperty('--comment-sheet-drag');
+    if (typeof next === 'number') {
+      sheet.dataset.size = 'custom';
+      card?.style.setProperty('--comment-sheet-rest', `${next}px`);
+    } else {
+      sheet.dataset.size = next;
+      card?.style.removeProperty('--comment-sheet-rest');
+    }
     clearDragVisual();
   }
 
   function showSheet() {
     sheet.hidden = false;
     hooks.onOpen?.();
+    scheduleKeyboard();
   }
 
   function clearComposer() {
-    if (replyBox) replyBox.value = '';
+    if (replyBox) {
+      replyBox.value = '';
+      resizeReplyBox();
+    }
     composerMode = 'reply';
     editingEntry = -1;
     pendingCreate = null;
@@ -205,6 +219,7 @@ export function mountComments(doc, hooks = {}) {
       dragRaf = 0;
     }
     clearDragVisual();
+    card?.style.removeProperty('--comment-keyboard');
     sheet.hidden = true;
     currentId = '';
     fromList = false;
@@ -303,29 +318,50 @@ export function mountComments(doc, hooks = {}) {
     return canonical(entry.author) === canonical(authorName());
   }
 
+  function paintQuoteLine(text, orphan) {
+    const quote = el(doc, 'button', 'comment-thread-quote', text);
+    quote.id = 'comment-sheet-quote';
+    quote.type = 'button';
+    if (orphan) quote.classList.add('is-orphan');
+    return quote;
+  }
+
+  function setArrowVisibility(prevOn, nextOn) {
+    if (prevBtn) prevBtn.hidden = !prevOn;
+    if (nextBtn) nextBtn.hidden = !nextOn;
+  }
+
+  function paintArrows() {
+    if (mode !== 'thread' || pendingCreate) {
+      setArrowVisibility(false, false);
+      return;
+    }
+    const comment = current();
+    if (!comment) {
+      setArrowVisibility(false, false);
+      return;
+    }
+    const items = walkList();
+    if (items.length <= 1) {
+      setArrowVisibility(false, false);
+      return;
+    }
+    const index = items.findIndex((item) => item.id === comment.id);
+    setArrowVisibility(index > 0, index >= 0 && index < items.length - 1);
+  }
+
   function paintThread() {
     if (!thread) return;
     thread.replaceChildren();
     hideMenus();
     const comment = current();
-  if (!comment && !pendingCreate) return;
+    if (!comment && !pendingCreate) return;
     const docText = hooks.doc?.() || '';
     const quote = pendingCreate
       ? (pendingCreate.expected || 'New comment')
       : (commentQuote(comment, docText) || (isOrphan(comment) ? 'Text no longer in note' : 'Comment'));
-    if (quoteBtn) quoteBtn.textContent = quote;
-    if (resolveBtn) {
-      const resolved = comment?.status === 'resolved';
-      resolveBtn.hidden = !comment || Boolean(pendingCreate);
-      resolveBtn.setAttribute('aria-label', resolved ? 'Reopen' : 'Resolve');
-      resolveBtn.setAttribute('aria-pressed', resolved ? 'true' : 'false');
-      resolveBtn.textContent = resolved ? '↩' : '✓';
-    }
-    if (moreBtn) moreBtn.hidden = !comment || Boolean(pendingCreate);
-    const items = walkList();
-    const index = comment ? items.findIndex((item) => item.id === comment.id) : -1;
-    if (prevBtn) prevBtn.disabled = index <= 0;
-    if (nextBtn) nextBtn.disabled = index < 0 || index >= items.length - 1;
+    thread.append(paintQuoteLine(quote, Boolean(comment && isOrphan(comment))));
+    paintArrows();
     if (!comment) return;
     const selfName = hooks.author?.() || 'me';
     const lastSeen = hooks.lastSeen?.(comment.id) || '';
@@ -342,6 +378,7 @@ export function mountComments(doc, hooks = {}) {
       const prev = i > 0 ? entries[i - 1] : null;
       const showMeta = !prev || !authorsMatch(author, prev.author);
       const row = el(doc, 'article', `comment-bubble-row ${own ? 'is-own' : 'is-other'}`);
+      row.dataset.entry = String(i);
       if (!showMeta) row.classList.add('is-grouped');
       if (!own) {
         if (showMeta) {
@@ -356,10 +393,6 @@ export function mountComments(doc, hooks = {}) {
       if (showMeta) {
         const head = el(doc, 'header', 'comment-bubble-meta');
         head.append(el(doc, 'span', 'comment-bubble-author', author));
-        const menuBtn = el(doc, 'button', 'comment-entry-menu', '⋯');
-        menuBtn.type = 'button';
-        menuBtn.dataset.entry = String(i);
-        head.append(menuBtn);
         const time = el(doc, 'button', 'comment-bubble-time', exactTimes.has(i) ? (entry.timestamp || '') : relativeTime(entry.timestamp));
         time.type = 'button';
         time.dataset.entry = String(i);
@@ -376,6 +409,55 @@ export function mountComments(doc, hooks = {}) {
       row.append(wrap);
       thread.append(row);
     }
+    if (doc.activeElement === replyBox) scrollLatestAboveComposer();
+  }
+
+  function resizeReplyBox() {
+    if (!replyBox) return;
+    replyBox.style.height = 'auto';
+    const styles = doc.defaultView?.getComputedStyle(replyBox);
+    const line = Number.parseFloat(styles?.lineHeight) || 23;
+    const pad = (Number.parseFloat(styles?.paddingTop) || 0) + (Number.parseFloat(styles?.paddingBottom) || 0);
+    const max = line * REPLY_LINES + pad;
+    replyBox.style.height = `${Math.min(replyBox.scrollHeight, max)}px`;
+  }
+
+  function scrollLatestAboveComposer() {
+    if (!thread) return;
+    const last = [...thread.querySelectorAll('.comment-bubble-row')].at(-1);
+    if (last) last.scrollIntoView({ block: 'end', inline: 'nearest' });
+    else thread.scrollTop = thread.scrollHeight;
+  }
+
+  function keyboardOverlap() {
+    const view = doc.defaultView;
+    const vv = view?.visualViewport;
+    if (!view || !vv) return 0;
+    return Math.max(0, view.innerHeight - vv.height - vv.offsetTop);
+  }
+
+  function applyKeyboardInset() {
+    if (!card || sheet.hidden) return;
+    const overlap = keyboardOverlap();
+    const app = doc.getElementById('app');
+    const appBottom = app?.getBoundingClientRect?.().bottom ?? 0;
+    const view = doc.defaultView;
+    const already = view ? Math.max(0, view.innerHeight - appBottom) : 0;
+    const pad = Math.max(0, overlap - already);
+    card.style.setProperty('--comment-keyboard', `${pad}px`);
+    if (doc.activeElement === replyBox) scrollLatestAboveComposer();
+  }
+
+  function scheduleKeyboard() {
+    const view = doc.defaultView;
+    if (!view?.requestAnimationFrame || keyboardRaf) {
+      if (!view?.requestAnimationFrame) applyKeyboardInset();
+      return;
+    }
+    keyboardRaf = view.requestAnimationFrame(() => {
+      keyboardRaf = 0;
+      applyKeyboardInset();
+    });
   }
 
   function focusComposer() {
@@ -384,6 +466,7 @@ export function mountComments(doc, hooks = {}) {
       const len = replyBox.value.length;
       replyBox.setSelectionRange(len, len);
     }
+    resizeReplyBox();
   }
 
   function setComposerCreate() {
@@ -398,12 +481,7 @@ export function mountComments(doc, hooks = {}) {
     fromList = true;
     setSize('full');
     showSheet();
-    if (back) back.hidden = true;
-    if (quoteBtn) quoteBtn.hidden = true;
-    if (resolveBtn) resolveBtn.hidden = true;
-    if (moreBtn) moreBtn.hidden = true;
-    if (prevBtn) prevBtn.hidden = true;
-    if (nextBtn) nextBtn.hidden = true;
+    setArrowVisibility(false, false);
     if (tabs) tabs.hidden = false;
     if (list) list.hidden = false;
     if (thread) thread.hidden = true;
@@ -420,16 +498,10 @@ export function mountComments(doc, hooks = {}) {
     fromList = listOrigin;
     exactTimes = new Set();
     showSheet();
-    if (back) back.hidden = !fromList;
-    if (quoteBtn) quoteBtn.hidden = false;
     if (tabs) tabs.hidden = true;
     if (list) list.hidden = true;
     if (thread) thread.hidden = false;
     if (composer) composer.hidden = false;
-    if (resolveBtn) resolveBtn.hidden = Boolean(pendingCreate);
-    if (moreBtn) moreBtn.hidden = Boolean(pendingCreate);
-    if (prevBtn) prevBtn.hidden = Boolean(pendingCreate);
-    if (nextBtn) nextBtn.hidden = Boolean(pendingCreate);
     paintThread();
     if (create) setComposerCreate();
     else if (comment && id) {
@@ -456,25 +528,17 @@ export function mountComments(doc, hooks = {}) {
     pendingCreate = range;
     draftHighlightId = '';
     currentId = '';
-    setSize('half');
     composerMode = 'create';
     mode = 'thread';
     fromList = false;
+    setSize('full');
     showSheet();
-    if (back) back.hidden = true;
-    if (quoteBtn) {
-      quoteBtn.hidden = false;
-      quoteBtn.textContent = range.expected || 'New comment';
-    }
-    if (resolveBtn) resolveBtn.hidden = true;
-    if (moreBtn) moreBtn.hidden = true;
-    if (prevBtn) prevBtn.hidden = true;
-    if (nextBtn) nextBtn.hidden = true;
+    setArrowVisibility(false, false);
     if (tabs) tabs.hidden = true;
     if (list) list.hidden = true;
     if (thread) {
       thread.hidden = false;
-      thread.replaceChildren();
+      thread.replaceChildren(paintQuoteLine(range.expected || 'New comment', false));
     }
     if (composer) composer.hidden = false;
     setComposerCreate();
@@ -549,42 +613,74 @@ export function mountComments(doc, hooks = {}) {
     }, 180);
   }
 
-  function showEntryMenu(index, anchor) {
+  function addActionRow(label, action, className) {
+    if (!actionRows) return;
+    const button = el(doc, 'button', className || '', label);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      hideActionSheet();
+      action();
+    });
+    actionRows.append(button);
+  }
+
+  function showActionSheet(index) {
     hideMenus();
     const comment = current();
-    if (!comment) return;
+    if (!comment || !actionSheet) return;
     const entry = comment.thread[index];
     if (!entry) return;
-    const panel = el(doc, 'div', 'comment-entry-menu-panel');
-    const add = (label, action) => {
-      const button = el(doc, 'button', 'comment-menu-item', label);
-      button.type = 'button';
-      button.addEventListener('click', () => {
-        panel.remove();
-        entryMenu = null;
-        action();
+    if (actionReactions) {
+      actionReactions.replaceChildren();
+      const mine = new Set(
+        reactionsForEntry(comment, index)
+          .filter((row) => row.authors.some((name) => canonical(name) === canonical(authorName())))
+          .map((row) => row.emoji),
+      );
+      for (const emoji of COMMENT_REACTIONS) {
+        const button = el(doc, 'button', mine.has(emoji) ? 'is-mine' : '', emoji);
+        button.type = 'button';
+        button.dataset.emoji = emoji;
+        button.setAttribute('aria-label', emoji);
+        button.addEventListener('click', () => {
+          hooks.toggleReaction?.(comment.id, index, emoji);
+          hideActionSheet();
+          paintThread();
+        });
+        actionReactions.append(button);
+      }
+    }
+    if (actionRows) actionRows.replaceChildren();
+    if (ownEntry(entry)) addActionRow('Edit', () => beginEditEntry(index));
+    if (index > 0) {
+      addActionRow('Delete reply', () => {
+        if (hooks.deleteEntry?.(comment.id, index)) {
+          paintThread();
+          paintChip();
+          if (mode === 'list') paintList();
+        }
       });
-      panel.append(button);
-    };
-    if (ownEntry(entry)) add('Edit', () => beginEditEntry(index));
-    add('React', () => openReactionPicker(index, anchor));
-    add('Delete entry', () => {
-      const removeAll = index === 0;
-      const ok = window.confirm(removeAll ? 'Delete this entire comment?' : 'Delete this reply?');
-      if (!ok) return;
-      if (removeAll) hooks.deleteComment?.(comment.id);
-      else hooks.deleteEntry?.(comment.id, index);
-      paintThread();
-      paintChip();
-      if (mode === 'list') paintList();
+    }
+    const resolved = comment.status === 'resolved';
+    addActionRow(resolved ? 'Reopen thread' : 'Resolve thread', () => {
+      const next = resolved ? 'open' : 'resolved';
+      if (hooks.setStatus?.(comment.id, next)) {
+        paintThread();
+        paintChip();
+        if (mode === 'list') paintList();
+      }
     });
-    const rect = anchor.getBoundingClientRect();
-    const app = doc.getElementById('app');
-    const box = app?.getBoundingClientRect?.() || { left: 0, top: 0 };
-    panel.style.left = `${rect.left - box.left}px`;
-    panel.style.top = `${rect.bottom - box.top + 4}px`;
-    entryMenu = panel;
-    app?.append(panel);
+    if (isOrphan(comment)) {
+      addActionRow('Re-anchor', () => startReanchor(comment.id));
+    }
+    addActionRow('Delete comment', () => {
+      if (!window.confirm('Delete this comment? The highlighted text will stay.')) return;
+      if (hooks.deleteComment?.(comment.id)) {
+        hideSheet();
+        paintChip();
+      }
+    }, 'is-danger');
+    actionSheet.hidden = false;
   }
 
   function beginEditEntry(index) {
@@ -600,17 +696,6 @@ export function mountComments(doc, hooks = {}) {
     focusComposer();
   }
 
-  function openReactionPicker(index, anchor) {
-    if (!reactionPicker) return;
-    reactionPicker.dataset.entry = String(index);
-    reactionPicker.hidden = false;
-    const rect = anchor.getBoundingClientRect();
-    const app = doc.getElementById('app');
-    const box = app?.getBoundingClientRect?.() || { left: 0, top: 0 };
-    reactionPicker.style.left = `${Math.max(8, rect.left - box.left)}px`;
-    reactionPicker.style.top = `${rect.bottom - box.top + 4}px`;
-  }
-
   function submitComposer() {
     const text = replyBox?.value || '';
     if (!text.trim() && composerMode !== 'edit') {
@@ -618,8 +703,12 @@ export function mountComments(doc, hooks = {}) {
       return;
     }
     if (composerMode === 'create' && pendingCreate) {
-      if (!hooks.createComment?.(pendingCreate, text)) return;
+      const range = pendingCreate;
       pendingCreate = null;
+      if (!hooks.createComment?.(range, text)) {
+        pendingCreate = range;
+        return;
+      }
       clearComposer();
       paintChip();
       return;
@@ -635,9 +724,11 @@ export function mountComments(doc, hooks = {}) {
     if (!text.trim() || !currentId) return;
     if (hooks.reply?.(currentId, text)) {
       replyBox.value = '';
+      resizeReplyBox();
       paintThread();
       paintChip();
       if (mode === 'list') paintList();
+      scrollLatestAboveComposer();
     }
   }
 
@@ -692,44 +783,6 @@ export function mountComments(doc, hooks = {}) {
   pill?.addEventListener('pointercancel', () => { pillGesture = null; });
 
   scrim?.addEventListener('click', hideSheet);
-  closeBtn?.addEventListener('click', hideSheet);
-  back?.addEventListener('click', () => {
-    if (fromList) showList();
-    else hideSheet();
-  });
-
-  quoteBtn?.addEventListener('click', () => {
-    if (currentId) hooks.jump?.(currentId);
-  });
-
-  resolveBtn?.addEventListener('click', () => {
-    const comment = current();
-    if (!comment) return;
-    const next = comment.status === 'resolved' ? 'open' : 'resolved';
-    if (hooks.setStatus?.(comment.id, next)) {
-      paintThread();
-      paintChip();
-      if (mode === 'list') paintList();
-    }
-  });
-
-  moreBtn?.addEventListener('click', () => {
-    if (!menu) return;
-    menu.hidden = !menu.hidden;
-  });
-
-  menu?.addEventListener('click', (event) => {
-    const button = event.target.closest?.('[data-comment-action]');
-    if (!button || !currentId) return;
-    menu.hidden = true;
-    const action = button.dataset.commentAction;
-    if (action === 'delete' && window.confirm('Delete this comment? The highlighted text will stay.')) {
-      if (hooks.deleteComment?.(currentId)) {
-        hideSheet();
-        paintChip();
-      }
-    }
-  });
 
   prevBtn?.addEventListener('click', () => move(-1));
   nextBtn?.addEventListener('click', () => move(1));
@@ -750,17 +803,21 @@ export function mountComments(doc, hooks = {}) {
   });
 
   thread?.addEventListener('click', (event) => {
+    if (suppressBubbleClick) {
+      suppressBubbleClick = false;
+      event.preventDefault();
+      return;
+    }
+    if (event.target.closest?.('#comment-sheet-quote')) {
+      if (currentId) hooks.jump?.(currentId);
+      return;
+    }
     const button = event.target.closest?.('.comment-bubble-time');
     if (button) {
       const index = Number(button.dataset.entry);
       if (exactTimes.has(index)) exactTimes.delete(index);
       else exactTimes.add(index);
       paintThread();
-      return;
-    }
-    const menuBtn = event.target.closest?.('.comment-entry-menu');
-    if (menuBtn) {
-      showEntryMenu(Number(menuBtn.dataset.entry), menuBtn);
       return;
     }
     const reaction = event.target.closest?.('.comment-reaction-chip');
@@ -770,34 +827,59 @@ export function mountComments(doc, hooks = {}) {
     }
   });
 
-  thread?.addEventListener('pointerdown', (event) => {
-    const item = event.target.closest?.('.comment-bubble-row');
-    if (!item || event.target.closest('button')) return;
-    const menuBtn = item.querySelector('.comment-entry-menu');
-    if (!menuBtn) return;
-    const index = Number(menuBtn.dataset.entry);
-    longPress = doc.defaultView?.setTimeout(() => {
-      showEntryMenu(index, menuBtn);
-      longPress = null;
-    }, 520);
-  });
-  thread?.addEventListener('pointerup', () => {
-    if (longPress) doc.defaultView?.clearTimeout(longPress);
-    longPress = null;
-  });
-  thread?.addEventListener('pointercancel', () => {
-    if (longPress) doc.defaultView?.clearTimeout(longPress);
-    longPress = null;
+  thread?.addEventListener('contextmenu', (event) => {
+    if (event.target.closest?.('.comment-bubble, .comment-bubble-row')) event.preventDefault();
   });
 
-  reactionPicker?.addEventListener('click', (event) => {
-    const button = event.target.closest?.('[data-emoji]');
-    if (!button || !currentId) return;
-    const index = Number(reactionPicker.dataset.entry || 0);
-    hooks.toggleReaction?.(currentId, index, button.dataset.emoji);
-    reactionPicker.hidden = true;
-    paintThread();
+  function cancelLongPress() {
+    if (!longPress) return;
+    doc.defaultView?.clearTimeout(longPress.timer);
+    longPress = null;
+  }
+
+  thread?.addEventListener('pointerdown', (event) => {
+    if (event.button && event.button !== 0) return;
+    const row = event.target.closest?.('.comment-bubble-row');
+    if (!row || !current()) return;
+    const index = Number(row.dataset.entry);
+    if (!Number.isFinite(index)) return;
+    cancelLongPress();
+    const view = doc.defaultView;
+    longPress = {
+      index,
+      x: event.clientX,
+      y: event.clientY,
+      scroll: thread.scrollTop,
+      moved: false,
+      timer: view?.setTimeout(() => {
+        const press = longPress;
+        longPress = null;
+        if (!press || press.moved || drag) return;
+        suppressBubbleClick = true;
+        showActionSheet(press.index);
+        view?.setTimeout?.(() => { suppressBubbleClick = false; }, 400);
+      }, LONG_PRESS_MS),
+    };
   });
+  thread?.addEventListener('pointermove', (event) => {
+    if (!longPress) return;
+    if (Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y) > SLOP_PX) {
+      longPress.moved = true;
+      cancelLongPress();
+    }
+  });
+  thread?.addEventListener('pointerup', cancelLongPress);
+  thread?.addEventListener('pointercancel', cancelLongPress);
+  thread?.addEventListener('scroll', () => {
+    if (!longPress) return;
+    if (Math.abs(thread.scrollTop - longPress.scroll) > 0) {
+      longPress.moved = true;
+      cancelLongPress();
+    }
+  }, { passive: true });
+
+  actionScrim?.addEventListener('click', hideActionSheet);
+  actionCancel?.addEventListener('click', hideActionSheet);
 
   sendBtn?.addEventListener('click', submitComposer);
   composerCancel?.addEventListener('click', cancelComposer);
@@ -808,6 +890,11 @@ export function mountComments(doc, hooks = {}) {
       submitComposer();
     }
   });
+  replyBox?.addEventListener('input', resizeReplyBox);
+  replyBox?.addEventListener('focus', () => {
+    if (drag) return;
+    snapToFullForComposer();
+  });
 
   reanchorAttach?.addEventListener('click', finishReanchor);
   reanchorCancel?.addEventListener('click', () => {
@@ -815,9 +902,6 @@ export function mountComments(doc, hooks = {}) {
     if (reanchorBar) reanchorBar.hidden = true;
     hooks.onReanchorEnd?.();
   });
-
-  const handle = sheet.querySelector('.comment-sheet-handle');
-  const head = sheet.querySelector('.comment-sheet-head');
 
   function sheetHeight() {
     const app = doc.getElementById('app');
@@ -843,20 +927,40 @@ export function mountComments(doc, hooks = {}) {
     return (end.y - start.y) / Math.max(1, end.t - start.t);
   }
 
-  function clampTranslateY(state, translateY) {
-    const maxY = Math.max(0, state.fullHeight - state.limits.min);
-    return clamp(translateY, 0, maxY);
+  function rubberband(translateY) {
+    if (translateY < 0) return translateY * RUBBER;
+    return translateY;
   }
 
   function restingTranslateY(state, target) {
     if (target === 'full') return 0;
-    const half = state.appHeight * 0.5;
-    return Math.max(0, state.fullHeight - half);
+    if (target === 'half') return Math.max(0, state.fullHeight - state.appHeight * 0.5);
+    if (typeof target === 'number') return Math.max(0, state.fullHeight - target);
+    return Math.max(0, state.fullHeight - state.appHeight * 0.5);
   }
 
   function applyDragTransform(translateY) {
     if (!card) return;
     card.style.transform = `translate3d(0, ${translateY}px, 0)`;
+  }
+
+  function measureSheet() {
+    const appHeight = sheetHeight();
+    const limits = sheetHeightLimits(doc, appHeight);
+    const fullHeight = limits.max;
+    const app = doc.getElementById('app');
+    const appRect = app?.getBoundingClientRect?.() || { top: 0, bottom: appHeight };
+    const restingTopFull = appRect.bottom - fullHeight;
+    const rect = card?.getBoundingClientRect?.();
+    const translateY = rect ? rect.top - restingTopFull : restingTranslateY({ appHeight, fullHeight }, size);
+    return {
+      appHeight,
+      limits,
+      fullHeight,
+      restingTopFull,
+      translateY,
+      size,
+    };
   }
 
   function scheduleDragPaint() {
@@ -865,7 +969,7 @@ export function mountComments(doc, hooks = {}) {
     dragRaf = view.requestAnimationFrame(() => {
       dragRaf = 0;
       if (!drag || drag.pendingTranslateY == null) return;
-      drag.translateY = clampTranslateY(drag, drag.pendingTranslateY);
+      drag.translateY = rubberband(drag.pendingTranslateY);
       applyDragTransform(drag.translateY);
       drag.pendingTranslateY = null;
     });
@@ -879,20 +983,6 @@ export function mountComments(doc, hooks = {}) {
     applyDragTransform(state.translateY);
   }
 
-  function snapTarget(dy, vel, fromSize) {
-    if (vel > FLICK_VEL) {
-      if (fromSize === 'half') return 'close';
-      return 'half';
-    }
-    if (vel < -FLICK_VEL) return 'full';
-    if (dy > 90) {
-      if (fromSize === 'half') return 'close';
-      return 'half';
-    }
-    if (dy < -60) return 'full';
-    return fromSize;
-  }
-
   function finishDragMotion(active, targetY, done) {
     if (!card) {
       done?.();
@@ -901,52 +991,80 @@ export function mountComments(doc, hooks = {}) {
     const startY = active.translateY;
     if (prefersReducedMotion() || Math.abs(targetY - startY) < 0.5) {
       applyDragTransform(targetY);
-      clearDragVisual();
       done?.();
       return;
     }
-    card.classList.add('is-snap-animating');
-    applyDragTransform(startY);
-    void card.offsetHeight;
-    applyDragTransform(targetY);
-    let settled = false;
-    const onEnd = (event) => {
-      if (settled) return;
-      if (event.target !== card || event.propertyName !== 'transform') return;
-      settled = true;
-      card.removeEventListener('transitionend', onEnd);
-      card.classList.remove('is-snap-animating');
-      clearDragVisual();
-      done?.();
+    const view = doc.defaultView;
+    const run = () => {
+      if (!card) {
+        done?.();
+        return;
+      }
+      card.classList.add('is-snap-animating');
+      applyDragTransform(targetY);
+      let settled = false;
+      const onEnd = (event) => {
+        if (settled) return;
+        if (event.target !== card || event.propertyName !== 'transform') return;
+        settled = true;
+        card.removeEventListener('transitionend', onEnd);
+        card.classList.remove('is-snap-animating');
+        done?.();
+      };
+      card.addEventListener('transitionend', onEnd);
+      view?.setTimeout?.(() => {
+        if (settled || !card.classList.contains('is-snap-animating')) return;
+        onEnd({ target: card, propertyName: 'transform' });
+      }, SNAP_MS + 60);
     };
-    card.addEventListener('transitionend', onEnd);
-    doc.defaultView?.setTimeout?.(() => {
-      if (settled || !card.classList.contains('is-snap-animating')) return;
-      onEnd({ target: card, propertyName: 'transform' });
-    }, SNAP_MS + 60);
+    if (view?.requestAnimationFrame) view.requestAnimationFrame(run);
+    else run();
   }
 
-  function settleDrag(active, dy, vel) {
-    const target = snapTarget(dy, vel, active.size);
-    if (target === 'close') {
-      const dismissY = Math.max(0, active.fullHeight - active.limits.min) + 96;
-      finishDragMotion(active, dismissY, () => hideSheet());
+  function settleDrag(active, vel) {
+    const visible = active.fullHeight - active.translateY;
+    if (vel < -FLICK_VEL || active.translateY <= FULL_NEAR_PX) {
+      finishDragMotion(active, 0, () => setSize('full'));
       return;
     }
-    const targetY = restingTranslateY(active, target);
-    finishDragMotion(active, targetY, () => setSize(target));
+    if (vel > FLICK_VEL || visible < CLOSE_VISIBLE * active.appHeight) {
+      finishDragMotion(active, active.fullHeight + 24, () => hideSheet());
+      return;
+    }
+    finishDragMotion(active, active.translateY, () => setSize(Math.max(0, visible)));
+  }
+
+  function animateToSize(target) {
+    const state = measureSheet();
+    beginDragVisual(state);
+    const targetY = restingTranslateY(state, target);
+    finishDragMotion({ ...state, translateY: state.translateY }, targetY, () => setSize(target));
+  }
+
+  function snapToFullForComposer() {
+    const after = () => {
+      scheduleKeyboard();
+      resizeReplyBox();
+      scrollLatestAboveComposer();
+    };
+    if (size !== 'full') {
+      const state = measureSheet();
+      beginDragVisual(state);
+      finishDragMotion({ ...state, translateY: state.translateY }, 0, () => {
+        setSize('full');
+        after();
+      });
+      return;
+    }
+    after();
   }
 
   function onDragDown(event, surface) {
     if (event.button && event.button !== 0) return;
     if (drag) return;
-    const appHeight = sheetHeight();
-    const limits = sheetHeightLimits(doc, appHeight);
-    const rect = card?.getBoundingClientRect?.();
-    const fullHeight = limits.max;
-    const restingTopFull = appHeight - fullHeight;
-    const translateY = rect ? rect.top - restingTopFull : restingTranslateY({ appHeight, fullHeight, limits }, size);
-    const clampedY = clampTranslateY({ fullHeight, limits }, translateY);
+    hideMenus();
+    cancelLongPress();
+    const state = measureSheet();
     drag = {
       id: event.pointerId,
       surface,
@@ -955,12 +1073,12 @@ export function mountComments(doc, hooks = {}) {
       at: Date.now(),
       size,
       moved: false,
-      appHeight,
-      limits,
-      fullHeight,
-      restingTopFull,
-      startTranslateY: clampedY,
-      translateY: clampedY,
+      appHeight: state.appHeight,
+      limits: state.limits,
+      fullHeight: state.fullHeight,
+      restingTopFull: state.restingTopFull,
+      startTranslateY: state.translateY,
+      translateY: state.translateY,
       pendingTranslateY: null,
       samples: [{ y: event.clientY, t: event.timeStamp }],
     };
@@ -993,20 +1111,20 @@ export function mountComments(doc, hooks = {}) {
       dragRaf = 0;
     }
     if (active.pendingTranslateY != null) {
-      active.translateY = clampTranslateY(active, active.pendingTranslateY);
+      active.translateY = rubberband(active.pendingTranslateY);
       applyDragTransform(active.translateY);
       active.pendingTranslateY = null;
     }
-    const dy = event.clientY - active.y;
     const gesture = {
       ...active,
       endX: event.clientX,
       endY: event.clientY,
     };
     const vel = velocityFromSamples(active.samples);
-    if (!active.moved && active.surface === 'handle' && isTap(gesture)) {
+    const tappedHandle = event.target.closest?.('.comment-sheet-handle');
+    if (!active.moved && tappedHandle && isTap(gesture)) {
       clearDragVisual();
-      setSize(size === 'full' ? 'half' : 'full');
+      animateToSize(size === 'full' ? 'half' : 'full');
       return;
     }
     if (!active.moved) {
@@ -1014,25 +1132,18 @@ export function mountComments(doc, hooks = {}) {
       setSize(size);
       return;
     }
-    settleDrag(active, dy, vel);
+    settleDrag(active, vel);
   }
 
-  function bindDragSurface(node, surface) {
-    if (!node) return;
-    node.addEventListener('pointerdown', (event) => onDragDown(event, surface));
+  function chromeWantsDrag(event) {
+    if (event.target.closest?.('#comment-sheet-prev, #comment-sheet-next')) return false;
+    return event.target === chrome || chrome.contains(event.target);
   }
 
-  function headWantsDrag(event) {
-    if (event.target.closest?.('.comment-icon-btn, #comment-sheet-close, #comment-sheet-back, #comment-sheet-quote, .comment-sheet-tabs')) {
-      return false;
-    }
-    return event.target === head || head.contains(event.target);
-  }
-
-  bindDragSurface(handle, 'handle');
-  head?.addEventListener('pointerdown', (event) => {
-    if (!headWantsDrag(event)) return;
-    onDragDown(event, 'head');
+  chrome?.addEventListener('pointerdown', (event) => {
+    if (!chromeWantsDrag(event)) return;
+    const surface = event.target.closest?.('.comment-sheet-handle') ? 'handle' : 'head';
+    onDragDown(event, surface);
   });
   sheet.addEventListener('pointermove', onDragMove);
   sheet.addEventListener('pointerup', onDragUp);
@@ -1047,6 +1158,10 @@ export function mountComments(doc, hooks = {}) {
     finishDragMotion(active, restingTranslateY(active, active.size), () => setSize(active.size));
   });
 
+  const view = doc.defaultView;
+  view?.visualViewport?.addEventListener('resize', scheduleKeyboard);
+  view?.visualViewport?.addEventListener('scroll', scheduleKeyboard);
+
   return {
     paintChip,
     openList() {
@@ -1056,7 +1171,7 @@ export function mountComments(doc, hooks = {}) {
     },
     openThread(id) {
       hidePill();
-      setSize('half');
+      if (sheet.hidden) setSize('half');
       showThread(id, { listOrigin: false });
     },
     startCreate,
