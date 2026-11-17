@@ -42,6 +42,10 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.match(css, /--safe-right:\s*env\(safe-area-inset-right/);
   assert.match(css, /--safe-bottom:\s*env\(safe-area-inset-bottom/);
   assert.match(css, /--safe-left:\s*env\(safe-area-inset-left/);
+  assert.match(css, /--comment-sheet-full-inset:\s*calc\(var\(--safe-top\) \+ var\(--comment-sheet-gap-top\)\)/);
+  assert.match(css, /--safe-top:\s*max\(env\(safe-area-inset-top,\s*0px\),\s*47px\)/);
+  const fullSheet = rule(css, '.comment-sheet[data-size="full"] .comment-sheet-card');
+  assert.match(fullSheet, /height:\s*calc\(100% - var\(--comment-sheet-full-inset\)\)/);
   const frame = rule(css, '.safe-frame');
   assert.match(frame, /height:\s*100%/);
   assert.equal(frame.includes('position'), false);
@@ -49,7 +53,7 @@ test('the app color fills the screen and safe-area padding stays inside it', () 
   assert.equal(css.includes('--app-h'), false);
   assert.match(css, /html \{\s*height:\s*calc\(100% - var\(--keyboard-inset\)\)/);
   assert.match(css, /body,\s*#app \{\s*height:\s*100%/);
-  assert.match(css, /@media \(display-mode:\s*standalone\) \{\s*html \{\s*height:\s*calc\(100lvh - var\(--keyboard-inset\)\)/);
+  assert.match(css, /@media \(display-mode:\s*standalone\)\s*\{[\s\S]*html \{\s*height:\s*calc\(100lvh - var\(--keyboard-inset\)\)/);
   assert.match(css, /html\.is-keyboard \{\s*height:\s*var\(--shell-h\)/);
   assert.match(css, /html\.is-keyboard \.format-bar \{\s*margin-bottom:\s*0/);
   const flag = rule(css, '.sync-status');

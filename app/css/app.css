@@ -21,6 +21,8 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+  --comment-sheet-gap-top: 8px;
+  --comment-sheet-full-inset: calc(var(--safe-top) + var(--comment-sheet-gap-top));
   --keyboard-inset: 0px;
   --shell-h: 100%;
   --scroll-pad: var(--safe-bottom);
@@ -86,6 +88,12 @@ body,
    shell fills its parent instead. When the keyboard is up, --shell-h is
    the visual viewport's bottom so the format toolbar sits flush on it. */
 @media (display-mode: standalone) {
+  /* Home-screen PWAs may report env(safe-area-inset-top) as 0 while still
+     drawing under the status bar (iPhone 13 portrait ≈ 47px). */
+  :root {
+    --safe-top: max(env(safe-area-inset-top, 0px), 47px);
+  }
+
   html {
     height: calc(100lvh - var(--keyboard-inset));
   }
@@ -486,7 +494,7 @@ html.is-keyboard .format-bar {
   display: flex;
   flex-direction: column;
   height: var(--comment-sheet-drag, 50%);
-  max-height: 100%;
+  max-height: calc(100% - var(--comment-sheet-full-inset));
   border-radius: 16px 16px 0 0;
   background: var(--surface);
   color: var(--ink);
@@ -497,7 +505,7 @@ html.is-keyboard .format-bar {
 }
 
 .comment-sheet[data-size="full"] .comment-sheet-card {
-  height: 100%;
+  height: calc(100% - var(--comment-sheet-full-inset));
   border-radius: 0;
 }
 
