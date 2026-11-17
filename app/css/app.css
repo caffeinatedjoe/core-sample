@@ -886,7 +886,7 @@ html.is-keyboard .format-bar {
   align-items: flex-end;
   gap: 8px;
   padding: 8px 16px;
-  padding-bottom: max(var(--safe-bottom), 8px, var(--comment-keyboard, 0px));
+  padding-bottom: max(8px, var(--safe-bottom), calc(var(--comment-keyboard, 0px) + 8px));
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
@@ -904,36 +904,69 @@ html.is-keyboard .format-bar {
 
 .comment-sheet-composer textarea {
   flex: 1;
-  min-height: 44px;
-  max-height: calc(1.45em * 5 + 20px);
+  min-height: 36px;
+  max-height: calc(1.25em * 5 + 14px);
   margin: 0;
-  padding: 10px 12px;
+  padding: 7px 14px;
   border: 1px solid var(--line, var(--panel-line));
-  border-radius: 12px;
-  background: var(--bg);
+  border-radius: 18px;
+  background: var(--surface);
   color: inherit;
   font: inherit;
   font-size: 16px;
-  line-height: 1.45;
+  line-height: 1.25;
   resize: none;
   overflow-y: auto;
 }
 
-.comment-sheet-composer button {
+.comment-composer-cancel {
   flex: none;
-  min-height: 44px;
+  height: 36px;
+  min-height: 36px;
   padding: 0 14px;
   border: 0;
-  border-radius: 12px;
-  background: var(--accent);
-  color: var(--accent-ink);
+  border-radius: 18px;
+  background: var(--chip);
+  color: var(--ink);
   font-size: 16px;
   font-weight: 600;
 }
 
-.comment-composer-cancel {
+#comment-send {
+  flex: none;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-ink);
+}
+
+.comment-send-glyph {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+#comment-send[aria-disabled="true"] .comment-send-glyph {
   background: var(--chip);
-  color: var(--ink);
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .comment-send-glyph {
+    transition: background-color 150ms ease, color 150ms ease;
+  }
 }
 
 .format-btn:disabled,

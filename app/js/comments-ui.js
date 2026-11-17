@@ -196,6 +196,20 @@ export function mountComments(doc, hooks = {}) {
     scheduleKeyboard();
   }
 
+  function sendActionLabel() {
+    if (composerMode === 'edit') return 'Save';
+    if (composerMode === 'create') return 'Add';
+    return 'Send';
+  }
+
+  function updateSendEnabled() {
+    if (!sendBtn) return;
+    const empty = !(replyBox?.value || '').trim();
+    const disabled = empty && composerMode !== 'edit';
+    sendBtn.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    sendBtn.setAttribute('aria-label', sendActionLabel());
+  }
+
   function clearComposer() {
     if (replyBox) {
       replyBox.value = '';
@@ -205,8 +219,8 @@ export function mountComments(doc, hooks = {}) {
     editingEntry = -1;
     pendingCreate = null;
     draftHighlightId = '';
-    if (sendBtn) sendBtn.textContent = 'Send';
     if (composerCancel) composerCancel.hidden = true;
+    updateSendEnabled();
   }
 
   function hideSheet() {
@@ -472,9 +486,9 @@ export function mountComments(doc, hooks = {}) {
 
   function setComposerCreate() {
     composerMode = 'create';
-    if (sendBtn) sendBtn.textContent = 'Add';
     if (composerCancel) composerCancel.hidden = false;
     focusComposer();
+    updateSendEnabled();
   }
 
   function showList() {
@@ -505,7 +519,10 @@ export function mountComments(doc, hooks = {}) {
     if (composer) composer.hidden = false;
     paintThread();
     if (create) setComposerCreate();
-    else if (comment && id) {
+    else {
+      updateSendEnabled();
+    }
+    if (comment && id) {
       hooks.reveal?.(id);
       const view = doc.defaultView;
       const markLater = () => {
@@ -692,9 +709,9 @@ export function mountComments(doc, hooks = {}) {
     composerMode = 'edit';
     editingEntry = index;
     if (replyBox) replyBox.value = entry.text;
-    if (sendBtn) sendBtn.textContent = 'Save';
     if (composerCancel) composerCancel.hidden = false;
     focusComposer();
+    updateSendEnabled();
   }
 
   function submitComposer() {
@@ -726,6 +743,7 @@ export function mountComments(doc, hooks = {}) {
     if (hooks.reply?.(currentId, text)) {
       replyBox.value = '';
       resizeReplyBox();
+      updateSendEnabled();
       paintThread();
       paintChip();
       if (mode === 'list') paintList();
@@ -882,16 +900,23 @@ export function mountComments(doc, hooks = {}) {
   actionScrim?.addEventListener('click', hideActionSheet);
   actionCancel?.addEventListener('click', hideActionSheet);
 
-  sendBtn?.addEventListener('click', submitComposer);
+  sendBtn?.addEventListener('click', () => {
+    if (sendBtn.getAttribute('aria-disabled') === 'true') return;
+    submitComposer();
+  });
   composerCancel?.addEventListener('click', cancelComposer);
 
   replyBox?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      if (sendBtn?.getAttribute('aria-disabled') === 'true') return;
       event.preventDefault();
       submitComposer();
     }
   });
-  replyBox?.addEventListener('input', resizeReplyBox);
+  replyBox?.addEventListener('input', () => {
+    resizeReplyBox();
+    updateSendEnabled();
+  });
   replyBox?.addEventListener('focus', () => {
     if (drag) return;
     snapToFullForComposer();
@@ -1179,6 +1204,8 @@ export function mountComments(doc, hooks = {}) {
   const view = doc.defaultView;
   view?.visualViewport?.addEventListener('resize', scheduleKeyboard);
   view?.visualViewport?.addEventListener('scroll', scheduleKeyboard);
+
+  updateSendEnabled();
 
   return {
     paintChip,

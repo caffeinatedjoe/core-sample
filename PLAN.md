@@ -168,6 +168,10 @@ Implemented as core-sample-shell-v51. While the sheet card moves with `translate
 
 Implemented as core-sample-shell-v52. The grabber row is an absolute overlay so the thread and list scroll from the card top under a surface gradient. Bottom safe-area and keyboard inset sit on the composer with an opaque surface fill below it so thread bubbles never show through during drag or snap. Thread spacing follows an 8pt grid (grouped bubbles, quote line, composer hairline).
 
+## v53 — Comment sheet composer styling
+
+Implemented as core-sample-shell-v53. The reply bar uses an 8pt grid with pill field (36px resting height), a circular send control with up-arrow icon and 44pt hit target, and keyboard padding that keeps 8px above the inset. Send disables when the draft is empty (except in edit mode).
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

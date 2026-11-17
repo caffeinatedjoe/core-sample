@@ -287,7 +287,13 @@
         <div id="comment-sheet-composer" class="comment-sheet-composer">
           <textarea id="comment-reply" rows="1" enterkeyhint="enter" aria-label="Reply"></textarea>
           <button type="button" id="comment-composer-cancel" class="comment-composer-cancel" hidden>Cancel</button>
-          <button type="button" id="comment-send">Send</button>
+          <button type="button" id="comment-send" aria-label="Send" aria-disabled="true">
+            <span class="comment-send-glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" focusable="false">
+                <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 17V7M8.5 10.5 12 7l3.5 3.5"></path>
+              </svg>
+            </span>
+          </button>
         </div>
       </div>
       <div id="comment-action-sheet" class="comment-action-sheet" hidden>
