@@ -148,6 +148,10 @@ Implemented as core-sample-shell-v45. The format bar adds 💬. Sending from the
 
 Implemented as core-sample-shell-v47. A full-height comment list or thread sheet stops below the top safe inset so the grab handle, entire header row, and Close control stay out from under the notch and status bar. In `display-mode: standalone`, `--safe-top` is `max(env(safe-area-inset-top), 47px)` so a Home Screen PWA still clears the status bar when env reads 0. Drag snapping uses the same cap.
 
+## v48 — Comment sheet compositor drag
+
+Implemented as core-sample-shell-v48. The comment sheet tracks the finger with transform-only motion during a drag (one height measure at pointer down, requestAnimationFrame coalescing, no duplicate touch handlers). Release eases to half, full, or dismiss; the v46 safe-area top cap is unchanged.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

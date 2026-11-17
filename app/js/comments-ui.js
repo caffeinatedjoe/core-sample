@@ -43,6 +43,8 @@ function sheetHeightLimits(doc, appHeight) {
 const TAP_MS = 500;
 const SLOP_PX = 10;
 const FLICK_VEL = 0.35;
+const SNAP_MS = 220;
+const VELOCITY_WINDOW_MS = 100;
 
 function isTap(gesture) {
   if (!gesture) return false;
@@ -123,6 +125,8 @@ export function mountComments(doc, hooks = {}) {
   let reanchorId = '';
   let entryMenu = null;
   let longPress = null;
+  let drag = null;
+  let dragRaf = 0;
 
   function comments() {
     return hooks.comments?.() || [];
@@ -161,10 +165,18 @@ export function mountComments(doc, hooks = {}) {
     chip.setAttribute('aria-label', count === 1 ? '1 open comment' : `${count} open comments`);
   }
 
+  function clearDragVisual() {
+    card?.style.removeProperty('height');
+    card?.style.removeProperty('transform');
+    card?.classList.remove('is-snap-animating');
+    sheet.classList.remove('is-dragging');
+  }
+
   function setSize(next) {
     size = next;
     sheet.dataset.size = next;
     card?.style.removeProperty('--comment-sheet-drag');
+    clearDragVisual();
   }
 
   function showSheet() {
@@ -187,6 +199,12 @@ export function mountComments(doc, hooks = {}) {
     if (reanchorId) hooks.onReanchorEnd?.();
     reanchorId = '';
     if (reanchorBar) reanchorBar.hidden = true;
+    drag = null;
+    if (dragRaf) {
+      doc.defaultView?.cancelAnimationFrame?.(dragRaf);
+      dragRaf = 0;
+    }
+    clearDragVisual();
     sheet.hidden = true;
     currentId = '';
     fromList = false;
@@ -798,7 +816,6 @@ export function mountComments(doc, hooks = {}) {
     hooks.onReanchorEnd?.();
   });
 
-  let drag = null;
   const handle = sheet.querySelector('.comment-sheet-handle');
   const head = sheet.querySelector('.comment-sheet-head');
 
@@ -807,27 +824,129 @@ export function mountComments(doc, hooks = {}) {
     return app?.getBoundingClientRect?.().height || 500;
   }
 
-  function snapHeight(dy, vel) {
+  function prefersReducedMotion() {
+    return doc.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+  }
+
+  function velocityFromSamples(samples) {
+    if (samples.length < 2) return 0;
+    const end = samples[samples.length - 1];
+    const cutoff = end.t - VELOCITY_WINDOW_MS;
+    let start = samples[0];
+    for (const sample of samples) {
+      if (sample.t >= cutoff) {
+        start = sample;
+        break;
+      }
+    }
+    if (start === end) return 0;
+    return (end.y - start.y) / Math.max(1, end.t - start.t);
+  }
+
+  function clampTranslateY(state, translateY) {
+    const maxY = Math.max(0, state.fullHeight - state.limits.min);
+    return clamp(translateY, 0, maxY);
+  }
+
+  function restingTranslateY(state, target) {
+    if (target === 'full') return 0;
+    const half = state.appHeight * 0.5;
+    return Math.max(0, state.fullHeight - half);
+  }
+
+  function applyDragTransform(translateY) {
+    if (!card) return;
+    card.style.transform = `translate3d(0, ${translateY}px, 0)`;
+  }
+
+  function scheduleDragPaint() {
+    const view = doc.defaultView;
+    if (!view || dragRaf || !drag || drag.pendingTranslateY == null) return;
+    dragRaf = view.requestAnimationFrame(() => {
+      dragRaf = 0;
+      if (!drag || drag.pendingTranslateY == null) return;
+      drag.translateY = clampTranslateY(drag, drag.pendingTranslateY);
+      applyDragTransform(drag.translateY);
+      drag.pendingTranslateY = null;
+    });
+  }
+
+  function beginDragVisual(state) {
+    if (!card) return;
+    sheet.classList.add('is-dragging');
+    card.style.height = `${state.fullHeight}px`;
+    card.style.removeProperty('--comment-sheet-drag');
+    applyDragTransform(state.translateY);
+  }
+
+  function snapTarget(dy, vel, fromSize) {
     if (vel > FLICK_VEL) {
-      if (size === 'half') hideSheet();
-      else setSize('half');
-      return;
+      if (fromSize === 'half') return 'close';
+      return 'half';
     }
-    if (vel < -FLICK_VEL) {
-      setSize('full');
-      return;
-    }
+    if (vel < -FLICK_VEL) return 'full';
     if (dy > 90) {
-      if (size === 'half') hideSheet();
-      else setSize('half');
+      if (fromSize === 'half') return 'close';
+      return 'half';
+    }
+    if (dy < -60) return 'full';
+    return fromSize;
+  }
+
+  function finishDragMotion(active, targetY, done) {
+    if (!card) {
+      done?.();
       return;
     }
-    if (dy < -60) setSize('full');
-    else setSize(size);
+    const startY = active.translateY;
+    if (prefersReducedMotion() || Math.abs(targetY - startY) < 0.5) {
+      applyDragTransform(targetY);
+      clearDragVisual();
+      done?.();
+      return;
+    }
+    card.classList.add('is-snap-animating');
+    applyDragTransform(startY);
+    void card.offsetHeight;
+    applyDragTransform(targetY);
+    let settled = false;
+    const onEnd = (event) => {
+      if (settled) return;
+      if (event.target !== card || event.propertyName !== 'transform') return;
+      settled = true;
+      card.removeEventListener('transitionend', onEnd);
+      card.classList.remove('is-snap-animating');
+      clearDragVisual();
+      done?.();
+    };
+    card.addEventListener('transitionend', onEnd);
+    doc.defaultView?.setTimeout?.(() => {
+      if (settled || !card.classList.contains('is-snap-animating')) return;
+      onEnd({ target: card, propertyName: 'transform' });
+    }, SNAP_MS + 60);
+  }
+
+  function settleDrag(active, dy, vel) {
+    const target = snapTarget(dy, vel, active.size);
+    if (target === 'close') {
+      const dismissY = Math.max(0, active.fullHeight - active.limits.min) + 96;
+      finishDragMotion(active, dismissY, () => hideSheet());
+      return;
+    }
+    const targetY = restingTranslateY(active, target);
+    finishDragMotion(active, targetY, () => setSize(target));
   }
 
   function onDragDown(event, surface) {
     if (event.button && event.button !== 0) return;
+    if (drag) return;
+    const appHeight = sheetHeight();
+    const limits = sheetHeightLimits(doc, appHeight);
+    const rect = card?.getBoundingClientRect?.();
+    const fullHeight = limits.max;
+    const restingTopFull = appHeight - fullHeight;
+    const translateY = rect ? rect.top - restingTopFull : restingTranslateY({ appHeight, fullHeight, limits }, size);
+    const clampedY = clampTranslateY({ fullHeight, limits }, translateY);
     drag = {
       id: event.pointerId,
       surface,
@@ -836,9 +955,21 @@ export function mountComments(doc, hooks = {}) {
       at: Date.now(),
       size,
       moved: false,
-      samples: [{ y: event.clientY, t: Date.now() }],
+      appHeight,
+      limits,
+      fullHeight,
+      restingTopFull,
+      startTranslateY: clampedY,
+      translateY: clampedY,
+      pendingTranslateY: null,
+      samples: [{ y: event.clientY, t: event.timeStamp }],
     };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    beginDragVisual(drag);
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Headless WebKit rejects capture on some synthetic pointer events.
+    }
     if (event.cancelable) event.preventDefault();
   }
 
@@ -846,14 +977,10 @@ export function mountComments(doc, hooks = {}) {
     if (!drag || drag.id !== event.pointerId) return;
     const dy = event.clientY - drag.y;
     if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > SLOP_PX) drag.moved = true;
-    drag.samples.push({ y: event.clientY, t: Date.now() });
-    if (drag.samples.length > 6) drag.samples.shift();
-    if (card) {
-      const height = sheetHeight();
-      const { min, max } = sheetHeightLimits(doc, height);
-      const base = drag.size === 'full' ? max : height * 0.5;
-      card.style.setProperty('--comment-sheet-drag', `${clamp(base - dy, min, max)}px`);
-    }
+    drag.samples.push({ y: event.clientY, t: event.timeStamp });
+    if (drag.samples.length > 12) drag.samples.shift();
+    drag.pendingTranslateY = drag.startTranslateY + dy;
+    scheduleDragPaint();
     if (event.cancelable) event.preventDefault();
   }
 
@@ -861,46 +988,38 @@ export function mountComments(doc, hooks = {}) {
     if (!drag || drag.id !== event.pointerId) return;
     const active = drag;
     drag = null;
+    if (dragRaf) {
+      doc.defaultView?.cancelAnimationFrame?.(dragRaf);
+      dragRaf = 0;
+    }
+    if (active.pendingTranslateY != null) {
+      active.translateY = clampTranslateY(active, active.pendingTranslateY);
+      applyDragTransform(active.translateY);
+      active.pendingTranslateY = null;
+    }
     const dy = event.clientY - active.y;
     const gesture = {
       ...active,
       endX: event.clientX,
       endY: event.clientY,
     };
-    let vel = 0;
-    if (active.samples.length >= 2) {
-      const a = active.samples[active.samples.length - 2];
-      const b = active.samples[active.samples.length - 1];
-      vel = (b.y - a.y) / Math.max(1, b.t - a.t);
-    }
+    const vel = velocityFromSamples(active.samples);
     if (!active.moved && active.surface === 'handle' && isTap(gesture)) {
+      clearDragVisual();
       setSize(size === 'full' ? 'half' : 'full');
       return;
     }
     if (!active.moved) {
+      clearDragVisual();
       setSize(size);
       return;
     }
-    snapHeight(dy, vel);
+    settleDrag(active, dy, vel);
   }
 
   function bindDragSurface(node, surface) {
     if (!node) return;
-    const down = (event) => onDragDown(event, surface);
-    node.addEventListener('pointerdown', down);
-    node.addEventListener('touchstart', (event) => {
-      if (event.touches.length !== 1) return;
-      const point = event.touches[0];
-      onDragDown({
-        button: 0,
-        pointerId: 1,
-        clientX: point.clientX,
-        clientY: point.clientY,
-        currentTarget: node,
-        preventDefault() { event.preventDefault(); },
-        setPointerCapture() {},
-      }, surface);
-    }, { passive: false });
+    node.addEventListener('pointerdown', (event) => onDragDown(event, surface));
   }
 
   function headWantsDrag(event) {
@@ -915,43 +1034,18 @@ export function mountComments(doc, hooks = {}) {
     if (!headWantsDrag(event)) return;
     onDragDown(event, 'head');
   });
-  head?.addEventListener('touchstart', (event) => {
-    if (!headWantsDrag(event) || event.touches.length !== 1) return;
-    const point = event.touches[0];
-    onDragDown({
-      button: 0,
-      pointerId: 1,
-      clientX: point.clientX,
-      clientY: point.clientY,
-      currentTarget: head,
-      preventDefault() { event.preventDefault(); },
-      setPointerCapture() {},
-    }, 'head');
-  }, { passive: false });
   sheet.addEventListener('pointermove', onDragMove);
   sheet.addEventListener('pointerup', onDragUp);
-  sheet.addEventListener('touchmove', (event) => {
-    if (!drag || event.touches.length !== 1) return;
-    const point = event.touches[0];
-    onDragMove({
-      pointerId: drag.id,
-      clientX: point.clientX,
-      clientY: point.clientY,
-      preventDefault() { event.preventDefault(); },
-    });
-  }, { passive: false });
-  sheet.addEventListener('touchend', (event) => {
-    if (!drag) return;
-    const point = event.changedTouches[0];
-    if (!point) return;
-    onDragUp({
-      pointerId: drag.id,
-      clientX: point.clientX,
-      clientY: point.clientY,
-    });
+  sheet.addEventListener('pointercancel', (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    const active = drag;
+    drag = null;
+    if (dragRaf) {
+      doc.defaultView?.cancelAnimationFrame?.(dragRaf);
+      dragRaf = 0;
+    }
+    finishDragMotion(active, restingTranslateY(active, active.size), () => setSize(active.size));
   });
-  sheet.addEventListener('pointercancel', () => { drag = null; setSize(size); });
-  sheet.addEventListener('touchcancel', () => { drag = null; setSize(size); });
 
   return {
     paintChip,

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v47';
+export const BUILD = 'core-sample-shell-v48';
 
 const TYPES = {
   '.html': 'text/html',
@@ -178,7 +178,8 @@ export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 
   await page.evaluate(async ({ from, to, steps, frameMs, holdMs, selector, scrollDelta }) => {
     const target = document.querySelector(selector) || document.body;
     const scroller = document.querySelector('.cm-scroller');
-    const touch = (x, y) => document.createTouch(window, target, 7, x, y, x, y);
+    const pointerId = 7;
+    const touch = (x, y) => document.createTouch(window, target, pointerId, x, y, x, y);
     const fire = (type, x, y, ended = false) => {
       const point = touch(x, y);
       const active = ended ? document.createTouchList() : document.createTouchList(point);
@@ -190,8 +191,22 @@ export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 
         cancelable: true,
       }));
     };
+    const firePointer = (type, x, y) => {
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons: type === 'pointerup' ? 0 : 1,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     fire('touchstart', from.x, from.y);
+    firePointer('pointerdown', from.x, from.y);
     if (holdMs) await wait(holdMs);
     for (let i = 1; i <= steps; i += 1) {
       await wait(frameMs);
@@ -199,7 +214,9 @@ export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 
       const y = from.y + ((to.y - from.y) * i) / steps;
       if (scrollDelta && scroller) scroller.scrollTop += scrollDelta / steps;
       fire('touchmove', x, y);
+      firePointer('pointermove', x, y);
     }
     fire('touchend', to.x, to.y, true);
+    firePointer('pointerup', to.x, to.y);
   }, { from, to, steps, frameMs, holdMs, selector, scrollDelta });
 }
