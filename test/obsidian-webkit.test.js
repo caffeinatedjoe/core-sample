@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { isIgnoredPath } from '../app/js/vault-paths.js';
 import { createFakeGit } from './helpers/fake-git.js';
+import { APP_BUILD } from '../app/js/version.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const appDir = join(here, '..', 'app');
@@ -92,7 +93,7 @@ async function routeGithub(context, git, gate = {}) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v49');
+  await page.waitForFunction((build) => document.getElementById('build-version')?.textContent === build, APP_BUILD);
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');
     request.onerror = () => resolve(false);

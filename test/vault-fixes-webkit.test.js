@@ -5,6 +5,7 @@ import { extname, join, normalize } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { encodeUtf8Base64 } from '../app/js/github-api.js';
+import { APP_BUILD } from '../app/js/version.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const appDir = join(here, '..', 'app');
@@ -199,7 +200,7 @@ async function mockGithub(context, state) {
 }
 
 async function waitForStart(page) {
-  await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v49');
+  await page.waitForFunction((build) => document.getElementById('build-version')?.textContent === build, APP_BUILD);
   // start() records lastOpened and recent asynchronously; seeding before then gets overwritten.
   await page.waitForFunction(() => new Promise((resolve) => {
     const request = indexedDB.open('core-sample');

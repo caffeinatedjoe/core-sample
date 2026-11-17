@@ -5,6 +5,7 @@ import { deflateSync } from 'node:zlib';
 import { extname, join, normalize } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { APP_BUILD } from '../app/js/version.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const appDir = join(here, '..', 'app');
@@ -170,11 +171,11 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
     await page.waitForFunction(() => navigator.serviceWorker?.controller, null, { timeout: 30000 });
     // Activate navigates once, sometimes with ?shell=<build>. Wait that out
     // so the next goto is not interrupted mid-flight.
-    await page.waitForFunction(() => {
+    await page.waitForFunction((build) => {
       const url = new URL(window.location.href);
       return !url.searchParams.has('shell')
-        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v49';
-    }, null, { timeout: 30000 }).catch(() => {});
+        && document.getElementById('build-version')?.textContent === build;
+    }, APP_BUILD, { timeout: 30000 }).catch(() => {});
     try {
       await page.goto(origin, { waitUntil: 'domcontentloaded' });
     } catch (error) {
@@ -184,12 +185,12 @@ test('webkit shows a stored image twice, then offline, without dropping the reco
         await page.goto(origin, { waitUntil: 'domcontentloaded' });
       }
     }
-    await page.waitForFunction(() => {
+    await page.waitForFunction((build) => {
       const status = document.getElementById('save-status')?.textContent || '';
       return Boolean(navigator.serviceWorker?.controller)
         && status.includes('Saved')
-        && document.getElementById('build-version')?.textContent === 'core-sample-shell-v49';
-    });
+        && document.getElementById('build-version')?.textContent === build;
+    }, APP_BUILD);
     await page.evaluate(async ({ note, image, link, now }) => {
       const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open('core-sample');

@@ -548,14 +548,17 @@ html.is-keyboard .format-bar {
 .comment-sheet-chrome {
   flex: none;
   position: relative;
-  min-height: 48px;
+  height: 44px;
   touch-action: none;
   cursor: grab;
 }
 
 .comment-sheet-handle {
-  width: 100%;
-  height: 24px;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
   background: transparent;
   touch-action: none;
@@ -567,14 +570,15 @@ html.is-keyboard .format-bar {
   display: block;
   width: 36px;
   height: 5px;
-  margin: 10px auto 0;
+  margin: 0;
   border-radius: 999px;
   background: var(--chip);
 }
 
 .comment-sheet-head {
-  position: relative;
-  min-height: 44px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .comment-thread-quote {
@@ -606,6 +610,7 @@ html.is-keyboard .format-bar {
   background: transparent;
   color: var(--accent);
   font-size: 22px;
+  pointer-events: auto;
 }
 
 #comment-sheet-prev {

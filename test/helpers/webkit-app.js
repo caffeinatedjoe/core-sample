@@ -4,7 +4,6 @@ import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
 import { APP_BUILD } from '../../app/js/version.js';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
