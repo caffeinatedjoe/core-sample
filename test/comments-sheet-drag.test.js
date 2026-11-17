@@ -197,3 +197,97 @@ test('webkit flick up goes full, flick down closes, near-bottom closes, mid-heig
     assert.deepEqual(errors, []);
   });
 });
+
+test('webkit composer stays pinned to the sheet bottom while dragging', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await blurEditor(page);
+    await openThreadSheet(page);
+    assert.equal(await page.locator('#comment-sheet').getAttribute('data-size'), 'half');
+
+    const handle = await handleCenter(page);
+    const appHeight = await page.evaluate(() => document.getElementById('app').getBoundingClientRect().height);
+    const dragSamples = await page.evaluate(async ({ from, appHeight: appH, selector }) => {
+      const target = document.querySelector(selector);
+      const composer = document.getElementById('comment-sheet-composer');
+      const textarea = document.getElementById('comment-reply');
+      const pointerId = 31;
+      const fire = (type, x, y, buttons = 1) => target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+      const measure = () => {
+        const card = document.querySelector('.comment-sheet-card');
+        const cardBox = card?.getBoundingClientRect();
+        const app = document.getElementById('app')?.getBoundingClientRect();
+        const padBottom = card ? parseFloat(getComputedStyle(card).paddingBottom) || 0 : 0;
+        const sheetBottom = (cardBox && app
+          ? Math.min(cardBox.bottom, app.bottom) - padBottom
+          : (cardBox?.bottom ?? -1) - padBottom);
+        const composerBox = composer?.getBoundingClientRect();
+        const textareaBox = textarea?.getBoundingClientRect();
+        const viewH = app?.bottom ?? window.innerHeight;
+        return {
+          sheetBottom,
+          composerBottom: composerBox?.bottom ?? -1,
+          composerOnScreen: composerBox ? composerBox.bottom <= viewH + 2 && composerBox.bottom >= (app?.top ?? 0) - 2 : false,
+          textareaVisible: textareaBox ? textareaBox.height > 0 && textareaBox.bottom <= viewH + 2 : false,
+        };
+      };
+      const samples = [];
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const upY = from.y - Math.round(appH * 0.18);
+      const downY = from.y + Math.round(appH * 0.22);
+      const snapUpY = from.y - Math.round(appH * 0.28);
+      fire('pointerdown', from.x, from.y);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      samples.push(measure());
+      for (let i = 1; i <= 6; i += 1) {
+        const y = from.y + ((upY - from.y) * i) / 6;
+        fire('pointermove', from.x, y);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        samples.push(measure());
+      }
+      for (let i = 1; i <= 8; i += 1) {
+        const y = upY + ((downY - upY) * i) / 8;
+        fire('pointermove', from.x, y);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        samples.push(measure());
+      }
+      for (let i = 1; i <= 4; i += 1) {
+        const y = downY + ((snapUpY - downY) * i) / 4;
+        fire('pointermove', from.x, y);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        samples.push(measure());
+      }
+      fire('pointerup', from.x, snapUpY, 0);
+      await wait(320);
+      const settled = {
+        transform: composer?.style.transform || '',
+        dragging: document.getElementById('comment-sheet')?.classList.contains('is-dragging') ?? false,
+        size: document.getElementById('comment-sheet')?.dataset.size,
+      };
+      return { samples, settled };
+    }, { from: handle, appHeight, selector: '.comment-sheet-handle' });
+
+    for (const sample of dragSamples.samples) {
+      assert.ok(Math.abs(sample.composerBottom - sample.sheetBottom) <= 2,
+        `composer bottom ${sample.composerBottom} should track sheet bottom ${sample.sheetBottom}`);
+      assert.ok(sample.composerOnScreen, 'composer should stay on screen during drag');
+      assert.ok(sample.textareaVisible, 'reply textarea should stay visible during drag');
+    }
+
+    assert.equal(dragSamples.settled.dragging, false);
+    assert.equal(dragSamples.settled.transform, '');
+    assert.equal(dragSamples.settled.size, 'full');
+
+    assert.deepEqual(errors, []);
+  });
+});

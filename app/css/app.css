@@ -531,8 +531,16 @@ html.is-keyboard .format-bar {
   transition: transform 220ms cubic-bezier(0, 0, 0.2, 1);
 }
 
+.comment-sheet-card.is-snap-animating .comment-sheet-composer {
+  transition: transform 220ms cubic-bezier(0, 0, 0.2, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .comment-sheet-card.is-snap-animating {
+    transition: none;
+  }
+
+  .comment-sheet-card.is-snap-animating .comment-sheet-composer {
     transition: none;
   }
 }
@@ -845,6 +853,12 @@ html.is-keyboard .format-bar {
 .comment-bubble-row.is-own .comment-bubble.is-unread::after {
   right: auto;
   left: -10px;
+}
+
+.comment-sheet.is-dragging .comment-sheet-composer {
+  position: relative;
+  z-index: 2;
+  background: var(--surface);
 }
 
 .comment-sheet-composer {
