@@ -156,6 +156,10 @@ Implemented as core-sample-shell-v48. The comment sheet tracks the finger with t
 
 Implemented as core-sample-shell-v49. The thread header keeps only previous/next arrows (hidden at the ends or when there is one comment). Close, resolve, more, back, the quote button, and per-entry ⋯ are gone. Quoted text sits in the thread; swipe down closes; press-and-hold on a bubble opens an iOS-style action sheet (react, edit, delete reply, resolve/reopen, re-anchor, delete). Drag has no minimum clamp, rests at the released height, snaps full when thrown up or near the top, and closes when thrown down or pulled past 25%. Focusing the composer snaps to full and stays above the keyboard.
 
+## v50 — Single-row comment sheet chrome
+
+Implemented as core-sample-shell-v50. The grabber pill and prev/next arrows share one 44pt chrome row. The head overlays that row so hidden arrows no longer reserve a second row of height. Thread content starts immediately below the chrome in both single- and multi-comment threads, without a layout shift when the arrows toggle.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

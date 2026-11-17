@@ -9,6 +9,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { APP_BUILD } from '../app/js/version.js';
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -310,10 +311,10 @@ test('webkit keeps a tab-indented task image after the viewer opens, closes, and
   page.on('pageerror', (error) => errors.push(String(error)));
   try {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => {
+    await page.waitForFunction((build) => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v49';
-    });
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === build;
+    }, APP_BUILD);
     await showNote(page);
     await page.waitForFunction(() => {
       const img = document.querySelector('#source img.embed-image');
@@ -448,10 +449,10 @@ test('webkit fetches a bare filename from the attachment folder when the file li
   page.on('pageerror', (error) => errors.push(String(error)));
   try {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => {
+    await page.waitForFunction((build) => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v49';
-    });
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === build;
+    }, APP_BUILD);
     await writeNote(page, NOTE);
     await page.waitForFunction(() => document.getElementById('save-status')?.textContent === 'Saved on this device');
     await page.evaluate(async () => {
@@ -615,13 +616,13 @@ test('webkit keeps the task image through a cold v15 to v16 to v20 update', { ti
     assert.equal(on16.tasks, 3);
     if (on15.natural > 0) assert.ok(on16.natural > 0, 'v16 dropped a painted image');
 
-    await advance(appDir, 'core-sample-shell-v49');
+    await advance(appDir, APP_BUILD);
     await page.waitForFunction(() => {
       const img = document.querySelector('#source img.embed-image');
       return Boolean(img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 20);
     }, null, { timeout: 20000 });
     const on17 = await previewState(page);
-    assert.equal(on17.build, 'core-sample-shell-v49');
+    assert.equal(on17.build, APP_BUILD);
     assertPainted(on17, 'v18');
 
     const cached = await page.evaluate(async () => {
@@ -649,7 +650,7 @@ test('webkit keeps the task image through a cold v15 to v16 to v20 update', { ti
     if (cached.some((row) => row.blob && row.size > 0)) {
       await page.evaluate(() => localStorage.setItem('core-sample-offline', '1'));
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await ready('core-sample-shell-v49');
+      await ready(APP_BUILD);
       await page.waitForFunction(() => {
         const img = document.querySelector('#source img.embed-image');
         return Boolean(img && img.complete && img.naturalWidth > 0);
