@@ -269,17 +269,14 @@
     <button type="button" id="comment-pill" class="comment-pill" hidden></button>
     <div id="comment-sheet" class="comment-sheet" hidden>
       <button type="button" id="comment-sheet-scrim" class="comment-sheet-scrim" aria-label="Close comments"></button>
-      <div class="comment-sheet-card" role="dialog" aria-modal="true" aria-labelledby="comment-sheet-quote">
-        <div class="comment-sheet-handle" aria-hidden="true"></div>
-        <header class="comment-sheet-head">
-          <button type="button" id="comment-sheet-back" class="sheet-done" hidden>Back</button>
-          <button type="button" id="comment-sheet-quote" class="comment-sheet-quote"></button>
-          <button type="button" id="comment-sheet-resolve" class="comment-icon-btn" aria-label="Resolve">✓</button>
-          <button type="button" id="comment-sheet-more" class="comment-icon-btn" aria-label="Comment options">⋯</button>
-          <button type="button" id="comment-sheet-prev" class="comment-icon-btn" aria-label="Previous comment">‹</button>
-          <button type="button" id="comment-sheet-next" class="comment-icon-btn" aria-label="Next comment">›</button>
-          <button type="button" id="comment-sheet-close" class="sheet-done">Close</button>
-        </header>
+      <div class="comment-sheet-card" role="dialog" aria-modal="true" aria-label="Comments">
+        <div class="comment-sheet-chrome">
+          <div class="comment-sheet-handle" aria-hidden="true"></div>
+          <header class="comment-sheet-head">
+            <button type="button" id="comment-sheet-prev" class="comment-icon-btn" aria-label="Previous comment" hidden>‹</button>
+            <button type="button" id="comment-sheet-next" class="comment-icon-btn" aria-label="Next comment" hidden>›</button>
+          </header>
+        </div>
         <div id="comment-sheet-tabs" class="comment-sheet-tabs" hidden>
           <button type="button" data-tab="open" aria-selected="true">Open</button>
           <button type="button" data-tab="resolved">Resolved</button>
@@ -288,23 +285,21 @@
         <div id="comment-sheet-list" class="comment-sheet-list" hidden></div>
         <div id="comment-sheet-thread" class="comment-sheet-thread"></div>
         <div id="comment-sheet-composer" class="comment-sheet-composer">
-          <textarea id="comment-reply" rows="2" enterkeyhint="enter" aria-label="Reply"></textarea>
+          <textarea id="comment-reply" rows="1" enterkeyhint="enter" aria-label="Reply"></textarea>
           <button type="button" id="comment-composer-cancel" class="comment-composer-cancel" hidden>Cancel</button>
           <button type="button" id="comment-send">Send</button>
         </div>
-        <div id="comment-sheet-menu" class="comment-sheet-menu" hidden>
-          <button type="button" data-comment-action="delete">Delete comment</button>
+      </div>
+      <div id="comment-action-sheet" class="comment-action-sheet" hidden>
+        <button type="button" id="comment-action-scrim" class="comment-action-scrim" aria-label="Cancel"></button>
+        <div class="comment-action-card" role="dialog" aria-modal="true" aria-label="Comment actions">
+          <div class="comment-action-group">
+            <div id="comment-action-reactions" class="comment-action-reactions" role="group" aria-label="React"></div>
+            <div id="comment-action-rows" class="comment-action-rows"></div>
+          </div>
+          <button type="button" id="comment-action-cancel" class="comment-action-cancel">Cancel</button>
         </div>
       </div>
-    </div>
-    <div id="comment-reaction-picker" class="comment-reaction-picker" hidden role="menu" aria-label="React">
-      <button type="button" data-emoji="👍" aria-label="Thumbs up">👍</button>
-      <button type="button" data-emoji="❤️" aria-label="Heart">❤️</button>
-      <button type="button" data-emoji="😄" aria-label="Smile">😄</button>
-      <button type="button" data-emoji="🎉" aria-label="Celebrate">🎉</button>
-      <button type="button" data-emoji="😮" aria-label="Surprised">😮</button>
-      <button type="button" data-emoji="👀" aria-label="Eyes">👀</button>
-      <button type="button" data-emoji="🙏" aria-label="Thanks">🙏</button>
     </div>
     <div id="comment-reanchor-bar" class="comment-reanchor-bar" hidden>
       <p>Select text in the note, then tap Attach here</p>

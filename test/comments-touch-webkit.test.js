@@ -109,26 +109,17 @@ test('webkit comment sheet handle drag resizes and dismisses', { timeout: 120000
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
     assert.equal(await page.locator('#comment-sheet').getAttribute('data-size'), 'full');
 
-    const handleFull = await handleCenter(page);
-    await swipe(page, handleFull, { x: handleFull.x, y: handleFull.y + 200 }, {
-      selector: '.comment-sheet-handle',
-      steps: 12,
-      frameMs: 16,
-    });
+    const tapHandle = await handleCenter(page);
+    await swipe(page, tapHandle, tapHandle, { selector: '.comment-sheet-handle', steps: 1, frameMs: 5 });
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'half');
 
-    await swipe(page, handleFull, { x: handleFull.x, y: handleFull.y + 240 }, {
+    const handleHalf = await handleCenter(page);
+    await swipe(page, handleHalf, { x: handleHalf.x, y: handleHalf.y + 280 }, {
       selector: '.comment-sheet-handle',
       steps: 14,
       frameMs: 16,
     });
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
-
-    await blurEditor(page);
-    await tapHighlight(page);
-    const tapHandle = await handleCenter(page);
-    await swipe(page, tapHandle, tapHandle, { selector: '.comment-sheet-handle', steps: 1, frameMs: 5 });
-    await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
 
     assert.deepEqual(errors, []);
   });
@@ -172,6 +163,74 @@ test('webkit chat bubbles align by author and unread clears after opening', { ti
     assert.ok(layout.otherLeft < layout.mid, 'other bubbles sit on the left');
     await page.waitForFunction(() => !document.querySelector('.comment-bubble.is-unread'));
     assert.equal((await readNote(page, path)).content, before.content);
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit long-press opens the action sheet, drag and scroll do not', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note('Bubbles.md', BUBBLE_NOTE)], 'Bubbles.md', { commentName: 'me' });
+    await blurEditor(page);
+    await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
+    await page.waitForSelector('.comment-bubble');
+
+    const bubble = await page.evaluate(() => {
+      const box = document.querySelector('.comment-bubble').getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    });
+    await page.evaluate(async ({ from }) => {
+      const target = document.querySelector('.comment-bubble');
+      const fire = (type, x, y, buttons) => target.dispatchEvent(new PointerEvent(type, {
+        pointerId: 41,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+      fire('pointerdown', from.x, from.y, 1);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      fire('pointerup', from.x, from.y, 0);
+    }, { from: bubble });
+    await page.waitForFunction(() => !document.getElementById('comment-action-sheet')?.hidden);
+    await page.locator('#comment-action-cancel').click();
+    await page.waitForFunction(() => document.getElementById('comment-action-sheet')?.hidden);
+
+    await swipe(page, bubble, { x: bubble.x, y: bubble.y + 36 }, {
+      selector: '.comment-bubble',
+      steps: 6,
+      frameMs: 16,
+    });
+    assert.equal(await page.locator('#comment-action-sheet').isHidden(), true);
+
+    await page.evaluate(async () => {
+      const target = document.querySelector('.comment-bubble');
+      const thread = document.getElementById('comment-sheet-thread');
+      const box = target.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      const fire = (type, buttons) => target.dispatchEvent(new PointerEvent(type, {
+        pointerId: 42,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+      fire('pointerdown', 1);
+      thread.scrollTop += 40;
+      thread.dispatchEvent(new Event('scroll'));
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      fire('pointerup', 0);
+    });
+    assert.equal(await page.locator('#comment-action-sheet').isHidden(), true);
+
     assert.deepEqual(errors, []);
   });
 });

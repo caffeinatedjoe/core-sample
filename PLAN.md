@@ -152,6 +152,10 @@ Implemented as core-sample-shell-v47. A full-height comment list or thread sheet
 
 Implemented as core-sample-shell-v48. The comment sheet tracks the finger with transform-only motion during a drag (one height measure at pointer down, requestAnimationFrame coalescing, no duplicate touch handlers). Release eases to half, full, or dismiss; the v46 safe-area top cap is unchanged.
 
+## v49 — Comment sheet chrome, free-height drag, and long-press actions
+
+Implemented as core-sample-shell-v49. The thread header keeps only previous/next arrows (hidden at the ends or when there is one comment). Close, resolve, more, back, the quote button, and per-entry ⋯ are gone. Quoted text sits in the thread; swipe down closes; press-and-hold on a bubble opens an iOS-style action sheet (react, edit, delete reply, resolve/reopen, re-anchor, delete). Drag has no minimum clamp, rests at the released height, snaps full when thrown up or near the top, and closes when thrown down or pulled past 25%. Focusing the composer snaps to full and stays above the keyboard.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.

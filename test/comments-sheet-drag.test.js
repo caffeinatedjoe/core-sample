@@ -23,6 +23,7 @@ async function blurEditor(page) {
 }
 
 async function openThreadSheet(page) {
+  await blurEditor(page);
   await page.locator('.cm-comment[data-comment-id="k3f9"]').click();
   await page.waitForFunction(() => !document.getElementById('comment-sheet')?.hidden);
 }
@@ -35,11 +36,40 @@ async function handleCenter(page) {
   });
 }
 
+async function pointerDrag(page, { from, to, steps, stepMs, selector = '.comment-sheet-handle' }) {
+  return page.evaluate(async ({ from, to, steps, stepMs, selector }) => {
+    const target = document.querySelector(selector);
+    const pointerId = 21;
+    const fire = (type, x, y, buttons = 1) => target.dispatchEvent(new PointerEvent(type, {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons,
+      bubbles: true,
+      cancelable: true,
+    }));
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    fire('pointerdown', from.x, from.y);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    for (let i = 1; i <= steps; i += 1) {
+      await wait(stepMs);
+      const x = from.x + ((to.x - from.x) * i) / steps;
+      const y = from.y + ((to.y - from.y) * i) / steps;
+      fire('pointermove', from.x === to.x && from.y === to.y ? x : from.x, y);
+    }
+    fire('pointerup', to.x, to.y, 0);
+  }, { from, to, steps, stepMs, selector });
+}
+
 test('onDragMove and scheduleDragPaint never read layout', () => {
   const src = readFileSync(join(root, 'app/js/comments-ui.js'), 'utf8');
   const start = src.indexOf('function onDragMove');
   const end = src.indexOf('function onDragUp');
   const block = src.slice(start, end);
+  assert.ok(start > 0 && end > start);
   assert.equal(block.includes('getComputedStyle'), false);
   assert.equal(block.includes('getBoundingClientRect'), false);
   assert.equal(block.includes('sheetHeightLimits'), false);
@@ -49,9 +79,11 @@ test('onDragMove and scheduleDragPaint never read layout', () => {
   const paint = src.slice(paintStart, paintEnd);
   assert.equal(paint.includes('getComputedStyle'), false);
   assert.equal(paint.includes('getBoundingClientRect'), false);
+  assert.equal(src.includes('addEventListener(\'touchstart\''), false);
+  assert.equal(src.includes('addEventListener("touchstart"'), false);
 });
 
-test('webkit drag from full moves the card progressively and half drag settles at full', { timeout: 120000 }, async (t) => {
+test('webkit drag from full moves the card progressively', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
     await blurEditor(page);
@@ -99,14 +131,68 @@ test('webkit drag from full moves the card progressively and half drag settles a
     assert.ok(tops[3] > baseTop + 8, 'card top moves down during drag from full');
     assert.ok(tops[2] > tops[0] && tops[3] >= tops[2], 'card top shifts smoothly');
 
-    await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'half');
-    handle = await handleCenter(page);
-    await swipe(page, handle, { x: handle.x, y: handle.y - 180 }, {
-      selector: '.comment-sheet-handle',
-      steps: 12,
-      frameMs: 16,
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit flick up goes full, flick down closes, near-bottom closes, mid-height rests', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await blurEditor(page);
+    await openThreadSheet(page);
+    assert.equal(await page.locator('#comment-sheet').getAttribute('data-size'), 'half');
+
+    let handle = await handleCenter(page);
+    await pointerDrag(page, {
+      from: handle,
+      to: { x: handle.x, y: handle.y - 180 },
+      steps: 2,
+      stepMs: 16,
     });
     await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'full');
+
+    handle = await handleCenter(page);
+    await pointerDrag(page, {
+      from: handle,
+      to: { x: handle.x, y: handle.y + 180 },
+      steps: 2,
+      stepMs: 16,
+    });
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+
+    await openThreadSheet(page);
+    const appHeight = await page.evaluate(() => document.getElementById('app').getBoundingClientRect().height);
+    handle = await handleCenter(page);
+    await pointerDrag(page, {
+      from: handle,
+      to: { x: handle.x, y: handle.y + Math.round(appHeight * 0.4) },
+      steps: 18,
+      stepMs: 40,
+    });
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.hidden);
+
+    await openThreadSheet(page);
+    handle = await handleCenter(page);
+    const before = await page.evaluate(() => {
+      const card = document.querySelector('.comment-sheet-card').getBoundingClientRect();
+      const app = document.getElementById('app').getBoundingClientRect();
+      return { height: card.height, app: app.height };
+    });
+    const midDy = Math.round(before.app * 0.12);
+    await pointerDrag(page, {
+      from: handle,
+      to: { x: handle.x, y: handle.y + midDy },
+      steps: 16,
+      stepMs: 45,
+    });
+    await page.waitForFunction(() => document.getElementById('comment-sheet')?.dataset.size === 'custom');
+    const after = await page.evaluate(() => {
+      const card = document.querySelector('.comment-sheet-card').getBoundingClientRect();
+      return { height: card.height, hidden: document.getElementById('comment-sheet').hidden };
+    });
+    assert.equal(after.hidden, false);
+    assert.ok(after.height < before.height - 20, `rest height ${after.height} should be below open height ${before.height}`);
+    assert.ok(after.height > before.app * 0.25, `rest height ${after.height} should stay open`);
 
     assert.deepEqual(errors, []);
   });
