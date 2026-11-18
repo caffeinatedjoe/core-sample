@@ -18,6 +18,7 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
   const blobs = new Map();
   const trees = new Map();
   const commits = new Map();
+  const missingBlobs = new Set();
   const log = [];
   const hooks = { beforePatch: null };
   let counter = 0;
@@ -57,6 +58,7 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
     blobs,
     trees,
     commits,
+    missingBlobs,
     log,
     hooks,
     patches: 0,
@@ -79,6 +81,23 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
   function blobShaAt(path, sha = state.head) {
     const entry = entriesAt(sha).get(path);
     return entry ? entry.sha : '';
+  }
+
+  function bytesAt(path, sha = state.head) {
+    const blobSha = blobShaAt(path, sha);
+    if (!blobSha || missingBlobs.has(blobSha)) return null;
+    const bytes = blobs.get(blobSha);
+    return bytes ? Buffer.from(bytes) : null;
+  }
+
+  function textAt(path, sha = state.head) {
+    const bytes = bytesAt(path, sha);
+    return bytes ? bytes.toString('utf8') : '';
+  }
+
+  function hideBlob(sha) {
+    if (sha) missingBlobs.add(sha);
+    return sha;
   }
 
   // A commit on `parent` that applies `changes` (path to text, or null to delete).
@@ -155,6 +174,29 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
     return { status, body: status === 304 ? null : JSON.stringify(body), headers: { 'content-type': 'application/json', ...headers } };
   }
 
+  function replyRaw(status, bytes, headers = {}) {
+    return {
+      status,
+      body: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []),
+      headers: { 'content-type': 'application/octet-stream', ...headers },
+    };
+  }
+
+  function resolveTreeSha(name) {
+    if (trees.has(name)) return name;
+    if (name === branch) {
+      const commit = commits.get(state.head);
+      return commit ? commit.tree : '';
+    }
+    const commit = commits.get(name);
+    return commit ? commit.tree : '';
+  }
+
+  function acceptRaw(headers) {
+    const accept = String(headers.Accept || headers.accept || '');
+    return accept.includes('application/vnd.github.raw');
+  }
+
   async function handle({ method = 'GET', url, headers = {}, body = null }) {
     const text = String(url);
     if (token && text.includes(token)) throw new Error('token leaked into the url');
@@ -166,6 +208,16 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
     if (token && auth !== `Bearer ${token}`) return reply(401, { message: 'Bad credentials' });
     const base = `/repos/${repo}`;
     if (path === '/user' && method === 'GET') return reply(200, { login: 'octocat' });
+    if (path === base && method === 'GET') {
+      const [owner, name] = repo.split('/');
+      return reply(200, {
+        name,
+        full_name: repo,
+        private: true,
+        default_branch: branch,
+        owner: { login: owner },
+      });
+    }
     if (path === `${base}/git/ref/heads/${branch}` && method === 'GET') {
       const etag = `"${state.head}"`;
       const match = headers['If-None-Match'] || headers['if-none-match'];
@@ -187,7 +239,7 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
     }
     match = path.match(new RegExp(`^${base}/git/trees/([^/]+)$`));
     if (match && method === 'GET') {
-      const tree = trees.get(match[1]);
+      const tree = trees.get(resolveTreeSha(match[1]));
       if (!tree) return reply(404, { message: 'Not Found' });
       const listed = [];
       const dirs = new Set();
@@ -202,9 +254,51 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
     }
     match = path.match(new RegExp(`^${base}/git/blobs/([^/]+)$`));
     if (match && method === 'GET') {
+      if (missingBlobs.has(match[1])) return reply(404, { message: 'Not Found' });
       const bytes = blobs.get(match[1]);
       if (!bytes) return reply(404, { message: 'Not Found' });
       return reply(200, { sha: match[1], encoding: 'base64', content: bytes.toString('base64'), size: bytes.length });
+    }
+    const contentsPrefix = `${base}/contents/`;
+    if (path.startsWith(contentsPrefix)) {
+      const filePath = path.slice(contentsPrefix.length);
+      const ref = parsed.searchParams.get('ref') || branch;
+      const at = commits.has(ref) ? ref : state.head;
+      if (method === 'GET') {
+        const entry = entriesAt(at).get(filePath);
+        if (!entry) return reply(404, { message: 'Not Found' });
+        if (missingBlobs.has(entry.sha)) return reply(404, { message: 'Not Found' });
+        const bytes = blobs.get(entry.sha);
+        if (!bytes) return reply(404, { message: 'Not Found' });
+        if (acceptRaw(headers)) return replyRaw(200, bytes);
+        return reply(200, {
+          name: filePath.split('/').pop(),
+          path: filePath,
+          sha: entry.sha,
+          size: bytes.length,
+          type: 'file',
+          encoding: 'base64',
+          content: bytes.toString('base64'),
+        });
+      }
+      if (method === 'PUT') {
+        const current = entriesAt(state.head).get(filePath);
+        if (json?.sha) {
+          if (!current || current.sha !== json.sha) return reply(409, { message: 'sha mismatch' });
+        } else if (current) {
+          return reply(422, { message: 'sha was expected' });
+        }
+        const bytes = json?.encoding === 'utf-8'
+          ? Buffer.from(String(json.content ?? ''), 'utf8')
+          : Buffer.from(String(json?.content ?? ''), 'base64');
+        const blobSha = putBlob(bytes);
+        const commitSha = commitOn(state.head, { [filePath]: bytes }, json?.message || 'Update');
+        state.head = commitSha;
+        return reply(200, {
+          content: { name: filePath.split('/').pop(), path: filePath, sha: blobSha, type: 'file' },
+          commit: { sha: commitSha },
+        });
+      }
     }
     if (path === `${base}/git/blobs` && method === 'POST') {
       const content = json.encoding === 'base64' ? Buffer.from(json.content, 'base64') : json.content;
@@ -255,6 +349,9 @@ export function createFakeGit({ token = '', repo = 'owner/repo', branch = 'main'
     putBlob,
     snapshot,
     blobShaAt,
+    bytesAt,
+    textAt,
+    hideBlob,
     entriesAt,
     commitOn,
     mergeCommit,

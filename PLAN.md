@@ -172,6 +172,10 @@ Implemented as core-sample-shell-v52. The grabber row is an absolute overlay so 
 
 Implemented as core-sample-shell-v53. The reply bar uses an 8pt grid with pill field (36px resting height), a circular send control with up-arrow icon and 44pt hit target, and keyboard padding that keeps 8px above the inset. Send disables when the draft is empty (except in edit mode).
 
+## Scripted vault pass
+
+Replaces the agent-driven live-vault tap-through. An anonymized fixture in `test/fixtures/vault/` is served by the local fake GitHub. Node checks cover sync (first download, edit/push, pull, conflict, Trash restore), sign-in (device flow, overlapping polls, 401 recheck, last-4 log, Sign in again), attachments (sidebar, embeds, paste/Image paths, folder rename with reused blob shas, missing blob skip), and Dataview TASK rollups. Playwright WebKit iPhone-13 standalone flows sign in, open the sidebar, edit with the format bar, add an image, create and rename an Untitled note from its title, add a comment and reply, and render a table and callout, each confirmed against the fake GitHub. It runs as a step of the CI `test` job after `npm test`, reusing the same WebKit install, with a pass/fail summary. It does not open Joe's private vault and does not use real GitHub OAuth.
+
 ## Priority when a stage gets crowded
 
 If a change adds a second place to store a note, or a second way to sync, cut it back. Data safety beats a smoother-looking screen.
