@@ -11,10 +11,10 @@
   <meta name="theme-color" content="#1b1815" media="(prefers-color-scheme: dark)">
   <title>Core Sample</title>
   <link rel="manifest" href="./manifest.json">
-  <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-v11-180.png">
-  <link rel="icon" href="./icons/favicon-v11.ico" sizes="any">
-  <link rel="icon" href="./icons/icon-v11-32.png" type="image/png" sizes="32x32">
-  <link rel="icon" href="./icons/icon-v11-16.png" type="image/png" sizes="16x16">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-v41-180.png">
+  <link rel="icon" href="./icons/favicon-v41.ico" sizes="any">
+  <link rel="icon" href="./icons/icon-v41-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="./icons/icon-v41-16.png" type="image/png" sizes="16x16">
   <link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
@@ -31,6 +31,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"></rect><path d="M9.5 4.5v15"></path></svg>
       </button>
       <h1 id="note-title" class="note-title"></h1>
+      <button type="button" id="comments-chip" class="comments-chip" hidden>💬 0</button>
       <button type="button" id="sync-status" class="sync-status" aria-live="polite" aria-disabled="true" hidden></button>
       <p id="save-status" class="save-status" role="status"></p>
     </header>
@@ -85,6 +86,7 @@
         <button type="button" data-format="highlight" aria-label="Highlight" class="format-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4-9.5 9.5H5.5v-4zM14 8l2 2"></path><path d="M5 19.5h14"></path></svg>
         </button>
+        <button type="button" data-format="comment" aria-label="Add comment" class="format-btn format-comment">💬</button>
         <button type="button" data-format="rule" aria-label="Horizontal rule" class="format-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M8 7h8M8 17h8"></path></svg>
         </button>
@@ -126,10 +128,6 @@
         <div id="search-options-panel" class="search-options" hidden>
           <label class="check-row"><input id="search-content" type="checkbox" checked> Search note text</label>
         </div>
-        <form id="new-note-form" class="new-note" hidden>
-          <input id="new-note-name" type="text" name="name" placeholder="New note name" maxlength="120" enterkeyhint="done" autocomplete="off" autocapitalize="sentences" aria-label="New note name">
-          <button type="submit">Create</button>
-        </form>
         <p id="new-note-error" class="form-error" role="alert"></p>
         <div id="action-panel" class="action-panel" hidden></div>
         <ul id="notes-list" class="notes-list"></ul>
@@ -254,12 +252,65 @@
             <p id="backup-status" class="github-note" role="status"></p>
             <input id="backup-file" type="file" accept="application/json,.json" hidden>
           </section>
+          <section class="settings-group" aria-labelledby="settings-comments-heading">
+            <h3 id="settings-comments-heading">Comments</h3>
+            <label>Comment name
+              <input id="comment-name" autocomplete="nickname" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="me">
+            </label>
+            <label class="check-row"><input id="show-resolved-comments" type="checkbox"> Show resolved</label>
+          </section>
           <section class="settings-group" aria-labelledby="settings-about-heading">
             <h3 id="settings-about-heading">About</h3>
             <button type="button" id="build-version" class="build-version" aria-label="Build, tap for layout details"></button>
           </section>
         </div>
       </div>
+    </div>
+    <button type="button" id="comment-pill" class="comment-pill" hidden></button>
+    <div id="comment-sheet" class="comment-sheet" hidden>
+      <button type="button" id="comment-sheet-scrim" class="comment-sheet-scrim" aria-label="Close comments"></button>
+      <div class="comment-sheet-card" role="dialog" aria-modal="true" aria-label="Comments">
+        <div class="comment-sheet-chrome">
+          <div class="comment-sheet-handle" aria-hidden="true"></div>
+          <header class="comment-sheet-head">
+            <button type="button" id="comment-sheet-prev" class="comment-icon-btn" aria-label="Previous comment" hidden>‹</button>
+            <button type="button" id="comment-sheet-next" class="comment-icon-btn" aria-label="Next comment" hidden>›</button>
+          </header>
+        </div>
+        <div id="comment-sheet-tabs" class="comment-sheet-tabs" hidden>
+          <button type="button" data-tab="open" aria-selected="true">Open</button>
+          <button type="button" data-tab="resolved">Resolved</button>
+          <button type="button" data-tab="all">All</button>
+        </div>
+        <div id="comment-sheet-list" class="comment-sheet-list" hidden></div>
+        <div id="comment-sheet-thread" class="comment-sheet-thread"></div>
+        <div id="comment-sheet-composer" class="comment-sheet-composer">
+          <textarea id="comment-reply" rows="1" enterkeyhint="enter" aria-label="Reply"></textarea>
+          <button type="button" id="comment-composer-cancel" class="comment-composer-cancel" hidden>Cancel</button>
+          <button type="button" id="comment-send" aria-label="Send" aria-disabled="true">
+            <span class="comment-send-glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" focusable="false">
+                <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 17V7M8.5 10.5 12 7l3.5 3.5"></path>
+              </svg>
+            </span>
+          </button>
+        </div>
+      </div>
+      <div id="comment-action-sheet" class="comment-action-sheet" hidden>
+        <button type="button" id="comment-action-scrim" class="comment-action-scrim" aria-label="Cancel"></button>
+        <div class="comment-action-card" role="dialog" aria-modal="true" aria-label="Comment actions">
+          <div class="comment-action-group">
+            <div id="comment-action-reactions" class="comment-action-reactions" role="group" aria-label="React"></div>
+            <div id="comment-action-rows" class="comment-action-rows"></div>
+          </div>
+          <button type="button" id="comment-action-cancel" class="comment-action-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="comment-reanchor-bar" class="comment-reanchor-bar" hidden>
+      <p>Select text in the note, then tap Attach here</p>
+      <button type="button" id="comment-reanchor-attach">Attach here</button>
+      <button type="button" id="comment-reanchor-cancel">Cancel</button>
     </div>
     <div id="conflict-sheet" class="sheet conflict-sheet" hidden>
       <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="conflict-heading">

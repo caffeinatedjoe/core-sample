@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v35.2';
+const CACHE = 'core-sample-shell-v53';
 
 const SHELL = [
   './',
@@ -21,12 +21,21 @@ const SHELL = [
   './js/images.js',
   './js/viewer-gestures.js',
   './js/image-viewer.js',
+  './js/comments.js',
+  './js/comments-ui.js',
   './js/checklist.js',
   './js/tasks.js',
   './js/task-index.js',
   './js/dql.js',
   './js/live-rules.js',
   './js/live-editor.js',
+  './js/tables.js',
+  './js/callouts.js',
+  './js/math.js',
+  './js/note-embeds.js',
+  './js/frontmatter.js',
+  './js/code-highlight.js',
+  './js/fold.js',
   './js/format.js',
   './js/list-continue.js',
   './js/drawer.js',
@@ -47,13 +56,13 @@ const SHELL = [
   './js/vault-paths.js',
   './js/github-store.js',
   './js/github-ui.js',
-  './icons/icon-v11-180.png',
-  './icons/icon-v11-192.png',
-  './icons/icon-v11-512.png',
-  './icons/icon-v11-512-maskable.png',
-  './icons/icon-v11-32.png',
-  './icons/icon-v11-16.png',
-  './icons/favicon-v11.ico',
+  './icons/icon-v41-180.png',
+  './icons/icon-v41-192.png',
+  './icons/icon-v41-512.png',
+  './icons/icon-v41-512-maskable.png',
+  './icons/icon-v41-32.png',
+  './icons/icon-v41-16.png',
+  './icons/favicon-v41.ico',
 ];
 
 self.addEventListener('install', (event) => {

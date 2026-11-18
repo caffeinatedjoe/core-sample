@@ -1,10 +1,10 @@
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AUTH_RECHECK_MS, describeAccess, relayPost } from '../app/js/github-api.js';
-import { createDeviceSignIn, tokenPollRequest } from '../app/js/github-device.js';
-import { createAutoSync, SYNC_STATUS } from '../app/js/github-sync.js';
-import { mountGithub } from '../app/js/github-ui.js';
+import { AUTH_RECHECK_MS, describeAccess, relayPost } from '../../app/js/github-api.js';
+import { createDeviceSignIn, tokenPollRequest } from '../../app/js/github-device.js';
+import { createAutoSync, SYNC_STATUS } from '../../app/js/github-sync.js';
+import { mountGithub } from '../../app/js/github-ui.js';
 import {
   AUTH_FAILURE_KEY,
   authLogLeaksSecret,
@@ -21,11 +21,11 @@ import {
   saveGithubConfig,
   savePendingFlow,
   tokenFingerprint,
-} from '../app/js/github-store.js';
-import { getMeta } from '../app/js/db.js';
-import { FAKE_CLIENT_ID, FAKE_RELAY, FAKE_TOKEN, createFakeGithub } from './helpers/fake-github.js';
-import { domText, jsonResponse, page, until } from './helpers/github-page.js';
-import { vaultPassHarness, vaultPassName } from './helpers/vault-pass.js';
+} from '../../app/js/github-store.js';
+import { getMeta } from '../../app/js/db.js';
+import { FAKE_CLIENT_ID, FAKE_RELAY, FAKE_TOKEN, createFakeGithub } from '../helpers/fake-github.js';
+import { domText, jsonResponse, page, until } from '../helpers/github-page.js';
+import { vaultPassHarness, vaultPassName } from '../helpers/vault-pass.js';
 
 function gate() {
   let open;

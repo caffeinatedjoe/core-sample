@@ -47,11 +47,22 @@ export function noteSnippet(file) {
   return `${text.slice(0, 71).trimEnd()}…`;
 }
 
+// Obsidian-style: Untitled, then Untitled 1, Untitled 2, … filling gaps.
+export function untitledPath(existingPaths, folder = '') {
+  const occupied = new Set(existingPaths || []);
+  const prefix = folder ? `${folder}/` : '';
+  let n = 0;
+  while (true) {
+    const path = n === 0 ? `${prefix}Untitled.md` : `${prefix}Untitled ${n}.md`;
+    if (!occupied.has(path)) return path;
+    n += 1;
+  }
+}
+
 export function notePathFromName(name, existingPaths, folder = '') {
   const paths = existingPaths || [];
   const raw = String(name ?? '').trim().replace(/\.md$/i, '').trim();
-  const base = folder ? `${folder}/Untitled` : 'Untitled';
-  if (!raw) return uniquePath(base, paths);
+  if (!raw) return untitledPath(paths, folder);
   if (/[\\/\u0000-\u001f]/.test(raw) || raw === '.' || raw === '..') {
     throw new Error('Use a name without slashes.');
   }
@@ -59,16 +70,6 @@ export function notePathFromName(name, existingPaths, folder = '') {
   const path = folder ? `${folder}/${raw}.md` : `${raw}.md`;
   if (paths.includes(path)) {
     throw new Error('A note with that name already exists.');
-  }
-  return path;
-}
-
-function uniquePath(base, existing) {
-  let path = `${base}.md`;
-  let n = 2;
-  while (existing.includes(path)) {
-    path = `${base} ${n}.md`;
-    n += 1;
   }
   return path;
 }

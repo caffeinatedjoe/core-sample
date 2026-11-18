@@ -54,6 +54,11 @@ export function fakeEditorFactory(createElement) {
         return true;
       },
       refreshDataview() {},
+      setFolds() {},
+      setShowResolved() {},
+      dispatchChanges() { return false; },
+      revealComment() {},
+      comments: () => [],
       posOf: () => -1,
       images: () => [],
       embedNodes: () => host.querySelectorAll('.embed'),

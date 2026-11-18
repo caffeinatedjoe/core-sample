@@ -5,6 +5,7 @@ import { extname, join, normalize } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { encodeUtf8Base64 } from '../app/js/github-api.js';
+import { APP_BUILD } from '../app/js/version.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const appDir = join(here, '..', 'app');
@@ -203,10 +204,10 @@ test('webkit auto-sync pushes, pulls, queues offline, keeps a failed push, and k
   try {
     await page.clock.install();
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => {
+    await page.waitForFunction((build) => {
       const status = document.getElementById('save-status')?.textContent || '';
-      return status.includes('Saved') && document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.2';
-    });
+      return status.includes('Saved') && document.getElementById('build-version')?.textContent === build;
+    }, APP_BUILD);
     await page.evaluate(async ({ note }) => {
       const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open('core-sample');

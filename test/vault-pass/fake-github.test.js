@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { collectDownload, encodeUtf8Base64 } from '../app/js/github-api.js';
+import { collectDownload, encodeUtf8Base64 } from '../../app/js/github-api.js';
 import {
   FAKE_CLIENT_ID,
   FAKE_RELAY,
   FAKE_TOKEN,
   createFakeGithub,
-} from './helpers/fake-github.js';
-import { FIXTURE_REPO, loadFixtureVault } from './helpers/fixture-vault.js';
+} from '../helpers/fake-github.js';
+import { FIXTURE_REPO, loadFixtureVault } from '../helpers/fixture-vault.js';
 
 test('the fake GitHub serves the fixture as a read-only-from-the-world repo', async () => {
   const originalFetch = globalThis.fetch;

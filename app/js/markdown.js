@@ -1,4 +1,5 @@
 import { closesFence, parseFenceLine, parseTask } from './checklist.js';
+import { stripCommentMarkup } from './comments.js';
 import { basename, decodePath, imageKind, normalizeVaultPath, parseSize, parseWikilinkImage } from './embeds.js';
 
 export function escapeHtml(value) {
@@ -51,9 +52,13 @@ export function isSafeUrl(url) {
 
 function nextSpecial(text, index) {
   const rest = text.slice(index);
-  const found = rest.search(/[`[!*_]/);
+  const found = rest.search(/[`[!*_\u0001]/);
   if (found === -1) return text.length;
   return index + found;
+}
+
+export function renderInlineMarkdown(text) {
+  return renderInline(text);
 }
 
 function renderInline(text) {
@@ -61,6 +66,27 @@ function renderInline(text) {
   let index = 0;
   const source = String(text ?? '');
   while (index < source.length) {
+    if (source.charCodeAt(index) === 1) {
+      const close = source.indexOf('\u0002', index + 1);
+      if (close !== -1) {
+        const inner = source.slice(index + 1, close);
+        if (inner.startsWith('cr:')) {
+          html += `<span class="md-comment is-resolved" data-comment-id="${escapeHtml(inner.slice(3))}">`;
+          index = close + 1;
+          continue;
+        }
+        if (inner.startsWith('c:')) {
+          html += `<span class="md-comment" data-comment-id="${escapeHtml(inner.slice(2))}">`;
+          index = close + 1;
+          continue;
+        }
+        if (inner.startsWith('/c:')) {
+          html += '</span>';
+          index = close + 1;
+          continue;
+        }
+      }
+    }
     if (source[index] === '`') {
       const end = source.indexOf('`', index + 1);
       if (end > index + 1) {
@@ -563,8 +589,11 @@ function renderFlow(flow, tasks, parentWidth, usedIds) {
   return html;
 }
 
-export function renderMarkdown(markdown) {
-  const lines = String(markdown ?? '').split('\n');
+export function renderMarkdown(markdown, options = {}) {
+  const lines = stripCommentMarkup(String(markdown ?? ''), {
+    wrap: true,
+    showResolved: options.showResolved === true,
+  }).split('\n');
   const html = [];
   const usedIds = new Set();
   const tasks = { n: 0 };

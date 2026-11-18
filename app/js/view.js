@@ -1,12 +1,12 @@
-import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, setMeta } from './db.js';
+import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, saveLocalFile, setMeta, updateMeta } from './db.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
   makeFile,
-  notePathFromName,
   noteTitle,
   pickCurrent,
   planWikilink,
+  untitledPath,
 } from './notes.js';
 import { listBrowser, moveTargets, rememberRecent, vaultSummary } from './browser.js';
 import { buildBackup, mergeBackup, parseBackup } from './backup.js';
@@ -45,6 +45,25 @@ import { createAutoSync, loadConflictRemote, syncAlert, syncAlertFocus, syncAler
 import { mountDrawer } from './drawer.js';
 import { LONG_PRESS, SLOP } from './drawer-gesture.js';
 import { basename, extensionOf, mimeFor } from './embeds.js';
+import {
+  addComment,
+  applyChanges,
+  canCreateComment,
+  commentHasUnread,
+  commentSeenStamp,
+  commentTargetRange,
+  deleteComment,
+  deleteEntry,
+  editEntry,
+  existingIds,
+  generateId,
+  openCommentCount,
+  reanchor,
+  reply as replyComment,
+  setStatus as setCommentStatus,
+  toggleReaction,
+} from './comments.js';
+import { mountComments } from './comments-ui.js';
 import { mountConflictScreen } from './conflict-ui.js';
 import { createImageViewer } from './image-viewer.js';
 import { createLiveEditor } from './live-editor.js';
@@ -52,6 +71,8 @@ import { headingOffset } from './live-rules.js';
 import { applyTaskToggle } from './tasks.js';
 import { createTaskIndex, isIndexableNote } from './task-index.js';
 import { dataviewResult } from './dql.js';
+import { rememberFolds, toggleFold } from './fold.js';
+import { describeNoteEmbed } from './note-embeds.js';
 
 const SAVE_DELAY = 400;
 
@@ -61,8 +82,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   const title = doc.getElementById('note-title');
   const status = doc.getElementById('save-status');
   const list = doc.getElementById('notes-list');
-  const form = doc.getElementById('new-note-form');
-  const nameInput = doc.getElementById('new-note-name');
   const formError = doc.getElementById('new-note-error');
   const search = doc.getElementById('notes-search');
   const searchCase = doc.getElementById('search-case');
@@ -89,9 +108,16 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let panel = null;
   let backupStep = null;
   let current = null;
+  let titleEdit = null;
+  let folds = {};
+  let foldsByPath = {};
   let erasing = false;
   let holding = false;
   let booting = true;
+  let showResolvedComments = false;
+  let commentName = 'me';
+  let commentLastSeen = {};
+  let commentsUi;
 
   let sync = null;
   let syncConflicts = false;
@@ -132,11 +158,17 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     delay: SAVE_DELAY,
     write: async (note) => {
       if (erasing) return undefined;
-      await putFile(db, note);
+      const saved = await saveLocalFile(db, note);
       const index = files.findIndex((item) => item.path === note.path);
-      if (index >= 0) files[index] = { ...files[index], ...note };
-      updateIndexPath(note);
-      if (note.dirty) await sync?.noteEdited(note);
+      if (index >= 0) files[index] = { ...files[index], ...saved };
+      if (current && current.path === saved.path) {
+        current.baseSha = saved.baseSha;
+        current.remoteSha = saved.remoteSha;
+        current.syncedAt = saved.syncedAt;
+        current.syncedCommit = saved.syncedCommit;
+      }
+      updateIndexPath(saved);
+      if (saved.dirty) await sync?.noteEdited(saved);
     },
     onStatus: (state) => setStatus(state),
   });
@@ -230,7 +262,14 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function paintFormatBar() {
     const bar = doc.getElementById('format-bar');
     if (!bar) return;
-    bar.hidden = Boolean(source.readOnly) || !source.hasFocus();
+    bar.hidden = Boolean(source.readOnly) || !source.hasFocus() || Boolean(commentsUi?.showing?.());
+    const commentBtn = bar.querySelector('[data-format="comment"]');
+    if (commentBtn) {
+      const range = source.selectionRange?.() || { from: 0, to: 0 };
+      const allowed = canCreateComment(source.value, range.from, range.to);
+      commentBtn.disabled = !allowed;
+      commentBtn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+    }
   }
 
   const source = createEditor(host, {
@@ -247,6 +286,115 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     onDataviewToggle: dataviewToggle,
     onDataviewOpen: dataviewOpen,
     onPasteFiles: (images) => insertImages(images, { pasted: true }),
+    noteEmbed: (target, heading) => describeNoteEmbed(
+      files.filter((file) => file.kind === 'markdown' && !file.trashedAt),
+      target,
+      heading,
+      current?.path || '',
+    ),
+    onFold: toggleHeadingFold,
+    onCommentTap(id) {
+      commentsUi?.openThread(id);
+    },
+    onCommentCaret(hits, coords, extra) {
+      if (extra?.typed) commentsUi?.fadePill?.();
+      else commentsUi?.showPill?.(hits, coords);
+    },
+    onSelectionChange: paintFormatBar,
+  });
+
+  function applyCommentChanges(changes) {
+    if (!changes || !changes.length) return false;
+    if (!source.dispatchChanges?.(changes)) return false;
+    rememberEdit();
+    commentsUi?.paintChip?.();
+    commentsUi?.paintIfOpen?.();
+    return true;
+  }
+
+  commentsUi = mountComments(doc, {
+    comments: () => source.comments?.() || [],
+    doc: () => source.value,
+    openCount: () => openCommentCount(source.value),
+    showResolved: () => showResolvedComments,
+    author: () => commentName || 'me',
+    selectionRange: () => source.selectionRange?.() || { from: 0, to: 0 },
+    reply(id, text) {
+      return applyCommentChanges(replyComment(source.value, id, {
+        author: commentName || 'me',
+        createdAt: new Date().toISOString(),
+        text,
+      }).changes);
+    },
+    createComment(range, text) {
+      const createdAt = new Date().toISOString();
+      const id = generateId(existingIds(source.value));
+      const result = addComment(source.value, range.from, range.to, {
+        id,
+        author: commentName || 'me',
+        createdAt,
+        text,
+        expected: range.expected,
+      });
+      if (result.error || !applyCommentChanges(result.changes)) return false;
+      commentsUi.openThread(id);
+      source.revealComment?.(id);
+      return true;
+    },
+    cancelDraft(id) {
+      return applyCommentChanges(deleteComment(source.value, id).changes);
+    },
+    editEntry(id, index, text) {
+      return applyCommentChanges(editEntry(source.value, id, index, text).changes);
+    },
+    deleteEntry(id, index) {
+      return applyCommentChanges(deleteEntry(source.value, id, index).changes);
+    },
+    deleteComment(id) {
+      return applyCommentChanges(deleteComment(source.value, id).changes);
+    },
+    toggleReaction(id, entry, emoji) {
+      return applyCommentChanges(toggleReaction(source.value, id, {
+        entry,
+        emoji,
+        author: commentName || 'me',
+      }).changes);
+    },
+    reanchor(id, from, to) {
+      return applyCommentChanges(reanchor(source.value, id, from, to).changes);
+    },
+    setStatus(id, status) {
+      const ok = applyCommentChanges(setCommentStatus(source.value, id, status).changes);
+      if (ok) commentsUi.paintIfOpen?.();
+      return ok;
+    },
+    reveal(id) {
+      source.revealComment?.(id);
+    },
+    jump(id) {
+      source.revealComment?.(id);
+    },
+    lastSeen(id) {
+      return commentLastSeen[id] || '';
+    },
+    hasUnread(id) {
+      const match = source.comments?.().find((item) => item.id === id);
+      return Boolean(match && commentHasUnread(match, commentLastSeen[id]));
+    },
+    markSeen(id) {
+      const match = source.comments?.().find((item) => item.id === id);
+      if (!match) return;
+      commentLastSeen = { ...commentLastSeen, [id]: commentSeenStamp(match) };
+      return setMeta(db, 'commentLastSeen', commentLastSeen);
+    },
+    onReanchorStart() {
+      paintFormatBar();
+    },
+    onReanchorEnd() {
+      paintFormatBar();
+    },
+    onOpen: paintFormatBar,
+    onClose: paintFormatBar,
   });
   Object.defineProperty(host, 'value', { configurable: true, get: () => source.value });
   // Text typed before the last note loads would be replaced by it.
@@ -264,6 +412,14 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (action === 'dismiss') {
         source.blur();
         paintFormatBar();
+        return;
+      }
+      if (action === 'comment') {
+        if (button.disabled) return;
+        const range = source.selectionRange?.() || { from: 0, to: 0 };
+        const target = commentTargetRange(source.value, range.from, range.to);
+        if (target.error) return;
+        commentsUi?.startCreate?.({ ...target });
         return;
       }
       source.format?.(action);
@@ -486,18 +642,53 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     hydrateEmbed(node, true);
   }
 
-  function showNote(note, { heading = '', line } = {}) {
+  function applyFolds(path) {
+    folds = { ...(foldsByPath[path] || {}) };
+    source.setFolds?.(folds);
+  }
+
+  async function loadFolds(path) {
+    const all = await getMeta(db, 'editorFolds');
+    foldsByPath = all && typeof all === 'object' ? all : {};
+    applyFolds(path);
+  }
+
+  function persistFolds() {
+    if (!current) return;
+    foldsByPath = rememberFolds(foldsByPath, current.path, folds);
+    setMeta(db, 'editorFolds', foldsByPath).catch(() => {});
+  }
+
+  function toggleHeadingFold(key) {
+    if (!key) return;
+    folds = toggleFold(folds, key);
+    source.setFolds?.(folds);
+    persistFolds();
+  }
+
+  function paintTitle() {
+    if (titleEdit) return;
+    title.replaceChildren?.();
+    title.textContent = current ? noteTitle(current) : '';
+  }
+
+  // A rename of the open note keeps the editor state. Reloading would drop
+  // the caret and scroll, and the text is the same note.
+  function showNote(note, { heading = '', line, keepPlace = false } = {}) {
     const same = current && current.path === note.path;
     current = note;
-    if (!same) {
+    if (same || keepPlace) {
+      if (source.value !== note.content) source.value = note.content;
+    } else {
       embedTicket += 1;
       closeViewer();
       revokeEmbeds();
       source.load(note.content);
-    } else {
-      source.value = note.content;
+      applyFolds(note.path);
+      loadFolds(note.path);
     }
-    title.textContent = noteTitle(note);
+    paintTitle();
+    commentsUi?.paintChip?.();
     source.refreshDataview?.();
     if (heading) scrollToHeading(heading);
     else if (Number.isInteger(line) && line >= 0) source.scrollToLine?.(line);
@@ -510,11 +701,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
 
   function clearEditor() {
     current = null;
+    titleEdit = null;
     embedTicket += 1;
     closeViewer();
     revokeEmbeds();
     source.load('');
-    title.textContent = '';
+    paintTitle();
+    commentsUi?.paintChip?.();
   }
 
   async function flushEditing() {
@@ -537,7 +730,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     if (current && pathMap && pathMap[current.path]) {
       const next = files.find((file) => file.path === pathMap[current.path] && !file.trashedAt);
       if (next) {
-        showNote(next);
+        showNote(next, { keepPlace: true });
         setMeta(db, 'lastOpened', next.path).catch(() => {});
         recent = rememberRecent(recent, next.path);
         setMeta(db, 'recent', recent).catch(() => {});
@@ -549,7 +742,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       if (fresh) {
         current = fresh;
         if (source.value !== fresh.content) source.value = fresh.content;
-        title.textContent = noteTitle(fresh);
+        paintTitle();
         return;
       }
     }
@@ -954,7 +1147,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     else if (panel.type === 'confirm-remove-folder') renderRemoveFolderPanel();
     else if (panel.type === 'confirm-empty') renderEmptyPanel();
     else if (panel.type === 'new-folder') renderFolderPanel();
-    else if (panel.type === 'new-note') renderNestedNotePanel();
   }
 
   function renderBackup() {
@@ -981,7 +1173,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     panelBox.append(heading);
     if (panel.kind === 'folder') {
       panelBox.append(
-        panelButton('New note', () => { panel = { type: 'new-note', parent: panel.path }; renderPanel(); }),
+        panelButton('New note', () => createNote(panel.path)),
         panelButton('New folder', () => { panel = { type: 'new-folder', parent: panel.path }; renderPanel(); }),
       );
     }
@@ -1047,12 +1239,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     input.focus();
   }
 
-  function renderNestedNotePanel() {
-    const input = namedField('', 'Note name');
-    panelBox.append(input, panelButton('Create', () => createNote(input.value, panel.parent)), panelButton('Cancel', closePanel));
-    input.focus();
-  }
-
   function renderImportPanel() {
     const count = backupStep.backup.files.length;
     const message = doc.createElement('p');
@@ -1113,33 +1299,113 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   }
 
   async function renameItem(name) {
+    const ok = await renamePath(panel.path, panel.kind, name);
+    if (ok) closePanel();
+    return ok;
+  }
+
+  // Sidebar long-press rename and the note-title field both come through here.
+  async function renamePath(path, kind, name) {
     formError.textContent = '';
     if (!(await flushEditing())) {
       formError.textContent = "Couldn't save the note you're editing.";
-      return;
+      return false;
     }
-    const parent = parentPath(panel.path);
+    const parent = parentPath(path);
     try {
       let result;
-      if (panel.kind === 'folder') {
-        const to = folderDestination(parent, name, folders.filter((folder) => folder !== panel.path));
-        result = planFolderRename(files, folders, panel.path, to, Date.now());
-        remapExpanded(panel.path, to);
+      if (kind === 'folder') {
+        const to = folderDestination(parent, name, folders.filter((folder) => folder !== path));
+        result = planFolderRename(files, folders, path, to, Date.now());
+        remapExpanded(path, to);
       } else {
-        const to = noteDestination(parent, name, files.map((file) => file.path).filter((path) => path !== panel.path));
-        result = planFileRename(files, panel.path, to, Date.now());
-        const moved = planRenameAttachmentFolder(result.files, result.folders || folders, panel.path, to, Date.now());
+        const to = noteDestination(parent, name, files.map((file) => file.path).filter((item) => item !== path));
+        result = planFileRename(files, path, to, Date.now());
+        const moved = planRenameAttachmentFolder(result.files, result.folders || folders, path, to, Date.now());
         if (moved) {
-          const fromFolder = noteAttachmentFolder(panel.path);
+          const fromFolder = noteAttachmentFolder(path);
           const toFolder = noteAttachmentFolder(to);
           result = mergePlans(result, moved);
           if (fromFolder && toFolder) remapExpanded(fromFolder, toFolder);
         }
       }
       await persistPlan(result);
-      closePanel();
+      return true;
     } catch (error) {
       formError.textContent = error.message;
+      return false;
+    }
+  }
+
+  function titleStem(value) {
+    return String(value ?? '').trim().replace(/\.md$/i, '').trim();
+  }
+
+  function endTitleEdit() {
+    titleEdit = null;
+    paintTitle();
+  }
+
+  function beginTitleRename() {
+    if (titleEdit || !current || current.kind === 'binary') return;
+    const input = namedField(noteTitle(current), 'Note name');
+    input.id = 'note-title-input';
+    input.className = 'note-title-input';
+    input.spellcheck = false;
+    let closed = false;
+    let busy = false;
+
+    function cancel() {
+      if (closed) return;
+      closed = true;
+      const message = formError ? formError.textContent : '';
+      if (formError) formError.textContent = '';
+      if (message && status.textContent === message) setStatus('saved');
+      endTitleEdit();
+    }
+
+    async function commit() {
+      if (closed || busy || !titleEdit) return;
+      busy = true;
+      try {
+        const stem = titleStem(input.value);
+        if (!current || !stem || stem === noteTitle(current)) {
+          cancel();
+          return;
+        }
+        const ok = await renamePath(current.path, 'note', input.value);
+        if (closed || !titleEdit) return;
+        if (!ok) {
+          setStatus('invalid', formError ? formError.textContent : '');
+          return;
+        }
+        closed = true;
+        setStatus('saved');
+        endTitleEdit();
+      } finally {
+        busy = false;
+      }
+    }
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== 'Escape') return undefined;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (event.key === 'Enter') return commit();
+      cancel();
+      return undefined;
+    });
+    input.addEventListener('blur', () => commit());
+
+    titleEdit = input;
+    source.blur?.();
+    title.textContent = '';
+    if (typeof title.replaceChildren === 'function') title.replaceChildren(input);
+    else title.append(input);
+    input.focus();
+    input.select?.();
+    if (typeof input.setSelectionRange === 'function') {
+      input.setSelectionRange(0, input.value.length);
     }
   }
 
@@ -1245,21 +1511,21 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     }
   }
 
-  async function createNote(name, folder) {
+  function occupiedPaths() {
+    return [...new Set([
+      ...files.map((file) => file.path),
+      ...(vaultPaths || []),
+    ])];
+  }
+
+  async function createNote(folder = '') {
     formError.textContent = '';
-    let path;
-    try {
-      path = notePathFromName(name, files.map((file) => file.path), folder);
-    } catch (error) {
-      formError.textContent = error.message;
-      return;
-    }
+    const path = untitledPath(occupiedPaths(), folder);
     if (!(await flushEditing())) {
       formError.textContent = "Couldn't save the note you're editing.";
       return;
     }
-    const titleText = path.split('/').pop().replace(/\.md$/i, '');
-    const note = { ...makeFile(path, `# ${titleText}\n\n`), dirty: true, origin: 'user' };
+    const note = { ...makeFile(path, ''), dirty: true, origin: 'user' };
     try {
       await putFile(db, note);
       await setMeta(db, 'lastOpened', path);
@@ -1273,7 +1539,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     await setMeta(db, 'expanded', [...expanded]);
     recent = rememberRecent(recent, path);
     await setMeta(db, 'recent', recent);
-    nameInput.value = '';
     showNote(note);
     closeSheet();
     sync?.noteEdited(note);
@@ -1372,14 +1637,13 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     },
     afterClose() {
       closePanel();
-      if (form) form.hidden = true;
       if (searching) setSearching(false);
     },
     blocked: () => booting || overlayOpen(),
   });
 
   function overlayOpen() {
-    return ['settings-sheet', 'conflict-sheet', 'image-viewer', 'file-preview'].some((id) => {
+    return ['settings-sheet', 'conflict-sheet', 'comment-sheet', 'image-viewer', 'file-preview'].some((id) => {
       const node = doc.getElementById(id);
       return node && !node.hidden;
     });
@@ -1396,7 +1660,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       current.content = source.value;
       current.updatedAt = Date.now();
     }
-    title.textContent = noteTitle(current);
+    paintTitle();
+    commentsUi?.paintChip?.();
     saver.schedule(snapshot);
   }
 
@@ -1429,16 +1694,38 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     searchOptions.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   searchContent?.addEventListener('change', renderList);
+  doc.getElementById('show-resolved-comments')?.addEventListener('change', async (event) => {
+    showResolvedComments = Boolean(event.target.checked);
+    source.setShowResolved?.(showResolvedComments);
+    commentsUi?.paintChip?.();
+    try {
+      await setMeta(db, 'showResolvedComments', showResolvedComments);
+    } catch {
+      /* keep the in-memory choice */
+    }
+  });
+  const commentNameBox = doc.getElementById('comment-name');
+  commentNameBox?.addEventListener('change', async () => {
+    commentName = String(commentNameBox.value || '').trim() || 'me';
+    commentNameBox.value = commentName;
+    try {
+      await setMeta(db, 'commentName', commentName);
+    } catch {
+      /* keep the in-memory name */
+    }
+  });
+  title?.addEventListener('click', () => {
+    if (titleEdit) return;
+    beginTitleRename();
+  });
   doc.getElementById('new-note-button')?.addEventListener('click', () => {
     formError.textContent = '';
     closePanel();
-    form.hidden = !form.hidden;
-    if (!form.hidden) nameInput.focus();
+    return createNote('');
   });
   doc.getElementById('new-folder-button').addEventListener('click', () => {
     panel = { type: 'new-folder', parent: '' };
     formError.textContent = '';
-    if (form) form.hidden = true;
     renderPanel();
   });
   doc.getElementById('export-backup')?.addEventListener('click', () => {
@@ -1462,11 +1749,6 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     } catch (error) {
       backupMessage(error.message);
     }
-  });
-
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    createNote(nameInput.value, '');
   });
 
   let linkNav = null;
@@ -1626,7 +1908,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   }
 
   function flushNow() {
-    if (erasing || !current) return;
+    if (erasing || booting || !current) return;
     current.content = source.value;
     saver.flush().catch(() => {});
   }
@@ -1743,15 +2025,24 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function applySyncedFiles(nextFiles) {
     for (const file of nextFiles || []) {
       const index = files.findIndex((item) => item.path === file.path);
+      const at = index >= 0 ? index : files.length;
       if (index >= 0) files[index] = file;
       else files.push(file);
       updateIndexPath(file);
       if (!current || current.path !== file.path) continue;
       const typed = source.value !== current.content && source.value !== file.content;
       if (typed) continue;
+      if (file.dirty && source.value !== file.content) {
+        const content = current.content;
+        const updatedAt = current.updatedAt;
+        Object.assign(current, file, { content, dirty: true, updatedAt });
+        files[at] = current;
+        paintTitle();
+        continue;
+      }
       current = file;
       source.value = file.content;
-      title.textContent = noteTitle(current);
+      paintTitle();
     }
     renderList();
   }
@@ -1916,7 +2207,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   return {
     flush: flushNow,
     async start() {
-      const session = await loadSession(db);
+      let session = await loadSession(db);
       files = session.files;
       folders = session.folders;
       recent = session.recent;
@@ -1926,11 +2217,32 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         for (const folder of ancestorFolders(session.current.path)) expanded.add(folder);
       }
       deleteMeta(db, 'editorMode').catch(() => {});
+      showResolvedComments = Boolean(await getMeta(db, 'showResolvedComments'));
+      const resolvedBox = doc.getElementById('show-resolved-comments');
+      if (resolvedBox) resolvedBox.checked = showResolvedComments;
+      source.setShowResolved?.(showResolvedComments);
+      const savedName = await getMeta(db, 'commentName');
+      commentName = String(savedName || 'me').trim() || 'me';
+      if (commentNameBox) commentNameBox.value = commentName;
+      const savedSeen = await getMeta(db, 'commentLastSeen');
+      commentLastSeen = savedSeen && typeof savedSeen === 'object' ? { ...savedSeen } : {};
+      // Settings reads yield. Reload the session so a vault replaced while we
+      // waited (another tab, or a reload that seeded IndexedDB) is what we
+      // open, instead of writing the stale lastOpened back over it.
+      session = await loadSession(db);
+      files = session.files;
+      folders = session.folders;
+      recent = session.recent;
+      if (session.expanded) expanded = new Set(session.expanded);
+      taskIndex.rebuild(notesForIndex());
+      commentsUi?.paintChip?.();
       if (session.current) {
         showNote(session.current);
-        await setMeta(db, 'lastOpened', session.current.path);
-        recent = rememberRecent(recent, session.current.path);
-        await setMeta(db, 'recent', recent);
+        await updateMeta(db, ['lastOpened', 'recent'], ({ lastOpened, recent: storedRecent }) => {
+          if (lastOpened && lastOpened !== session.current.path) return null;
+          recent = rememberRecent(Array.isArray(storedRecent) ? storedRecent : recent, session.current.path);
+          return { lastOpened: session.current.path, recent };
+        });
       }
       booting = false;
       holdEditor(holding);

@@ -4,10 +4,11 @@ import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { APP_BUILD } from '../../app/js/version.js';
 
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
-export const BUILD = 'core-sample-shell-v35.2';
+export const BUILD = APP_BUILD;
 
 const TYPES = {
   '.html': 'text/html',
@@ -84,6 +85,9 @@ export async function waitForStart(page) {
       get.onerror = () => { db.close(); resolve(false); };
     };
   }));
+  // Boot is still writing lastOpened until the editor becomes editable.
+  // Seeding before that lets the first start() clobber the seeded note.
+  await page.waitForFunction(() => document.querySelector('#source .cm-content')?.getAttribute('contenteditable') === 'true');
 }
 
 export function note(path, content, extra = {}) {
@@ -171,10 +175,12 @@ export async function fakeKeyboard(page, inset = 336) {
 
 // Synthetic touches. Playwright WebKit has no touch-drag API and refuses
 // `new Touch()`, but the legacy document.createTouch path still works.
-export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 0, selector = '#source' } = {}) {
-  await page.evaluate(async ({ from, to, steps, frameMs, holdMs, selector }) => {
+export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 0, selector = '#source', scrollDelta = 0 } = {}) {
+  await page.evaluate(async ({ from, to, steps, frameMs, holdMs, selector, scrollDelta }) => {
     const target = document.querySelector(selector) || document.body;
-    const touch = (x, y) => document.createTouch(window, target, 7, x, y, x, y);
+    const scroller = document.querySelector('.cm-scroller');
+    const pointerId = 7;
+    const touch = (x, y) => document.createTouch(window, target, pointerId, x, y, x, y);
     const fire = (type, x, y, ended = false) => {
       const point = touch(x, y);
       const active = ended ? document.createTouchList() : document.createTouchList(point);
@@ -186,13 +192,32 @@ export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 
         cancelable: true,
       }));
     };
+    const firePointer = (type, x, y) => {
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons: type === 'pointerup' ? 0 : 1,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     fire('touchstart', from.x, from.y);
+    firePointer('pointerdown', from.x, from.y);
     if (holdMs) await wait(holdMs);
     for (let i = 1; i <= steps; i += 1) {
       await wait(frameMs);
-      fire('touchmove', from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps);
+      const x = from.x + ((to.x - from.x) * i) / steps;
+      const y = from.y + ((to.y - from.y) * i) / steps;
+      if (scrollDelta && scroller) scroller.scrollTop += scrollDelta / steps;
+      fire('touchmove', x, y);
+      firePointer('pointermove', x, y);
     }
     fire('touchend', to.x, to.y, true);
-  }, { from, to, steps, frameMs, holdMs, selector });
+    firePointer('pointerup', to.x, to.y);
+  }, { from, to, steps, frameMs, holdMs, selector, scrollDelta });
 }

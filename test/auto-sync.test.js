@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
-import { deleteDatabase, getFile, getMeta, listFiles, listOps, openDatabase, putFile } from '../app/js/db.js';
+import { deleteDatabase, getFile, getMeta, listFiles, listOps, openDatabase, putFile, saveLocalFile } from '../app/js/db.js';
 import { encodeBytesBase64, encodeUtf8Base64 } from '../app/js/github-api.js';
 import { cachedImage, rememberImage } from '../app/js/images.js';
 import { saveGithubSession, saveGithubTarget } from '../app/js/github-store.js';
@@ -172,6 +172,11 @@ function gitServer() {
     if (path === '/repos/owner/repo/git/refs/heads/main' && method === 'PATCH') {
       const body = JSON.parse(options.body);
       if (body.force !== false) return json(422, { message: 'force is not allowed' });
+      if (state.holdPatch) {
+        state.patchHeld = true;
+        await state.holdPatch;
+        state.patchHeld = false;
+      }
       if (state.failPatch) return json(500, { message: 'no' });
       if (state.patchStatus) return json(state.patchStatus, { message: state.patchStatus === 404 ? 'Not Found' : 'rejected' });
       if (state.notForward) {
@@ -197,6 +202,14 @@ function gitServer() {
     return json(404, { message: 'Not Found' });
   };
   return { state, log, fetchImpl };
+}
+
+async function until(check, { tries = 80, ms = 10 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  throw new Error('timed out');
 }
 
 function timers() {
@@ -1404,5 +1417,116 @@ test('one unresolvable attachment does not block a note edit', async () => {
     assert.equal(noteFile.content, 'edited\n');
   } finally {
     await box.close();
+  }
+});
+
+async function editDuringFirstPatch(box, path, firstText, secondText, extra = {}) {
+  let release;
+  box.git.state.holdPatch = new Promise((resolve) => {
+    release = () => {
+      box.git.state.holdPatch = null;
+      resolve();
+    };
+  });
+  await putFile(box.db, note(path, firstText, { dirty: true, origin: 'user', ...extra }));
+  const firstSync = box.sync.runNow();
+  await until(() => box.git.state.patchHeld);
+  await putFile(box.db, {
+    ...note(path, secondText, { dirty: true, origin: 'user', ...extra }),
+  });
+  release();
+  const first = await firstSync;
+  const remoteAfterFirst = box.git.state.files.get(path);
+  const mid = await getFile(box.db, path);
+  assert.equal(remoteAfterFirst.text, firstText);
+  assert.equal(mid.content, secondText);
+  assert.equal(mid.dirty, true);
+  assert.equal(mid.baseSha, remoteAfterFirst.sha);
+  assert.equal(mid.remoteSha, remoteAfterFirst.sha);
+  assert.equal(mid.conflict, false);
+  assert.notEqual(first.status, SYNC_STATUS.conflict);
+  assert.equal(first.conflict, false);
+  const copies = (await listFiles(box.db)).filter((file) => file.conflictCopy || isLocalCopyName(file.path));
+  assert.equal(copies.length, 0);
+  const uploadedSha = remoteAfterFirst.sha;
+  const second = await box.sync.runNow();
+  assert.equal(second.status, SYNC_STATUS.synced);
+  assert.equal(second.conflict, false);
+  assert.equal(box.git.state.files.get(path).text, secondText);
+  const done = await getFile(box.db, path);
+  assert.equal(done.content, secondText);
+  assert.equal(done.dirty, false);
+  assert.equal(done.conflict, false);
+  assert.equal(done.baseSha, box.git.state.files.get(path).sha);
+  assert.equal((await listFiles(box.db)).some((file) => file.conflictCopy || isLocalCopyName(file.path)), false);
+  assert.equal((await listOps(box.db)).length, 0);
+  return { first, second, uploadedSha, mid, done };
+}
+
+test('typing during the first upload of a new Untitled note records the SHA and syncs the later text', async () => {
+  const box = await harness();
+  try {
+    const { uploadedSha, mid } = await editDuringFirstPatch(box, 'Untitled.md', 'A\n', 'B\n');
+    assert.equal(mid.baseSha, uploadedSha);
+    assert.equal(mid.dirty, true);
+  } finally {
+    await box.close();
+  }
+});
+
+test('typing during an existing note upload records the new SHA instead of a three-way conflict', async () => {
+  const box = await harness();
+  try {
+    const { uploadedSha, mid } = await editDuringFirstPatch(
+      box,
+      'Field Notes.md',
+      'A\n',
+      'B\n',
+      { baseSha: 'blob-1', remoteSha: 'blob-1' },
+    );
+    assert.equal(uploadedSha === 'blob-1', false);
+    assert.equal(mid.baseSha, uploadedSha);
+    assert.equal(mid.dirty, true);
+  } finally {
+    await box.close();
+  }
+});
+
+test('a stale editor save after acknowledgement does not revert base metadata', async () => {
+  const name = `core-sample-${randomUUID()}`;
+  const db = await openDatabase(name);
+  try {
+    await putFile(db, note('Untitled.md', 'B\n', {
+      dirty: true,
+      origin: 'user',
+      baseSha: 'blob-new-1',
+      remoteSha: 'blob-new-1',
+      syncedAt: 99,
+      syncedCommit: 'commit-2',
+    }));
+    const saved = await saveLocalFile(db, note('Untitled.md', 'B\n', { dirty: true, origin: 'user' }));
+    assert.equal(saved.baseSha, 'blob-new-1');
+    assert.equal(saved.remoteSha, 'blob-new-1');
+    assert.equal(saved.syncedCommit, 'commit-2');
+    assert.equal(saved.syncedAt, 99);
+    assert.equal(saved.content, 'B\n');
+    assert.equal(saved.dirty, true);
+    const kept = await saveLocalFile(db, note('Untitled.md', 'C\n', {
+      dirty: true,
+      origin: 'user',
+      baseSha: 'blob-1',
+      remoteSha: 'blob-1',
+      syncedAt: 1,
+      syncedCommit: 'commit-old',
+    }));
+    assert.equal(kept.baseSha, 'blob-new-1');
+    assert.equal(kept.remoteSha, 'blob-new-1');
+    assert.equal(kept.syncedCommit, 'commit-2');
+    assert.equal(kept.syncedAt, 99);
+    assert.equal(kept.content, 'C\n');
+    assert.equal(kept.dirty, true);
+  } finally {
+    db.close();
+    await deleteDatabase(name);
   }
 });

@@ -7,17 +7,17 @@ import {
   extraAttachmentFiles,
   mergePlans,
   planRenameAttachmentFolder,
-} from '../app/js/attachments.js';
-import { resolveEmbedPath } from '../app/js/embeds.js';
-import { fetchRawBytes } from '../app/js/github-api.js';
-import { ATTACHMENT_BYTES_MISSING, SYNC_STATUS } from '../app/js/github-sync.js';
-import { commitFiles, getFile, listFiles, putFile } from '../app/js/db.js';
-import { parseDql, runDql } from '../app/js/dql.js';
-import { rememberImage } from '../app/js/images.js';
-import { planFileRename } from '../app/js/organize.js';
-import { createTaskIndex } from '../app/js/task-index.js';
-import { applyTaskToggle } from '../app/js/tasks.js';
-import { vaultPassHarness, vaultPassName } from './helpers/vault-pass.js';
+} from '../../app/js/attachments.js';
+import { resolveEmbedPath } from '../../app/js/embeds.js';
+import { fetchRawBytes } from '../../app/js/github-api.js';
+import { ATTACHMENT_BYTES_MISSING, SYNC_STATUS } from '../../app/js/github-sync.js';
+import { commitFiles, getFile, listFiles, putFile } from '../../app/js/db.js';
+import { parseDql, runDql } from '../../app/js/dql.js';
+import { rememberImage } from '../../app/js/images.js';
+import { planFileRename } from '../../app/js/organize.js';
+import { createTaskIndex } from '../../app/js/task-index.js';
+import { applyTaskToggle } from '../../app/js/tasks.js';
+import { vaultPassHarness, vaultPassName } from '../helpers/vault-pass.js';
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 8, 9]);
 const STAMP = new Date(2026, 9, 29, 12, 35, 30, 322);

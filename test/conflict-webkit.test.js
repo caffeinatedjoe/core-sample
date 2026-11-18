@@ -6,6 +6,7 @@ import { extname, join, normalize } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { encodeUtf8Base64 } from '../app/js/github-api.js';
+import { APP_BUILD } from '../app/js/version.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const appDir = join(here, '..', 'app');
@@ -161,7 +162,7 @@ test('webkit conflict screen chooses blocks, previews, undoes, and resolves offl
   try {
     await page.clock.install({ time: new Date('2026-10-21T22:30:00Z') });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent === 'core-sample-shell-v35.2');
+    await page.waitForFunction((build) => document.getElementById('build-version')?.textContent === build, APP_BUILD);
     // start() records lastOpened asynchronously; seeding before then gets overwritten.
     await page.waitForFunction(() => new Promise((resolve) => {
       const request = indexedDB.open('core-sample');

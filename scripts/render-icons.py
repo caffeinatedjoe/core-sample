@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build opaque Core Sample icons from the v2 source.
+"""Build opaque Core Sample icons from the v3 master.
 
-The source is a 512 square: a stacked cylinder on a dark rounded tile, with a
-light bezel. iOS masks its own corners, so the output is cropped inside that
-bezel and the tile's own edge color is extended into the square corners.
-Requires Pillow (`pip install pillow`).
+Joe's 512 source is kept at app/icons/source/core-sample-icon-source-v3.jpg.
+The 1024 master is cropped inside the light bezel (x 77..436, y 77..441)
+with the square corners filled by projecting the tile's own edge pixels
+outward, so there is no bezel line or outer frame. iOS masks its own
+corners. Requires Pillow (`pip install pillow`).
 """
 
 import math
@@ -13,14 +14,15 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'app' / 'icons' / 'source' / 'core-sample-icon-source-v2.jpg'
+SOURCE = ROOT / 'app' / 'icons' / 'source' / 'core-sample-icon-source-v3.jpg'
+MASTER = ROOT / 'app' / 'icons' / 'source' / 'core-sample-icon-full-v3.png'
 OUT = ROOT / 'app' / 'icons'
 
-# Inside the light bezel. Inclusive source pixels. The corner radius is just
-# inside that bezel, so the light ring is replaced by the tile edge color.
-X0, Y0, X1, Y1 = 76, 79, 434, 437
-RADIUS = 62
-TAG = 'v11'
+# Inside the light bezel. Inclusive source pixels. The crop is slightly taller
+# than it is wide; the master is the square that fills those corners.
+X0, Y0, X1, Y1 = 77, 77, 436, 441
+RADIUS = 54
+TAG = 'v41'
 
 
 def in_tile(x, y):
@@ -46,7 +48,7 @@ def corner_center(x, y):
     return None
 
 
-def tile_square(source):
+def tile_from_source(source):
     px = source.load()
     side = min(X1 - X0 + 1, Y1 - Y0 + 1)
     left = int(round((X0 + X1) / 2 - side / 2))
@@ -97,22 +99,31 @@ def save_png(image, name):
     return path
 
 
-def main():
+def load_tile():
+    if MASTER.exists():
+        tile = Image.open(MASTER).convert('RGB')
+        if tile.size != (1024, 1024):
+            raise SystemExit(f'master is {tile.size}, expected 1024x1024')
+        return tile
     source = Image.open(SOURCE).convert('RGB')
     if source.size != (512, 512):
         raise SystemExit(f'source is {source.size}, expected 512x512')
-    tile = tile_square(source)
-    full = tile.resize((512, 512), Image.Resampling.LANCZOS)
+    return tile_from_source(source).resize((1024, 1024), Image.Resampling.LANCZOS)
+
+
+def main():
+    tile = load_tile()
     save_png(tile.resize((180, 180), Image.Resampling.LANCZOS), f'icon-{TAG}-180.png')
     save_png(tile.resize((192, 192), Image.Resampling.LANCZOS), f'icon-{TAG}-192.png')
-    save_png(full, f'icon-{TAG}-512.png')
+    save_png(tile.resize((512, 512), Image.Resampling.LANCZOS), f'icon-{TAG}-512.png')
     save_png(maskable(tile, 512), f'icon-{TAG}-512-maskable.png')
     icon32 = tile.resize((32, 32), Image.Resampling.LANCZOS)
     icon16 = tile.resize((16, 16), Image.Resampling.LANCZOS)
     save_png(icon32, f'icon-{TAG}-32.png')
     save_png(icon16, f'icon-{TAG}-16.png')
-    full.save(OUT / f'favicon-{TAG}.ico', format='ICO', sizes=[(16, 16), (32, 32)])
-    print('wrote icons from', SOURCE.name)
+    tile.save(OUT / f'favicon-{TAG}.ico', format='ICO', sizes=[(16, 16), (32, 32)])
+    origin = MASTER.name if MASTER.exists() else SOURCE.name
+    print('wrote icons from', origin)
 
 
 if __name__ == '__main__':

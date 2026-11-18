@@ -91,9 +91,90 @@ Implemented as core-sample-shell-v35, with the rename/sync fix in core-sample-sh
 - Paste and the format-bar Image picker write original bytes locally, insert a shortest `![[filename]]`, and upload through the Git Data blob API as base64. Paths follow Custom Attachment Location v0.0.9 defaults. Note rename also renames `assets/<basename>/` when that folder exists. Unchanged attachment moves reuse the existing GitHub blob sha; one unresolvable binary does not hold the rest of the commit.
 - Attachment Manager is ignored. Core Sample does not write `app.json`.
 
+## v36 — Live Preview richness
+
+Implemented as core-sample-shell-v36. See [docs/live-preview.md](docs/live-preview.md).
+
+- GFM pipe tables render as a table; tap a cell to edit it. Untouched cells and the delimiter row stay byte for byte.
+- `> [!type]` / `> [!type] Title` callouts render as a block; the source comes back when the caret is in the quote.
+- `$…$` and `$$…$$` render as MathML from a small offline TeX subset.
+- `![[Note]]`, `![[Note#Heading]]`, and `![[Note#^block]]` embed the other note in a box. Images still use `embeds.js`.
+- Frontmatter is a Properties panel. Editing one key rewrites only that value.
+- A few fence languages get token colors. Unknown languages stay plain.
+- Heading sections fold. The folded set is stored in IndexedDB `editorFolds` for that path.
+
+## v37 — Untitled new note
+
+Implemented as core-sample-shell-v37. The sidebar new-document control creates a blank note immediately, the way Obsidian names unsaved files.
+
+- Basename is the first free name in `Untitled`, `Untitled 1`, `Untitled 2`, … (space before the number; gaps filled; case-sensitive path match against local files and the saved vault index).
+- File content is exactly `""`. No heading, frontmatter, or starter line.
+- The note is written through the existing create/save/sync path (`dirty`, `origin: 'user'`), then opened with the editor focused and the drawer closed.
+- Top-left new note lands in the vault root. A folder row's New note still creates in that folder.
+
+## v38 — Strikethrough through nested links
+
+Implemented as core-sample-shell-v38. Live Preview `~~…~~` also paints nested link and wikilink widgets, so struck link text shows `text-decoration: line-through` the way Obsidian and GFM do. Source stays byte-identical.
+
+## v39 — Rename from the note title
+
+Implemented as core-sample-shell-v39. Tapping the open note's title edits the file name in place, through the same rename as the sidebar. Empty, unchanged, and Escape restore the title. A collision or a rejected character keeps the field and shows the existing rename error.
+
+## v40 — Acknowledge in-flight edits
+
+Implemented as core-sample-shell-v40. A successful GitHub write records that blob SHA as the note's base even if the user typed more while the ref update was in flight. The newer local text stays, stays dirty, and syncs on the next pass. A local save merges remote metadata instead of replacing the whole record, so a stale editor snapshot cannot restore the old base.
+
+## v41 — Third home screen icon
+
+Implemented as core-sample-shell-v41. Replaces the v2/v11 icon with Joe's third concept: a stacked purple and teal cylinder with linked notes on a dark tile. The v3 source stays next to the earlier sources. Icons are `icon-v41-*`.
+
+## v42 — Document comments (display)
+
+Implemented as core-sample-shell-v42. Notes that use the Obsidian Document Comments format (`<!--c:ID-->…<!--/c:ID-->` plus a `<!--co:ID …-->` thread) hide those markers in Live Preview, highlight the anchored text, and strip the markup from rendered Markdown. The on-disk format is the plugin's (v0.1.19). Markers inside code are ignored. Copy omits the markup. Partial deletes keep markers whole. Removing the highlighted text leaves the thread as an orphan. Resolved comments stay unhighlighted unless Settings → Comments → Show resolved is on.
+
+## v43 — Document comments (view and reply)
+
+Implemented as core-sample-shell-v43. A header chip shows the open-comment count and opens a list. Tapping a highlight in reading mode opens that thread; in the editor a floating pill does. The sheet is half-height, drags to full, and the reply composer sits above the keyboard. Writes go through editor transactions. Comment name (default `me`) is a setting.
+
+## v44 — Comment touch and sheet drag
+
+Implemented as core-sample-shell-v44. Swipe-scroll starting on a comment highlight no longer opens the thread sheet or edit pill; only a real tap does. The comment sheet grab handle and header drag to half, full, or dismiss, with touch-action disabled behind the drag. Thread entries render as chat bubbles (own vs other alignment, grouped senders, hashed author tints, unread dots and list badges from IndexedDB last-seen timestamps).
+
+## v45 — Document comments (create and manage)
+
+Implemented as core-sample-shell-v45. The format bar adds 💬. Sending from the composer creates anchors and the first entry in one editor transaction; cancel closes a draft without writing. With no selection, the current line’s text is used, skipping leading list, quote, and heading markers. Creation is disabled inside tables and fenced or indented code. Anchor rules match Document Comments v0.1.19, including U+200B before markers at line starts when needed. Entry ⋯ and long-press menus support edit (own entries), delete, and react. Reactions serialize as `+👍 me` and `+@N emoji names`. The sheet header can delete a comment while keeping the highlighted text. Orphans offer Delete and Re-anchor (select text, then Attach here). Resolve and list tabs update after each write. All changes use editor transactions.
+
+## v46 — Comment sheet safe area at full height
+
+Implemented as core-sample-shell-v47. A full-height comment list or thread sheet stops below the top safe inset so the grab handle, entire header row, and Close control stay out from under the notch and status bar. In `display-mode: standalone`, `--safe-top` is `max(env(safe-area-inset-top), 47px)` so a Home Screen PWA still clears the status bar when env reads 0. Drag snapping uses the same cap.
+
+## v48 — Comment sheet compositor drag
+
+Implemented as core-sample-shell-v48. The comment sheet tracks the finger with transform-only motion during a drag (one height measure at pointer down, requestAnimationFrame coalescing, no duplicate touch handlers). Release eases to half, full, or dismiss; the v46 safe-area top cap is unchanged.
+
+## v49 — Comment sheet chrome, free-height drag, and long-press actions
+
+Implemented as core-sample-shell-v49. The thread header keeps only previous/next arrows (hidden at the ends or when there is one comment). Close, resolve, more, back, the quote button, and per-entry ⋯ are gone. Quoted text sits in the thread; swipe down closes; press-and-hold on a bubble opens an iOS-style action sheet (react, edit, delete reply, resolve/reopen, re-anchor, delete). Drag has no minimum clamp, rests at the released height, snaps full when thrown up or near the top, and closes when thrown down or pulled past 25%. Focusing the composer snaps to full and stays above the keyboard.
+
+## v50 — Single-row comment sheet chrome
+
+Implemented as core-sample-shell-v50. The grabber pill and prev/next arrows share one 44pt chrome row. The head overlays that row so hidden arrows no longer reserve a second row of height. Thread content starts immediately below the chrome in both single- and multi-comment threads, without a layout shift when the arrows toggle.
+
+## v51 — Comment sheet composer pinned during drag
+
+Implemented as core-sample-shell-v51. While the sheet card moves with `translateY` at full drag height, the reply composer counter-translates so it stays on the visible bottom edge (iOS sheet pattern). Chrome and composer heights are measured once at pointer down; snap animation eases both transforms together. The composer stacks above the thread with an opaque surface background.
+
+## v52 — Comment sheet overlay chrome and composer inset
+
+Implemented as core-sample-shell-v52. The grabber row is an absolute overlay so the thread and list scroll from the card top under a surface gradient. Bottom safe-area and keyboard inset sit on the composer with an opaque surface fill below it so thread bubbles never show through during drag or snap. Thread spacing follows an 8pt grid (grouped bubbles, quote line, composer hairline).
+
+## v53 — Comment sheet composer styling
+
+Implemented as core-sample-shell-v53. The reply bar uses an 8pt grid with pill field (36px resting height), a circular send control with up-arrow icon and 44pt hit target, and keyboard padding that keeps 8px above the inset. Send disables when the draft is empty (except in edit mode).
+
 ## Scripted vault pass
 
-Replaces the agent-driven live-vault tap-through. An anonymized fixture in `test/fixtures/vault/` is served by the local fake GitHub. Node checks cover sync (first download, edit/push, pull, conflict, Trash restore), sign-in (device flow, overlapping polls, 401 recheck, last-4 log, Sign in again), attachments (sidebar, embeds, paste/Image paths, folder rename with reused blob shas, missing blob skip), and Dataview TASK rollups. A few Playwright WebKit iPhone-13 standalone flows sign in, open the sidebar, edit with the format bar, add an image, and confirm sync. CI job `vault-pass` runs `npm run test:vault-pass` on every push and PR with a pass/fail summary. It does not open Joe's private vault and does not use real GitHub OAuth.
+Replaces the agent-driven live-vault tap-through. An anonymized fixture in `test/fixtures/vault/` is served by the local fake GitHub. Node checks cover sync (first download, edit/push, pull, conflict, Trash restore), sign-in (device flow, overlapping polls, 401 recheck, last-4 log, Sign in again), attachments (sidebar, embeds, paste/Image paths, folder rename with reused blob shas, missing blob skip), and Dataview TASK rollups. Playwright WebKit iPhone-13 standalone flows sign in, open the sidebar, edit with the format bar, add an image, create and rename an Untitled note from its title, add a comment and reply, and render a table and callout, each confirmed against the fake GitHub. It runs as a step of the CI `test` job after `npm test`, reusing the same WebKit install, with a pass/fail summary. It does not open Joe's private vault and does not use real GitHub OAuth.
 
 ## Priority when a stage gets crowded
 

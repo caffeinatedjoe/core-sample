@@ -1,10 +1,10 @@
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getFile, listFiles, putFile } from '../app/js/db.js';
-import { isIgnoredPath } from '../app/js/vault-paths.js';
-import { SYNC_STATUS } from '../app/js/github-sync.js';
-import { vaultPassHarness, vaultPassName } from './helpers/vault-pass.js';
+import { getFile, listFiles, putFile } from '../../app/js/db.js';
+import { isIgnoredPath } from '../../app/js/vault-paths.js';
+import { SYNC_STATUS } from '../../app/js/github-sync.js';
+import { vaultPassHarness, vaultPassName } from '../helpers/vault-pass.js';
 
 test(vaultPassName('first download pulls fixture notes and attachment stubs'), async () => {
   const box = await vaultPassHarness();

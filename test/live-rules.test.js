@@ -18,6 +18,12 @@ function widgetText(widget) {
   if (widget.kind === 'link') return `⟨link ${widget.label}→${widget.href}⟩`;
   if (widget.kind === 'wikilink') return `⟨wiki ${widget.label}→${widget.target}${widget.heading ? `#${widget.heading}` : ''}⟩`;
   if (widget.kind === 'image') return `⟨img ${widget.image.kind} ${widget.image.embed || widget.image.src || widget.image.name}⟩`;
+  if (widget.kind === 'table') return '⟨table⟩';
+  if (widget.kind === 'callout') return `⟨callout ${widget.callout?.kind || ''}⟩`;
+  if (widget.kind === 'math') return `⟨math ${widget.display ? 'block' : 'inline'} ${widget.tex}⟩`;
+  if (widget.kind === 'note-embed') return `⟨note ${widget.target}${widget.heading ? `#${widget.heading}` : ''}⟩`;
+  if (widget.kind === 'properties') return '⟨properties⟩';
+  if (widget.kind === 'fold') return '';
   return '?';
 }
 
@@ -32,6 +38,7 @@ function visible(doc, cursor = null) {
     .sort((a, b) => (a.from ?? a.at) - (b.from ?? b.at));
   for (const spec of covering) {
     const start = spec.from ?? spec.at;
+    if (spec.type === 'widget' && start < at) continue;
     out += doc.slice(at, start);
     if (spec.type === 'widget') {
       out += widgetText(spec.widget);
@@ -83,6 +90,36 @@ test('links render as their label and reveal per span; unsafe URLs get no href',
   assert.ok(inside.startsWith('see [the **site**](https://example.com) and'));
 });
 
+test('strikethrough decorations cover nested link text', () => {
+  const doc = '~~before [link text](https://example.com) after~~';
+  const specs = specsOf(doc);
+  const strike = specs.find((s) => s.type === 'mark' && s.cls === 'cm-strike');
+  const link = specs.find((s) => s.widget?.kind === 'link');
+  assert.equal(doc.slice(strike.from, strike.to), doc);
+  assert.equal(link.widget.label, 'link text');
+  assert.equal(link.widget.href, 'https://example.com');
+  assert.ok(strike.from <= link.from && strike.to >= link.to);
+  assert.equal(link.widget.cls, 'cm-strike');
+  assert.equal(stateOf(doc).doc.toString(), doc);
+  const plain = specsOf('see [link text](https://example.com)');
+  assert.equal(plain.find((s) => s.widget?.kind === 'link').widget.cls, undefined);
+});
+
+test('strikethrough also covers a wikilink and a bold nested link', () => {
+  const doc = '~~[[Note|alias]] and **[bold](https://example.com)**~~';
+  const specs = specsOf(doc);
+  const strike = specs.find((s) => s.type === 'mark' && s.cls === 'cm-strike');
+  const wiki = specs.find((s) => s.widget?.kind === 'wikilink');
+  const link = specs.find((s) => s.widget?.kind === 'link');
+  assert.ok(strike.from <= wiki.from && strike.to >= wiki.to);
+  assert.ok(strike.from <= link.from && strike.to >= link.to);
+  assert.match(wiki.widget.cls, /\bcm-strike\b/);
+  assert.match(link.widget.cls, /\bcm-strike\b/);
+  assert.match(link.widget.cls, /\bcm-strong\b/);
+  assert.equal(link.widget.label, 'bold');
+  assert.equal(stateOf(doc).doc.toString(), doc);
+});
+
 test('reference-style brackets without a URL stay as text', () => {
   assert.equal(visible('a [ref] b'), 'a [ref] b');
 });
@@ -93,8 +130,9 @@ test('wiki-links render as their alias or target and reveal per span', () => {
   assert.equal(visible(doc, doc.indexOf('plan]]')), 'go [[Projects/Plan|the plan]] or ⟨wiki Today→Inbox#Today⟩ now');
 });
 
-test('a note embed keeps the bang and shows a wiki-link chip, as the old preview did', () => {
-  assert.equal(visible('![[Other note]]'), '!⟨wiki Other note→Other note⟩');
+test('a note embed is a box off the caret and source on it', () => {
+  assert.equal(visible('![[Other note]]'), '⟨note Other note⟩');
+  assert.equal(visible('![[Other note]]', 3), '![[Other note]]⟨note Other note⟩');
 });
 
 test('bullets become dots unless the cursor touches the marker; ordered numbers stay', () => {
@@ -170,11 +208,22 @@ test('images render in place off the line and below their source on it', () => {
   assert.equal(image.widget.image.width, 300);
 });
 
-test('frontmatter is a muted block with no other rendering', () => {
+test('frontmatter is a Properties widget off the caret and muted source on it', () => {
   const doc = '---\ntitle: **x**\ntags: [a]\n---\n# Body';
-  assert.equal(visible(doc), '---\ntitle: **x**\ntags: [a]\n---\nBody');
-  const fm = specsOf(doc).filter((s) => s.cls === 'cm-frontmatter');
+  assert.equal(visible(doc), '⟨properties⟩\n\n\n\nBody');
+  const widget = specsOf(doc).find((s) => s.widget?.kind === 'properties');
+  assert.equal(widget.widget.fields[0].key, 'title');
+  const raw = visible(doc, 0);
+  assert.match(raw, /^---\ntitle: \*\*x\*\*\ntags: \[a\]\n---\n/);
+  const fm = specsOf(doc, 0).filter((s) => s.cls === 'cm-frontmatter');
   assert.equal(fm.length, 4);
+});
+
+test('document-comment HTML is not treated as a code block, so inner markdown still renders', () => {
+  const doc = '\u200b<!--c:ab1-->**Hello**<!--/c:ab1--> world\n<!--co:ab1 status:open\nme: hi\n-->';
+  const styles = specsOf(doc).filter((spec) => spec.type === 'mark').map((spec) => spec.cls);
+  assert.equal(styles.includes('cm-strong'), true);
+  assert.equal(visible(doc).includes('Hello'), true);
 });
 
 test('with no active ranges the whole note renders, so an unfocused editor reads like the old preview', () => {

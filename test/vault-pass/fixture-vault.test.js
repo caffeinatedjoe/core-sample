@@ -6,7 +6,7 @@ import {
   fixtureNotes,
   fixturePaths,
   loadFixtureVault,
-} from './helpers/fixture-vault.js';
+} from '../helpers/fixture-vault.js';
 
 test('the fixture vault is an anonymized Obsidian-shaped sample', async () => {
   const files = await loadFixtureVault();
@@ -20,6 +20,7 @@ test('the fixture vault is an anonymized Obsidian-shaped sample', async () => {
   assert.equal(paths.includes('Inbox.md'), true);
   assert.equal(paths.includes('Board.md'), true);
   assert.equal(paths.includes('Daily.md'), true);
+  assert.equal(paths.includes('Core Table.md'), true);
   assert.equal(paths.includes('Site Log (conflict 2026-10-29 1235).md'), true);
 
   const app = JSON.parse(files['.obsidian/app.json'].toString('utf8'));
@@ -28,6 +29,8 @@ test('the fixture vault is an anonymized Obsidian-shaped sample', async () => {
   assert.match(notes['Site Log.md'], /!\[\[image-20261029123530322\.png\]\]/);
   assert.match(notes['Site Log.md'], /!\[\[image-20261029124011200\.jpg\]\]/);
   assert.match(notes['Site Log.md'], /!\[\[image-20261029124500000\.gif\]\]/);
+  assert.match(notes['Core Table.md'], /^\| Depth \| Layer \|$/m);
+  assert.match(notes['Core Table.md'], /^> \[!note\] Field check$/m);
   assert.match(notes['Inbox.md'], /#todo/);
   assert.match(notes['Inbox.md'], /- \[ \] Label the trays #todo/);
   assert.match(notes['Board.md'], /```dataview/);

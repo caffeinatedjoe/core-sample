@@ -12,7 +12,8 @@ The app is served from [https://joecoffey.me/core-sample/](https://joecoffey.me/
 - Create and open notes. `[[wikilinks]]` open a local note, or create it if it is not there yet. Web links open outside the app.
 - Tap a checkbox and the Markdown updates in place, without raising the keyboard.
 - `TASK` Dataview queries render as a grouped task list. Checking a result updates the source note.
-- A left sidebar like Obsidian's (panel button, or swipe from the left edge): folders, rename, move, and Trash, and search by name or text. The gear opens Settings: GitHub, sync, backup export and import, and the build id.
+- A left sidebar like Obsidian's (panel button, or swipe from the left edge): folders, rename, move, and Trash, and search by name or text. The gear opens Settings: GitHub, sync, backup export and import, Comments, and the build id.
+- Document Comments from Obsidian (`<!--c:ID-->` anchors and `<!--co:ID-->` threads) hide in the editor, highlight the commented span, and stay byte-identical on disk. Use the format bar 💬 or the chip to create, reply, edit, react, resolve, or re-anchor. Show resolved and Comment name live in Settings.
 
 ## GitHub
 
@@ -27,11 +28,11 @@ npm run test:vault-pass
 python3 -m http.server -d app 8080
 ```
 
-`npm run test:vault-pass` is the scripted stand-in for a live vault pass: a fake GitHub serving `test/fixtures/vault/`, plus a few iPhone-viewport WebKit taps. It talks to 127.0.0.1 only. CI prints the pass/fail table on every push.
+`npm run test:vault-pass` is the scripted stand-in for a live vault pass: a fake GitHub serving `test/fixtures/vault/`, plus iPhone-viewport WebKit taps. Its tests live in `test/vault-pass/`, so `npm test` does not include them. It talks to 127.0.0.1 only. CI runs it in the `test` job and prints the pass/fail table on every push.
 
 Open `http://127.0.0.1:8080/`. Asset URLs are relative, so the same files work at `/` locally and at `/core-sample/` on GitHub Pages.
 
-Icons are built from `app/icons/source/core-sample-icon-source-v2.jpg`. After replacing that file, run `npm run icons` (needs Pillow) and commit the PNGs.
+Icons are built from `app/icons/source/core-sample-icon-full-v3.png` (Joe's concept is `app/icons/source/core-sample-icon-source-v3.jpg`). After replacing those files, run `npm run icons` (needs Pillow) and commit the PNGs.
 
 ## Install on an iPhone
 
