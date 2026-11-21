@@ -43,7 +43,6 @@ const DOC = [
   '',
 ].join('\n');
 
-const SHOTS = '/workspace/table-shots';
 
 test(`webkit ${APP_BUILD} wide tables keep readable cells and scroll sideways`, { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
@@ -79,7 +78,7 @@ test(`webkit ${APP_BUILD} wide tables keep readable cells and scroll sideways`, 
     assert.equal(callout.left, 200);
     assert.ok(callout.doc <= viewport.width);
     await shot(page, 'wide-table-callout.png');
-    await page.screenshot({ path: `${SHOTS}/wide-table-callout.png` });
+    await shot(page, 'wide-table-callout.png');
 
     await page.evaluate(() => {
       window.wideTable = () => [...document.querySelectorAll('#source .cm-table-widget')].find((wrap) => wrap.querySelectorAll('thead th').length === 11);
@@ -138,10 +137,10 @@ test(`webkit ${APP_BUILD} wide tables keep readable cells and scroll sideways`, 
       wrap.scrollIntoView({ block: 'start' });
     });
     await page.waitForTimeout(150);
-    await page.screenshot({ path: `${SHOTS}/wide-table-start.png` });
+    await shot(page, 'wide-table-start.png');
     await page.evaluate(() => { window.wideTable().scrollLeft = 520; });
     await page.waitForTimeout(150);
-    await page.screenshot({ path: `${SHOTS}/wide-table-scrolled.png` });
+    await shot(page, 'wide-table-scrolled.png');
 
     // (e) Tap a cell after scrolling: the editor opens, the column holds its
     // width, and the table stays where it was, through the commit redraw.
@@ -172,7 +171,7 @@ test(`webkit ${APP_BUILD} wide tables keep readable cells and scroll sideways`, 
     assert.equal(editing.left, target.left);
     assert.ok(Math.abs(editing.width - target.width) <= 1, `column ${target.width} -> ${editing.width}`);
     assert.ok(editing.tableWidth >= target.tableWidth - 1, `table ${target.tableWidth} -> ${editing.tableWidth}`);
-    await page.screenshot({ path: `${SHOTS}/wide-table-editing.png` });
+    await shot(page, 'wide-table-editing.png');
 
     await page.evaluate(() => {
       const field = document.querySelector('#source .table-cell-input');
