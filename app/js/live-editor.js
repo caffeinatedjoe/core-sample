@@ -434,21 +434,68 @@ function bindPointer(node, run) {
   });
 }
 
+// Sideways scroll of each wide table, by its header row, so a redraw (a cell
+// edit, or typing above the table) lands where the reader left it. Stored
+// from a passive scroll listener, read once per frame; nothing is written
+// on the scroll path.
+const tableScroll = new Map();
+
+function tableKey(spec) {
+  const header = spec.table?.rows?.[0]?.cells?.map((cell) => cell.text) || [];
+  return JSON.stringify(header);
+}
+
+function keepTableScroll(node, spec) {
+  const key = tableKey(spec);
+  let queued = false;
+  node.addEventListener('scroll', () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (node.isConnected) tableScroll.set(key, node.scrollLeft);
+    });
+  }, { passive: true });
+  const left = tableScroll.get(key);
+  if (left > 0) {
+    requestAnimationFrame(() => {
+      if (node.isConnected) node.scrollLeft = left;
+    });
+  }
+}
+
 function bindTable(node, view, spec) {
+  keepTableScroll(node, spec);
   const startEdit = (cell) => {
     if (cell.querySelector('input') || view.state.readOnly) return;
+    // Hold the column at its drawn width so swapping text for an input
+    // neither narrows it nor shifts the table. One read, on tap, before
+    // any write.
+    const width = cell.getBoundingClientRect().width;
+    const left = node.scrollLeft;
     const input = cell.ownerDocument.createElement('input');
     input.className = 'table-cell-input';
     input.value = cell.textContent;
     input.setAttribute('aria-label', 'Table cell');
+    cell.style.width = `${width}px`;
+    cell.style.minWidth = `${width}px`;
     cell.textContent = '';
     cell.append(input);
-    input.focus();
+    input.focus({ preventScroll: true });
     input.select();
+    if (node.scrollLeft !== left) node.scrollLeft = left;
     const commit = () => {
       if (!input.isConnected) return;
       const change = tableCellChange(spec.table, Number(cell.dataset.row), Number(cell.dataset.col), input.value);
+      const kept = node.scrollLeft;
+      tableScroll.set(tableKey(spec), kept);
+      if (Number(cell.dataset.row) === 0 && change && !change.noop) {
+        const header = spec.table.rows[0].cells.map((item, col) => (col === Number(cell.dataset.col) ? input.value.trim() : item.text));
+        tableScroll.set(JSON.stringify(header), kept);
+      }
       input.remove();
+      cell.style.removeProperty('width');
+      cell.style.removeProperty('min-width');
       if (!change || change.noop || view.state.readOnly) {
         cell.textContent = spec.table.rows[Number(cell.dataset.row)]?.cells[Number(cell.dataset.col)]?.text || '';
         return;

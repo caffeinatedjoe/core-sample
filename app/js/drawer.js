@@ -1,5 +1,7 @@
 import { beginSwipe, endSwipe, moveSwipe } from './drawer-gesture.js';
 
+const TABLE_SCROLLERS = '.cm-table-widget, .table-wrap';
+
 // The notes sidebar: the round panel button, the dimmed strip beside the
 // panel, and the left-edge swipe. Touch listeners are passive. A standing
 // non-passive listener once stopped iOS painting inline images, and the
@@ -78,10 +80,17 @@ export function mountDrawer(doc, { beforeOpen = () => {}, afterClose = () => {},
     return Boolean(selection && !selection.isCollapsed && selection.toString());
   }
 
+  // A wide table scrolls sideways under the finger; a drag that starts on
+  // one belongs to the table, even inside the edge zone. closest() only, so
+  // touchstart never reads layout.
+  function onTable(event) {
+    return Boolean(event.target?.closest?.(TABLE_SCROLLERS));
+  }
+
   function onStart(event) {
     swipe = null;
     if (event.touches.length !== 1 || blocked()) return;
-    if (!open && selecting()) return;
+    if (!open && (selecting() || onTable(event))) return;
     const at = point(event);
     swipe = beginSwipe({ ...at, open, width: width(), left: safeLeft() });
   }

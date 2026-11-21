@@ -9,6 +9,7 @@
   --soft: #efe4d4;
   --code: #efe6d8;
   --shadow: rgba(43, 37, 31, 0.14);
+  --table-shade: rgba(43, 37, 31, 0.2);
   --danger: #8d3c32;
   --mark: #c4a574;
   --panel: #f6f3ee;
@@ -41,6 +42,7 @@
     --soft: #3a2e26;
     --code: #2c261f;
     --shadow: rgba(0, 0, 0, 0.4);
+    --table-shade: rgba(0, 0, 0, 0.55);
     --danger: #f0a598;
     --mark: #d4a574;
     --panel: #1e1e1e;
@@ -1377,33 +1379,84 @@ html.is-keyboard .format-bar {
   font-weight: 400;
 }
 
-.cm-table-widget {
+/* Wide tables scroll sideways inside their own box; the note never does.
+   The table sizes to its content (at least the box width), and each cell
+   keeps a readable width instead of being squeezed to a few letters.
+   Edge shadows show which side has more: the two `local` covers scroll with
+   the content and hide the `scroll` shadows at either end. CSS only, so the
+   scroll path has no script. --table-bg must match the box behind it. */
+.cm-table-widget,
+.callout-body .table-wrap,
+.note-embed-body .table-wrap {
+  --table-bg: var(--surface);
+  /* The box takes its width from the note, never from the table, or a
+     wide table's min-content would stretch the editor itself. */
+  contain: inline-size;
   overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+  background:
+    linear-gradient(to right, var(--table-bg) 40%, transparent) left center / 28px 100% no-repeat local,
+    linear-gradient(to left, var(--table-bg) 40%, transparent) right center / 28px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--table-shade), transparent) left center / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--table-shade), transparent) right center / 12px 100% no-repeat scroll,
+    var(--table-bg);
 }
 
-.cm-table-widget table {
-  width: 100%;
-  min-width: 240px;
-  border-collapse: collapse;
-  font-size: 0.95em;
+.cm-table-widget {
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
+
+.callout-body .table-wrap,
+.note-embed-body .table-wrap {
+  --table-bg: var(--soft);
+  margin: 0.4em 0;
+}
+
+.cm-table-widget table,
+.callout-body table,
+.note-embed-body table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.cm-table-widget table { font-size: 0.95em; }
+
+.cm-table-widget th,
+.cm-table-widget td,
+.callout-body th,
+.callout-body td,
+.note-embed-body th,
+.note-embed-body td {
+  min-width: var(--cell-min, 8em);
+  max-width: var(--cell-max, 18em);
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: manual;
+}
+
+.cm-table-widget th *,
+.cm-table-widget td *,
+.callout-body th *,
+.callout-body td *,
+.note-embed-body th *,
+.note-embed-body td * { overflow-wrap: break-word; }
 
 .cm-table-widget th,
 .cm-table-widget td {
   padding: 10px 8px;
-  min-width: 44px;
   min-height: 44px;
   border-bottom: 1px solid var(--line);
   vertical-align: top;
-  overflow-wrap: anywhere;
 }
 
+/* Translucent so the edge shadow still shows through the header row. */
 .cm-table-widget th {
   font-weight: 600;
-  background: var(--soft);
+  background: color-mix(in srgb, var(--soft) 70%, transparent);
 }
 
 .cm-table-widget tr:last-child td { border-bottom: 0; }
@@ -1471,18 +1524,6 @@ html.is-keyboard .format-bar {
 
 .callout-body p,
 .note-embed-body p { margin: 0.3em 0; }
-
-.callout-body .table-wrap,
-.note-embed-body .table-wrap {
-  overflow-x: auto;
-  margin: 0.4em 0;
-}
-
-.callout-body table,
-.note-embed-body table {
-  width: 100%;
-  border-collapse: collapse;
-}
 
 .callout-body th,
 .callout-body td,
