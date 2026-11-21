@@ -78,7 +78,6 @@ test(`webkit ${APP_BUILD} wide tables keep readable cells and scroll sideways`, 
     assert.equal(callout.left, 200);
     assert.ok(callout.doc <= viewport.width);
     await shot(page, 'wide-table-callout.png');
-    await shot(page, 'wide-table-callout.png');
 
     await page.evaluate(() => {
       window.wideTable = () => [...document.querySelectorAll('#source .cm-table-widget')].find((wrap) => wrap.querySelectorAll('thead th').length === 11);
