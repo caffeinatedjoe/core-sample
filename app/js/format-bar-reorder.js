@@ -56,17 +56,28 @@ export function readLayoutFromBar(bar) {
   return { order, hiddenFrom };
 }
 
-export function mountFormatBarLongPress(scroll, {
+export function mountFormatBarLongPress(bar, scroll, {
   onEditToolbar,
   sheetOpen = () => false,
 } = {}) {
   const view = scroll?.ownerDocument?.defaultView;
-  if (!scroll || !view) {
+  if (!bar || !scroll || !view) {
     return { suppressClick: () => false, destroy() {} };
   }
 
   let longPress = null;
   let suppressClickUntil = 0;
+  let blockReleaseTouchEnd = false;
+
+  const onBarTouchEnd = (event) => {
+    if (!blockReleaseTouchEnd) return;
+    event.preventDefault();
+    blockReleaseTouchEnd = false;
+  };
+
+  const onBarContextMenu = (event) => {
+    event.preventDefault();
+  };
 
   const cancelLongPress = () => {
     if (!longPress) return;
@@ -91,6 +102,7 @@ export function mountFormatBarLongPress(scroll, {
         const press = longPress;
         longPress = null;
         if (!press || press.moved) return;
+        blockReleaseTouchEnd = true;
         suppressClickUntil = Date.now() + 800;
         onEditToolbar?.(press.node);
       }, LONG_PRESS_MS),
@@ -124,6 +136,9 @@ export function mountFormatBarLongPress(scroll, {
   scroll.addEventListener('pointerup', onPointerUp);
   scroll.addEventListener('pointercancel', onPointerUp);
   scroll.addEventListener('click', onClickCapture, true);
+  bar.addEventListener('touchend', onBarTouchEnd, { capture: true, passive: false });
+  bar.addEventListener('touchcancel', onBarTouchEnd, { capture: true, passive: false });
+  bar.addEventListener('contextmenu', onBarContextMenu);
 
   return {
     suppressClick() {
@@ -131,11 +146,15 @@ export function mountFormatBarLongPress(scroll, {
     },
     destroy() {
       cancelLongPress();
+      blockReleaseTouchEnd = false;
       scroll.removeEventListener('pointerdown', onPointerDown);
       scroll.removeEventListener('pointermove', onPointerMove);
       scroll.removeEventListener('pointerup', onPointerUp);
       scroll.removeEventListener('pointercancel', onPointerUp);
       scroll.removeEventListener('click', onClickCapture, true);
+      bar.removeEventListener('touchend', onBarTouchEnd, true);
+      bar.removeEventListener('touchcancel', onBarTouchEnd, true);
+      bar.removeEventListener('contextmenu', onBarContextMenu);
     },
   };
 }

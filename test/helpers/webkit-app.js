@@ -177,8 +177,7 @@ export async function fakeKeyboard(page, inset = 336) {
 // Synthetic touches. Playwright WebKit has no touch-drag API and refuses
 // `new Touch()`, but the legacy document.createTouch path still works.
 // Long-press a format button with touch + pointer events (WebKit createTouch).
-// Simulates iOS blurring the editor when the touch ends.
-export async function formatBarLongPress(page, formatId, { holdMs = 520, blurEditor = true } = {}) {
+export async function formatBarLongPress(page, formatId, { holdMs = 520, blurEditor = false } = {}) {
   const box = await page.locator(`[data-format="${formatId}"]`).boundingBox();
   if (!box) throw new Error(`missing format button ${formatId}`);
   const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -220,6 +219,62 @@ export async function formatBarLongPress(page, formatId, { holdMs = 520, blurEdi
     fireTouch('touchend', point.x, point.y, true);
     firePointer('pointerup', 0);
   }, { formatId, point, holdMs, blurEditor });
+}
+
+export async function formatBarTap(page, formatId) {
+  const box = await page.locator(`[data-format="${formatId}"]`).boundingBox();
+  if (!box) throw new Error(`missing format button ${formatId}`);
+  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.evaluate(({ formatId, point }) => {
+    const target = document.querySelector(`[data-format="${formatId}"]`);
+    if (!target) throw new Error(`missing format button ${formatId}`);
+    const pointerId = 92;
+    const touchAt = (x, y) => document.createTouch(window, target, pointerId, x, y, x, y);
+    const pt = touchAt(point.x, point.y);
+    target.dispatchEvent(new TouchEvent('touchstart', {
+      touches: document.createTouchList(pt),
+      targetTouches: document.createTouchList(pt),
+      changedTouches: document.createTouchList(pt),
+      bubbles: true,
+      cancelable: true,
+    }));
+    target.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: point.x,
+      clientY: point.y,
+      button: 0,
+      buttons: 1,
+      bubbles: true,
+      cancelable: true,
+    }));
+    target.dispatchEvent(new TouchEvent('touchend', {
+      touches: document.createTouchList(),
+      targetTouches: document.createTouchList(),
+      changedTouches: document.createTouchList(pt),
+      bubbles: true,
+      cancelable: true,
+    }));
+    target.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: point.x,
+      clientY: point.y,
+      button: 0,
+      buttons: 0,
+      bubbles: true,
+      cancelable: true,
+    }));
+    target.dispatchEvent(new MouseEvent('click', {
+      clientX: point.x,
+      clientY: point.y,
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    }));
+  }, { formatId, point });
 }
 
 export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14, frameMs = 16, holdMs = 200 } = {}) {
@@ -388,8 +443,28 @@ export async function formatBarTouchDrag(page, fromId, toId, { steps = 10, frame
     }
     firePointer('pointerup', to, 0);
     fireTouch('touchend', to.x, to.y, true);
-    document.querySelector('#source .cm-content')?.blur();
   }, { fromId, from, to, steps, frameMs });
+}
+
+export function editorFocused(page) {
+  return page.evaluate(() => Boolean(document.activeElement?.closest?.('.cm-content')));
+}
+
+export async function installFormatBarTouchSpy(page) {
+  await page.evaluate(() => {
+    window.__formatBarTouch = { starts: [], ends: [] };
+    const bar = document.getElementById('format-bar');
+    bar.addEventListener('touchstart', (event) => {
+      window.__formatBarTouch.starts.push(event.defaultPrevented);
+    });
+    bar.addEventListener('touchend', (event) => {
+      window.__formatBarTouch.ends.push(event.defaultPrevented);
+    });
+  });
+}
+
+export function readFormatBarTouchSpy(page) {
+  return page.evaluate(() => window.__formatBarTouch || { starts: [], ends: [] });
 }
 
 export async function touchPointerDownOutside(page, selector, point) {

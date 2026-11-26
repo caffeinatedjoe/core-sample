@@ -408,10 +408,15 @@ export function mountFormatBarEditSheet(doc, bar, {
     if (event.key === 'Escape' && open) closeSheet({ refocus: true });
   };
   doc.addEventListener('keydown', onKey);
+  const onGridTouchMove = (event) => {
+    if (drag) event.preventDefault();
+  };
+
   grid.addEventListener('pointerdown', onGridPointerDown);
   grid.addEventListener('pointermove', onGridPointerMove, { passive: false });
   grid.addEventListener('pointerup', onGridPointerUp);
   grid.addEventListener('pointercancel', onGridPointerUp);
+  grid.addEventListener('touchmove', onGridTouchMove, { passive: false });
 
   return {
     open: () => open,
@@ -432,6 +437,7 @@ export function mountFormatBarEditSheet(doc, bar, {
       grid.removeEventListener('pointermove', onGridPointerMove);
       grid.removeEventListener('pointerup', onGridPointerUp);
       grid.removeEventListener('pointercancel', onGridPointerUp);
+      grid.removeEventListener('touchmove', onGridTouchMove);
     },
   };
 }

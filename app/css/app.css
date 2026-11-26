@@ -322,6 +322,9 @@ a:focus-visible {
   background: #2c2c2c;
   color: #ececec;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 html.is-keyboard .format-bar {
@@ -516,7 +519,7 @@ html.is-keyboard .format-bar {
   border-radius: 10px;
   background: var(--bg);
   color: var(--ink);
-  touch-action: manipulation;
+  touch-action: none;
   -webkit-touch-callout: none;
 }
 
@@ -564,6 +567,9 @@ html.is-keyboard .format-bar {
   place-items: center;
   background: transparent;
   color: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .format-image {

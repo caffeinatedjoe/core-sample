@@ -422,6 +422,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   if (formatBar) {
     const scroll = formatBar.querySelector('.format-scroll');
     applySavedFormatBarLayout(formatBar);
+    for (const node of formatBar.querySelectorAll('button, label.format-btn')) {
+      node.setAttribute('tabindex', '-1');
+    }
     formatBarEditSheet = mountFormatBarEditSheet(doc, formatBar, {
       onOpen: paintFormatBar,
       onClose: paintFormatBar,
@@ -430,7 +433,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         else source.focus?.();
       },
     });
-    formatBarLongPress = mountFormatBarLongPress(scroll, {
+    formatBarLongPress = mountFormatBarLongPress(formatBar, scroll, {
       sheetOpen: () => formatBarEditSheet?.open?.(),
       onEditToolbar() {
         const range = source.selectionRange?.() || null;
