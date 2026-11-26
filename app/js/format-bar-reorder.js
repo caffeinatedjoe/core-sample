@@ -41,7 +41,10 @@ function readDomOrder(scroll) {
     .filter(Boolean);
 }
 
-export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStorage } = {}) {
+export function mountFormatBarReorder(doc, bar, {
+  storage = globalThis.localStorage,
+  onMoveModeChange,
+} = {}) {
   const scroll = bar.querySelector('.format-scroll');
   const view = doc.defaultView;
   if (!scroll || !view) {
@@ -55,6 +58,7 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
   let raf = 0;
   let pendingPointer = null;
   let exitListeners = null;
+  let moveModeEnteredAt = 0;
 
   const clearTransforms = () => {
     for (const child of scroll.children) {
@@ -78,20 +82,26 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
     clearTransforms();
     unbindExitListeners();
     persistOrder();
+    onMoveModeChange?.(false);
   };
 
   const enterMoveMode = () => {
     if (moveMode) return;
     moveMode = true;
+    moveModeEnteredAt = Date.now();
     bar.classList.add('is-format-reorder');
     scroll.classList.add('is-format-reorder');
-    bindExitListeners();
-    suppressClickUntil = Date.now() + 400;
+    onMoveModeChange?.(true);
+    view.requestAnimationFrame(() => {
+      if (moveMode) bindExitListeners();
+    });
+    suppressClickUntil = Date.now() + 600;
   };
 
   const bindExitListeners = () => {
     if (exitListeners) return;
     const onOutside = (event) => {
+      if (Date.now() - moveModeEnteredAt < 80) return;
       if (bar.contains(event.target)) return;
       exitMoveMode();
     };
@@ -268,10 +278,6 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
         longPress = null;
         if (!press || press.moved) return;
         enterMoveMode();
-        suppressClickUntil = Date.now() + 500;
-        const items = measureItems();
-        const row = items.find((item) => item.node === press.node);
-        if (row) startDrag(row.index, press.x, press.y, press.pointerId);
       }, LONG_PRESS_MS),
     };
   };
