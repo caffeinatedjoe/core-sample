@@ -144,6 +144,12 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
     return scroll.scrollLeft !== before;
   };
 
+  const applyDropIndex = (clientX) => {
+    if (!drag) return;
+    const contentX = pointerXContent(clientX);
+    drag.to = targetDropIndex(drag.from, drag.centers, contentX);
+  };
+
   const paintDragFrame = () => {
     raf = 0;
     if (!drag || !pendingPointer) return;
@@ -159,9 +165,7 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
       }
     }
 
-    const contentX = pointerXContent(clientX);
-    const nextTarget = targetDropIndex(drag.from, drag.centers, contentX);
-    if (nextTarget !== drag.to) drag.to = nextTarget;
+    applyDropIndex(clientX);
 
     const dragged = drag.items[drag.from]?.node;
     if (dragged) {
@@ -218,13 +222,15 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
     applyDomOrder(scroll, next);
   };
 
-  const finishDrag = (commit) => {
+  const finishDrag = (commit, clientX = null) => {
     if (!drag) return;
     if (raf) {
       view.cancelAnimationFrame(raf);
       raf = 0;
     }
+    const finalX = clientX ?? pendingPointer?.clientX;
     pendingPointer = null;
+    if (finalX != null) applyDropIndex(finalX);
     try {
       scroll.releasePointerCapture(drag.pointerId);
     } catch {
@@ -286,13 +292,13 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
   const onScrollPointerUp = (event) => {
     cancelLongPress();
     if (!drag || event.pointerId !== drag.pointerId) return;
-    finishDrag(true);
+    finishDrag(true, event.clientX);
   };
 
   const onScrollPointerCancel = (event) => {
     cancelLongPress();
     if (!drag || event.pointerId !== drag.pointerId) return;
-    finishDrag(false);
+    finishDrag(false, event.clientX);
   };
 
   const onScrollClick = (event) => {

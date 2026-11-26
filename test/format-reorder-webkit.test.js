@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DEFAULT_FORMAT_BAR_ORDER, FORMAT_BAR_ORDER_KEY } from '../app/js/format-bar-order.js';
-import { fakeKeyboard, note, openApp, withPhone } from './helpers/webkit-app.js';
+import { BUILD, fakeKeyboard, note, openApp, withPhone } from './helpers/webkit-app.js';
 
 const NOTE = 'Tasks.md';
 const TEXT = 'Reorder me.\n';
@@ -122,9 +122,16 @@ test('webkit drag reorders, outside tap exits, and order survives reload', { tim
     const parsed = JSON.parse(saved);
     assert.deepEqual(parsed, reordered);
 
-    await page.reload();
-    await page.waitForFunction(() => document.getElementById('build-version')?.textContent?.includes('v56'));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction((build) => document.getElementById('build-version')?.textContent === build, BUILD);
+    await page.waitForFunction(() => document.querySelector('#source .cm-content')?.getAttribute('contenteditable') === 'true');
+    await page.waitForFunction(async (text) => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
+      return view?.state.doc.toString() === text;
+    }, TEXT);
     await caretAt(page, 2);
+    await page.waitForFunction(() => Boolean(document.activeElement?.closest?.('.cm-content')));
     await fakeKeyboard(page, 336);
     await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
     const afterReload = await scrollOrder(page);
