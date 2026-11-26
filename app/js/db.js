@@ -1,5 +1,17 @@
 const DB_VERSION = 3;
 
+// fake-indexeddb rejects overlapping meta transactions; the device-flow path
+// also reads settings while claim/complete writes are in flight. One chain per
+// connection keeps meta access serialized without awaiting non-IDB work in a tx.
+const metaChains = new WeakMap();
+
+function withMetaChain(db, task) {
+  const prev = metaChains.get(db) || Promise.resolve();
+  const next = prev.then(task, task);
+  metaChains.set(db, next.catch(() => {}));
+  return next;
+}
+
 function run(db, storeName, mode, fn) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, mode);
@@ -106,22 +118,50 @@ export function listFiles(db) {
 }
 
 export function setMeta(db, key, value) {
-  return run(db, 'meta', 'readwrite', (store) => store.put({ key, value }));
+  return withMetaChain(db, () => run(db, 'meta', 'readwrite', (store) => store.put({ key, value })));
 }
 
 export function getMeta(db, key) {
-  return run(db, 'meta', 'readonly', (store) => store.get(key)).then((row) => (row ? row.value : undefined));
+  return withMetaChain(db, () => run(db, 'meta', 'readonly', (store) => store.get(key))
+    .then((row) => (row ? row.value : undefined)));
+}
+
+export function getMetaMany(db, keys) {
+  if (!keys.length) return Promise.resolve({});
+  return withMetaChain(db, () => new Promise((resolve, reject) => {
+    const tx = db.transaction('meta', 'readonly');
+    const store = tx.objectStore('meta');
+    const values = {};
+    let left = keys.length;
+    const readKey = (key) => {
+      const request = store.get(key);
+      request.onsuccess = () => {
+        values[key] = request.result ? request.result.value : undefined;
+        left -= 1;
+        if (!left) resolve(values);
+      };
+      request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+    };
+    try {
+      for (const key of keys) readKey(key);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    tx.onerror = () => reject(tx.error || new Error('IndexedDB request failed'));
+    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+  }));
 }
 
 export function deleteMeta(db, key) {
-  return run(db, 'meta', 'readwrite', (store) => store.delete(key));
+  return withMetaChain(db, () => run(db, 'meta', 'readwrite', (store) => store.delete(key)));
 }
 
 // Reads `keys` and writes what `decide` returns in one readwrite transaction,
 // so no other tab or reload can write between the read and the write.
 // `decide(values)` returns `{ key: value }` pairs to put, or null to write nothing.
 export function updateMeta(db, keys, decide) {
-  return new Promise((resolve, reject) => {
+  return withMetaChain(db, () => new Promise((resolve, reject) => {
     const tx = db.transaction('meta', 'readwrite');
     const store = tx.objectStore('meta');
     const values = {};
@@ -154,7 +194,7 @@ export function updateMeta(db, keys, decide) {
     tx.oncomplete = () => resolve(writes);
     tx.onerror = () => reject(tx.error || new Error('IndexedDB request failed'));
     tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
-  });
+  }));
 }
 
 export function commitFiles(db, { put = [], remove = [] } = {}) {

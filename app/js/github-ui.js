@@ -694,11 +694,11 @@ export function mountGithub(doc, db, hooks) {
     saveConfig().catch((error) => showError(error));
   });
   connectButton.addEventListener('click', () => {
-    connect();
+    connect().catch((error) => showError(error));
   });
   if (signAgain) {
     signAgain.addEventListener('click', () => {
-      connect();
+      connect().catch((error) => showError(error));
     });
   }
   codeButton.addEventListener('click', () => {
@@ -727,7 +727,7 @@ export function mountGithub(doc, db, hooks) {
     cancelSignIn();
   });
   tryAgain.addEventListener('click', () => {
-    connect();
+    connect().catch((error) => showError(error));
   });
   doc.addEventListener('visibilitychange', () => {
     if (doc.visibilityState === 'visible') kick();
