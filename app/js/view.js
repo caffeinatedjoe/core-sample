@@ -1,4 +1,5 @@
 import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, saveLocalFile, setMeta, updateMeta } from './db.js';
+import { applySavedFormatBarOrder, mountFormatBarReorder } from './format-bar-reorder.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -413,11 +414,19 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   source.readOnly = true;
   paintFormatBar();
   const formatBar = doc.getElementById('format-bar');
+  let formatBarReorder = null;
   if (formatBar) {
+    applySavedFormatBarOrder(formatBar);
+    formatBarReorder = mountFormatBarReorder(doc, formatBar);
     formatBar.addEventListener('pointerdown', (event) => {
       if (event.target.closest('button')) event.preventDefault();
     });
     formatBar.addEventListener('click', (event) => {
+      if (formatBarReorder?.suppressClick?.()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const button = event.target.closest('[data-format]');
       if (!button || source.readOnly) return;
       const action = button.getAttribute('data-format');
@@ -432,6 +441,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         paintFormatBar();
         return;
       }
+      if (action === 'image') return;
       if (action === 'comment') {
         if (button.disabled) return;
         const range = source.selectionRange?.() || { from: 0, to: 0 };
