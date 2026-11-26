@@ -41,10 +41,7 @@ function readDomOrder(scroll) {
     .filter(Boolean);
 }
 
-export function mountFormatBarReorder(doc, bar, {
-  storage = globalThis.localStorage,
-  onMoveModeChange,
-} = {}) {
+export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStorage } = {}) {
   const scroll = bar.querySelector('.format-scroll');
   const view = doc.defaultView;
   if (!scroll || !view) {
@@ -82,7 +79,6 @@ export function mountFormatBarReorder(doc, bar, {
     clearTransforms();
     unbindExitListeners();
     persistOrder();
-    onMoveModeChange?.(false);
   };
 
   const enterMoveMode = () => {
@@ -91,7 +87,6 @@ export function mountFormatBarReorder(doc, bar, {
     moveModeEnteredAt = Date.now();
     bar.classList.add('is-format-reorder');
     scroll.classList.add('is-format-reorder');
-    onMoveModeChange?.(true);
     view.requestAnimationFrame(() => {
       if (moveMode) bindExitListeners();
     });

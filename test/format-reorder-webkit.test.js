@@ -3,8 +3,10 @@ import { test } from 'node:test';
 import { DEFAULT_FORMAT_BAR_ORDER, FORMAT_BAR_ORDER_KEY } from '../app/js/format-bar-order.js';
 import {
   APP_BUILD,
+  editorFocused,
   fakeKeyboard,
   formatBarLongPress,
+  formatBarTap,
   formatBarTouchDrag,
   note,
   openApp,
@@ -20,7 +22,7 @@ async function caretAt(page, offset) {
     const { EditorView } = await import('./vendor/codemirror.js');
     const view = EditorView.findFromDOM(document.querySelector('#source .cm-editor'));
     view.focus();
-    view.dispatch({ selection: { anchor: offset } });
+    view.dispatch({ selection: { anchor: offset, head: offset + 2 } });
   }, offset);
   await page.waitForTimeout(50);
 }
@@ -28,6 +30,19 @@ async function caretAt(page, offset) {
 function scrollOrder(page) {
   return page.evaluate(() => [...document.querySelectorAll('#format-bar .format-scroll .format-btn')]
     .map((node) => node.getAttribute('data-format')));
+}
+
+async function assertFormatBarFocused(page) {
+  assert.equal(await editorFocused(page), true);
+  assert.equal(await page.evaluate(() => {
+    const bar = document.getElementById('format-bar');
+    return !bar.hidden;
+  }), true);
+  assert.equal(await page.evaluate(() => {
+    const bar = document.getElementById('format-bar');
+    return Boolean(document.activeElement?.closest?.('.cm-content'))
+      && !bar.hidden;
+  }), true);
 }
 
 test('webkit touch long-press keeps move mode visible after release', { timeout: 90000 }, async (t) => {
@@ -47,6 +62,7 @@ test('webkit touch long-press keeps move mode visible after release', { timeout:
       const bar = document.getElementById('format-bar');
       return bar.classList.contains('is-format-reorder') && !bar.hidden;
     });
+    await assertFormatBarFocused(page);
     const after = await page.evaluate(async () => {
       const { EditorView } = await import('./vendor/codemirror.js');
       return EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
@@ -70,12 +86,24 @@ test('webkit touch drag reorders, outside tap exits, and order survives reload',
       const bar = document.getElementById('format-bar');
       return bar.classList.contains('is-format-reorder') && !bar.hidden;
     });
+    await assertFormatBarFocused(page);
 
     await formatBarTouchDrag(page, 'bold', 'italic');
     await page.waitForFunction(() => document.getElementById('format-bar').classList.contains('is-format-reorder'));
+    await assertFormatBarFocused(page);
 
     await touchPointerDownOutside(page, '#source .cm-editor', { x: 40, y: 120 });
     await page.waitForFunction(() => !document.getElementById('format-bar').classList.contains('is-format-reorder'));
+    await assertFormatBarFocused(page);
+
+    await caretAt(page, 2);
+    await formatBarTap(page, 'bold');
+    await page.waitForFunction(async () => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      const text = EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
+      return text.includes('**');
+    });
+    await assertFormatBarFocused(page);
 
     const reordered = await scrollOrder(page);
     assert.notDeepEqual(reordered, beforeOrder);
