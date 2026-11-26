@@ -56,6 +56,7 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
   let pendingPointer = null;
   let exitListeners = null;
   let moveModeEnteredAt = 0;
+  let blockReleaseTouchEnd = false;
 
   const clearTransforms = () => {
     for (const child of scroll.children) {
@@ -79,18 +80,40 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
     clearTransforms();
     unbindExitListeners();
     persistOrder();
+    blockReleaseTouchEnd = false;
   };
 
   const enterMoveMode = () => {
     if (moveMode) return;
     moveMode = true;
     moveModeEnteredAt = Date.now();
+    blockReleaseTouchEnd = true;
     bar.classList.add('is-format-reorder');
     scroll.classList.add('is-format-reorder');
     view.requestAnimationFrame(() => {
       if (moveMode) bindExitListeners();
     });
     suppressClickUntil = Date.now() + 600;
+  };
+
+  const onBarTouchStart = (event) => {
+    if (!moveMode && !drag) return;
+    event.preventDefault();
+  };
+
+  const onBarTouchMove = (event) => {
+    if (!drag) return;
+    event.preventDefault();
+  };
+
+  const onBarTouchEnd = (event) => {
+    if (!moveMode && !drag && !blockReleaseTouchEnd) return;
+    event.preventDefault();
+    blockReleaseTouchEnd = false;
+  };
+
+  const onBarContextMenu = (event) => {
+    event.preventDefault();
   };
 
   const bindExitListeners = () => {
@@ -314,6 +337,11 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
   scroll.addEventListener('pointerup', onScrollPointerUp);
   scroll.addEventListener('pointercancel', onScrollPointerCancel);
   scroll.addEventListener('click', onScrollClick, true);
+  bar.addEventListener('touchstart', onBarTouchStart, { capture: true, passive: false });
+  bar.addEventListener('touchmove', onBarTouchMove, { capture: true, passive: false });
+  bar.addEventListener('touchend', onBarTouchEnd, { capture: true, passive: false });
+  bar.addEventListener('touchcancel', onBarTouchEnd, { capture: true, passive: false });
+  bar.addEventListener('contextmenu', onBarContextMenu);
 
   return {
     active() {
@@ -331,6 +359,11 @@ export function mountFormatBarReorder(doc, bar, { storage = globalThis.localStor
       scroll.removeEventListener('pointerup', onScrollPointerUp);
       scroll.removeEventListener('pointercancel', onScrollPointerCancel);
       scroll.removeEventListener('click', onScrollClick, true);
+      bar.removeEventListener('touchstart', onBarTouchStart, true);
+      bar.removeEventListener('touchmove', onBarTouchMove, true);
+      bar.removeEventListener('touchend', onBarTouchEnd, true);
+      bar.removeEventListener('touchcancel', onBarTouchEnd, true);
+      bar.removeEventListener('contextmenu', onBarContextMenu);
     },
   };
 }

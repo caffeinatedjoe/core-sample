@@ -421,14 +421,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
     for (const node of formatBar.querySelectorAll('button, label.format-btn')) {
       node.setAttribute('tabindex', '-1');
     }
-    const keepEditorFocus = (event) => {
-      if (!event.target.closest?.('.format-btn, [data-format]')) return;
-      event.preventDefault();
-    };
-    formatBar.addEventListener('touchstart', keepEditorFocus, { capture: true, passive: false });
-    formatBar.addEventListener('mousedown', keepEditorFocus, { capture: true });
     formatBar.addEventListener('pointerdown', (event) => {
-      if (event.target.closest('button, label.format-btn, [data-format]')) event.preventDefault();
+      if (event.target.closest('button')) event.preventDefault();
     });
     formatBar.addEventListener('click', (event) => {
       if (formatBarReorder?.suppressClick?.()) {

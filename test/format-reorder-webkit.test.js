@@ -8,8 +8,10 @@ import {
   formatBarLongPress,
   formatBarTap,
   formatBarTouchDrag,
+  installFormatBarTouchSpy,
   note,
   openApp,
+  readFormatBarTouchSpy,
   touchPointerDownOutside,
   withPhone,
 } from './helpers/webkit-app.js';
@@ -56,18 +58,45 @@ test('webkit touch long-press keeps move mode visible after release', { timeout:
       return EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
     });
 
+    await installFormatBarTouchSpy(page);
     await formatBarLongPress(page, 'bold');
 
     await page.waitForFunction(() => {
       const bar = document.getElementById('format-bar');
       return bar.classList.contains('is-format-reorder') && !bar.hidden;
     });
+    const longPressTouch = await readFormatBarTouchSpy(page);
+    assert.ok(longPressTouch.ends.length > 0);
+    assert.equal(longPressTouch.ends.at(-1), true);
+    assert.equal(longPressTouch.starts.every((prevented) => !prevented), true);
     await assertFormatBarFocused(page);
     const after = await page.evaluate(async () => {
       const { EditorView } = await import('./vendor/codemirror.js');
       return EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
     });
     assert.equal(before, after);
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit normal bold tap does not prevent touch events and formats', { timeout: 90000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
+    await installFormatBarTouchSpy(page);
+    await formatBarTap(page, 'bold');
+    const touchSpy = await readFormatBarTouchSpy(page);
+    assert.ok(touchSpy.starts.length > 0 && touchSpy.ends.length > 0);
+    assert.equal(touchSpy.starts.every((prevented) => !prevented), true);
+    assert.equal(touchSpy.ends.every((prevented) => !prevented), true);
+    await page.waitForFunction(async () => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      const text = EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
+      return text.includes('**');
+    });
+    await assertFormatBarFocused(page);
     assert.deepEqual(errors, []);
   });
 });
@@ -97,7 +126,11 @@ test('webkit touch drag reorders, outside tap exits, and order survives reload',
     await assertFormatBarFocused(page);
 
     await caretAt(page, 2);
+    await installFormatBarTouchSpy(page);
     await formatBarTap(page, 'bold');
+    const tapSpy = await readFormatBarTouchSpy(page);
+    assert.equal(tapSpy.starts.every((prevented) => !prevented), true);
+    assert.equal(tapSpy.ends.every((prevented) => !prevented), true);
     await page.waitForFunction(async () => {
       const { EditorView } = await import('./vendor/codemirror.js');
       const text = EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();

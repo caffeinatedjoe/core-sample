@@ -322,6 +322,9 @@ a:focus-visible {
   background: #2c2c2c;
   color: #ececec;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 html.is-keyboard .format-bar {
@@ -358,8 +361,6 @@ html.is-keyboard .format-bar {
 
 .format-scroll.is-format-reorder .format-btn {
   animation: format-bar-wiggle 0.42s ease-in-out infinite;
-  -webkit-touch-callout: none;
-  user-select: none;
 }
 
 .format-scroll.is-format-reorder .format-btn.is-dragging {
@@ -398,6 +399,9 @@ html.is-keyboard .format-bar {
   place-items: center;
   background: transparent;
   color: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .format-image {

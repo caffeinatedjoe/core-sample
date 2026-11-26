@@ -334,6 +334,23 @@ export function editorFocused(page) {
   return page.evaluate(() => Boolean(document.activeElement?.closest?.('.cm-content')));
 }
 
+export async function installFormatBarTouchSpy(page) {
+  await page.evaluate(() => {
+    window.__formatBarTouch = { starts: [], ends: [] };
+    const bar = document.getElementById('format-bar');
+    bar.addEventListener('touchstart', (event) => {
+      window.__formatBarTouch.starts.push(event.defaultPrevented);
+    });
+    bar.addEventListener('touchend', (event) => {
+      window.__formatBarTouch.ends.push(event.defaultPrevented);
+    });
+  });
+}
+
+export function readFormatBarTouchSpy(page) {
+  return page.evaluate(() => window.__formatBarTouch || { starts: [], ends: [] });
+}
+
 export async function touchPointerDownOutside(page, selector, point) {
   await page.evaluate(({ selector, point }) => {
     const target = document.querySelector(selector) || document.body;
