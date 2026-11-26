@@ -1217,6 +1217,11 @@ export function createLiveEditor(host, hooks = {}) {
     focus() {
       view.focus();
     },
+    restoreSelection({ from, to } = {}) {
+      if (typeof from !== 'number') return;
+      view.dispatch({ selection: { anchor: from, head: typeof to === 'number' ? to : from } });
+      view.focus();
+    },
     blur() {
       view.contentDOM.blur();
     },

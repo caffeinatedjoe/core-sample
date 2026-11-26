@@ -1,70 +1,43 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  DEFAULT_FORMAT_BAR_LAYOUT,
   DEFAULT_FORMAT_BAR_ORDER,
+  FORMAT_BAR_LAYOUT_KEY,
   FORMAT_BAR_ORDER_KEY,
-  mergeFormatBarOrder,
+  applyTileMove,
+  mergeFormatBarLayout,
+  migrateFormatBarLayoutFromV1,
   moveItem,
   neighborTransforms,
-  readFormatBarOrder,
+  readFormatBarLayout,
+  resetFormatBarLayout,
   targetDropIndex,
+  targetHiddenFrom,
+  visibleBarOrder,
+  writeFormatBarLayout,
   writeFormatBarOrder,
 } from '../app/js/format-bar-order.js';
 
-test('mergeFormatBarOrder keeps saved ids, drops unknown, appends new defaults', () => {
-  const saved = ['bold', 'italic', 'bogus', 'bold', 'task', 'removed'];
-  assert.deepEqual(mergeFormatBarOrder(saved), [
-    'bold',
-    'italic',
-    'task',
-    'bullet',
-    'numbered',
-    'link',
-    'image',
-    'heading',
-    'indent',
-    'outdent',
-    'lineUp',
-    'lineDown',
-    'quote',
-    'code',
-    'strike',
-    'fence',
-    'highlight',
-    'comment',
-    'rule',
-    'undo',
-    'redo',
-  ]);
+test('mergeFormatBarLayout keeps saved order and appends unknown defaults before hiddenFrom', () => {
+  const saved = { order: ['bold', 'italic'], hiddenFrom: 1 };
+  const merged = mergeFormatBarLayout(saved);
+  assert.equal(merged.order[0], 'bold');
+  assert.ok(merged.hiddenFrom >= 1);
+  assert.ok(merged.order.length === DEFAULT_FORMAT_BAR_ORDER.length);
+  for (const id of DEFAULT_FORMAT_BAR_ORDER) assert.ok(merged.order.includes(id));
 });
 
-test('mergeFormatBarOrder with no save returns defaults', () => {
-  assert.deepEqual(mergeFormatBarOrder(null), DEFAULT_FORMAT_BAR_ORDER);
-  assert.deepEqual(mergeFormatBarOrder([]), DEFAULT_FORMAT_BAR_ORDER);
+test('mergeFormatBarLayout with no save returns defaults with nothing hidden', () => {
+  assert.deepEqual(mergeFormatBarLayout(null), DEFAULT_FORMAT_BAR_LAYOUT);
 });
 
-test('targetDropIndex picks the slot under the pointer', () => {
-  const centers = [22, 66, 110, 154];
-  assert.equal(targetDropIndex(0, centers, 10), 0);
-  assert.equal(targetDropIndex(0, centers, 45), 1);
-  assert.equal(targetDropIndex(1, centers, 35), 0);
-  assert.equal(targetDropIndex(1, centers, 95), 2);
-  assert.equal(targetDropIndex(2, centers, 200), 3);
+test('visibleBarOrder excludes hidden ids', () => {
+  const layout = { order: ['bold', 'italic', 'task'], hiddenFrom: 1 };
+  assert.deepEqual(visibleBarOrder(layout), ['bold']);
 });
 
-test('neighborTransforms shifts only the items between from and to', () => {
-  assert.deepEqual(neighborTransforms(4, 1, 3, 44), [0, 0, -44, -44]);
-  assert.deepEqual(neighborTransforms(4, 3, 0, 44), [44, 44, 44, 0]);
-  assert.deepEqual(neighborTransforms(4, 1, 1, 44), [0, 0, 0, 0]);
-});
-
-test('moveItem reorders an array like a toolbar commit', () => {
-  const order = ['task', 'bold', 'italic', 'link'];
-  assert.deepEqual(moveItem(order, 1, 3), ['task', 'italic', 'link', 'bold']);
-  assert.deepEqual(moveItem(order, 3, 0), ['link', 'task', 'bold', 'italic']);
-});
-
-test('localStorage round-trip uses the versioned key', () => {
+test('migrateFormatBarLayoutFromV1 moves order to v2 and clears v1', () => {
   const storage = new Map();
   const shim = {
     getItem(key) {
@@ -73,8 +46,91 @@ test('localStorage round-trip uses the versioned key', () => {
     setItem(key, value) {
       storage.set(key, value);
     },
+    removeItem(key) {
+      storage.delete(key);
+    },
   };
-  writeFormatBarOrder(['bold', 'task'], shim);
-  assert.equal(storage.get(FORMAT_BAR_ORDER_KEY), '["bold","task"]');
-  assert.deepEqual(readFormatBarOrder(shim), ['bold', 'task']);
+  writeFormatBarOrder(['bold', 'task', 'italic'], shim);
+  const migrated = migrateFormatBarLayoutFromV1(shim);
+  assert.ok(migrated);
+  assert.equal(storage.has(FORMAT_BAR_ORDER_KEY), false);
+  assert.ok(storage.get(FORMAT_BAR_LAYOUT_KEY));
+  assert.deepEqual(readFormatBarLayout(shim).order.slice(0, 3), ['bold', 'task', 'italic']);
+});
+
+test('resetFormatBarLayout shows every default control', () => {
+  const layout = resetFormatBarLayout();
+  assert.deepEqual(layout.order, DEFAULT_FORMAT_BAR_ORDER);
+  assert.equal(layout.hiddenFrom, DEFAULT_FORMAT_BAR_ORDER.length);
+});
+
+test('applyTileMove moves into hidden without breaking hiddenFrom', () => {
+  const layout = {
+    order: ['task', 'bold', 'italic', 'link'],
+    hiddenFrom: 2,
+  };
+  const next = applyTileMove(layout, 0, 3);
+  assert.equal(next.order[2], 'task');
+  assert.equal(next.hiddenFrom, 1);
+});
+
+test('applyTileMove can hide when all were shown and drop is below divider', () => {
+  const layout = {
+    order: DEFAULT_FORMAT_BAR_ORDER.slice(),
+    hiddenFrom: DEFAULT_FORMAT_BAR_ORDER.length,
+  };
+  const next = applyTileMove(layout, 3, layout.order.length, { intoHidden: true });
+  assert.equal(next.hiddenFrom, next.order.length - 1);
+  assert.equal(visibleBarOrder(next).includes('bold'), false);
+});
+
+test('applyTileMove pulls from hidden to shown', () => {
+  const layout = { order: ['task', 'bold', 'italic'], hiddenFrom: 1 };
+  const next = applyTileMove(layout, 2, 0);
+  assert.equal(next.order[0], 'italic');
+  assert.equal(next.hiddenFrom, 2);
+});
+
+test('targetDropIndex picks the slot under the pointer', () => {
+  const centers = [22, 66, 110, 154];
+  assert.equal(targetDropIndex(0, centers, 10), 0);
+  assert.equal(targetDropIndex(0, centers, 45), 1);
+});
+
+test('neighborTransforms shifts only the items between from and to', () => {
+  assert.deepEqual(neighborTransforms(4, 1, 3, 44), [0, 0, -44, -44]);
+});
+
+test('moveItem reorders an array like a toolbar commit', () => {
+  const order = ['task', 'bold', 'italic', 'link'];
+  assert.deepEqual(moveItem(order, 1, 3), ['task', 'italic', 'bold', 'link']);
+});
+
+test('targetHiddenFrom tracks pointer Y across tile rows', () => {
+  const cells = [
+    { index: 0, top: 0, height: 64, width: 70, left: 0 },
+    { index: 1, top: 0, height: 64, width: 70, left: 80 },
+    { index: 2, top: 72, height: 64, width: 70, left: 0 },
+  ];
+  assert.equal(targetHiddenFrom(3, cells, 20), 0);
+  assert.equal(targetHiddenFrom(3, cells, 90), 2);
+  assert.equal(targetHiddenFrom(3, cells, 200), 3);
+});
+
+test('layout round-trip uses the v2 key', () => {
+  const storage = new Map();
+  const shim = {
+    getItem(key) {
+      return storage.has(key) ? storage.get(key) : null;
+    },
+    setItem(key, value) {
+      storage.set(key, value);
+    },
+    removeItem(key) {
+      storage.delete(key);
+    },
+  };
+  writeFormatBarLayout({ order: ['bold', 'task'], hiddenFrom: 1 }, shim);
+  assert.equal(storage.get(FORMAT_BAR_LAYOUT_KEY), '{"order":["bold","task"],"hiddenFrom":1}');
+  assert.deepEqual(readFormatBarLayout(shim), { order: ['bold', 'task'], hiddenFrom: 1 });
 });

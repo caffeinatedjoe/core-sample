@@ -2,7 +2,7 @@
 // CACHE must match APP_BUILD in ./js/version.js.
 importScripts('./js/shell-cache.js');
 
-const CACHE = 'core-sample-shell-v59';
+const CACHE = 'core-sample-shell-v60';
 
 const SHELL = [
   './',
@@ -39,6 +39,7 @@ const SHELL = [
   './js/format.js',
   './js/format-bar-order.js',
   './js/format-bar-reorder.js',
+  './js/format-bar-edit-sheet.js',
   './js/list-continue.js',
   './js/drawer.js',
   './js/drawer-gesture.js',

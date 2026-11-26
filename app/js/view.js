@@ -1,5 +1,6 @@
 import { commitFiles, deleteMeta, deleteOps, getMeta, listOps, putFile, putOp, saveLocalFile, setMeta, updateMeta } from './db.js';
-import { applySavedFormatBarOrder, mountFormatBarReorder } from './format-bar-reorder.js';
+import { mountFormatBarEditSheet } from './format-bar-edit-sheet.js';
+import { applySavedFormatBarLayout, mountFormatBarLongPress } from './format-bar-reorder.js';
 import { createDebouncedSaver } from './save.js';
 import {
   loadSession,
@@ -119,7 +120,8 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let commentName = 'me';
   let commentLastSeen = {};
   let commentsUi;
-  let formatBarReorder = null;
+  let formatBarLongPress = null;
+  let formatBarEditSheet = null;
 
   let sync = null;
   let syncConflicts = false;
@@ -264,7 +266,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function paintFormatBar() {
     const bar = doc.getElementById('format-bar');
     if (!bar) return;
-    bar.hidden = Boolean(source.readOnly) || !source.hasFocus() || Boolean(commentsUi?.showing?.());
+    bar.hidden = Boolean(source.readOnly)
+      || (!source.hasFocus() && !formatBarEditSheet?.open?.())
+      || Boolean(commentsUi?.showing?.());
     const commentBtn = bar.querySelector('[data-format="comment"]');
     if (commentBtn) {
       const range = source.selectionRange?.() || { from: 0, to: 0 };
@@ -416,16 +420,32 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   paintFormatBar();
   const formatBar = doc.getElementById('format-bar');
   if (formatBar) {
-    applySavedFormatBarOrder(formatBar);
-    formatBarReorder = mountFormatBarReorder(doc, formatBar);
+    const scroll = formatBar.querySelector('.format-scroll');
+    applySavedFormatBarLayout(formatBar);
     for (const node of formatBar.querySelectorAll('button, label.format-btn')) {
       node.setAttribute('tabindex', '-1');
     }
+    formatBarEditSheet = mountFormatBarEditSheet(doc, formatBar, {
+      onOpen: paintFormatBar,
+      onClose: paintFormatBar,
+      focusEditor(selection) {
+        if (selection) source.restoreSelection?.(selection);
+        else source.focus?.();
+      },
+    });
+    formatBarLongPress = mountFormatBarLongPress(formatBar, scroll, {
+      sheetOpen: () => formatBarEditSheet?.open?.(),
+      onEditToolbar() {
+        const range = source.selectionRange?.() || null;
+        formatBarEditSheet?.show?.(range);
+        paintFormatBar();
+      },
+    });
     formatBar.addEventListener('pointerdown', (event) => {
       if (event.target.closest('button')) event.preventDefault();
     });
     formatBar.addEventListener('click', (event) => {
-      if (formatBarReorder?.suppressClick?.()) {
+      if (formatBarLongPress?.suppressClick?.()) {
         event.preventDefault();
         event.stopPropagation();
         return;
