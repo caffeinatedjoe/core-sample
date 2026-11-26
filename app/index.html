@@ -107,6 +107,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6.5" width="17" height="11" rx="2"></rect><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M7.5 13h9M9 17.5 12 20l3-2.5"></path></svg>
       </button>
     </div>
+    <div id="format-edit-sheet" class="format-edit-sheet" hidden aria-hidden="true">
+      <button type="button" id="format-edit-scrim" class="format-edit-scrim" aria-label="Close edit toolbar"></button>
+      <div class="format-edit-card" role="dialog" aria-modal="true" aria-label="Edit toolbar">
+        <header class="format-edit-head">
+          <button type="button" id="format-edit-reset" class="format-edit-reset">Reset</button>
+          <h2>Edit toolbar</h2>
+          <button type="button" id="format-edit-done" class="sheet-done">Done</button>
+        </header>
+        <div id="format-edit-grid" class="format-edit-grid"></div>
+      </div>
+    </div>
     <pre id="layout-debug" class="layout-debug" hidden></pre>
     <div id="notes-sheet" class="drawer" inert>
       <div class="drawer-dim" aria-hidden="true"></div>

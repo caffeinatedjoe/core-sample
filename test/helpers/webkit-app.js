@@ -216,11 +216,126 @@ export async function formatBarLongPress(page, formatId, { holdMs = 520, blurEdi
     fireTouch('touchstart', point.x, point.y);
     firePointer('pointerdown', 1);
     await wait(holdMs);
-    firePointer('pointercancel', 0);
     if (blurEditor) document.querySelector('#source .cm-content')?.blur();
     fireTouch('touchend', point.x, point.y, true);
     firePointer('pointerup', 0);
   }, { formatId, point, holdMs, blurEditor });
+}
+
+export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14, frameMs = 16, holdMs = 200 } = {}) {
+  const fromBox = await page.locator(`#format-edit-grid [data-id="${fromId}"]`).boundingBox();
+  if (!fromBox) throw new Error(`missing edit sheet tile ${fromId}`);
+  const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+  await page.evaluate(async ({ fromId, from, to, steps, frameMs, holdMs }) => {
+    const tile = document.querySelector(`#format-edit-grid [data-id="${fromId}"]`);
+    const grid = document.getElementById('format-edit-grid');
+    if (!tile || !grid) throw new Error('edit sheet missing');
+    const pointerId = 96;
+    const firePointer = (type, point, buttons) => {
+      const target = type === 'pointerdown' ? tile : grid;
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: point.x,
+        clientY: point.y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    firePointer('pointerdown', from, 1);
+    await wait(holdMs);
+    for (let i = 1; i <= steps; i += 1) {
+      await wait(frameMs);
+      const point = {
+        x: from.x + ((to.x - from.x) * i) / steps,
+        y: from.y + ((to.y - from.y) * i) / steps,
+      };
+      firePointer('pointermove', point, 1);
+    }
+    firePointer('pointerup', to, 0);
+  }, { fromId, from, to, steps, frameMs, holdMs });
+  await page.waitForTimeout(80);
+}
+
+export async function formatEditSheetDrag(page, fromId, toId, { steps = 12, frameMs = 16 } = {}) {
+  const fromBox = await page.locator(`#format-edit-grid [data-id="${fromId}"]`).boundingBox();
+  const toBox = await page.locator(`#format-edit-grid [data-id="${toId}"]`).boundingBox();
+  if (!fromBox || !toBox) throw new Error('missing edit sheet tiles');
+  const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+  const to = { x: toBox.x + toBox.width / 2, y: toBox.y + toBox.height / 2 };
+  await page.evaluate(async ({ fromId, from, to, steps, frameMs }) => {
+    const tile = document.querySelector(`#format-edit-grid [data-id="${fromId}"]`);
+    const grid = document.getElementById('format-edit-grid');
+    if (!tile || !grid) throw new Error('edit sheet missing');
+    const pointerId = 94;
+    const firePointer = (type, point, buttons) => {
+      const target = type === 'pointerdown' ? tile : grid;
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: point.x,
+        clientY: point.y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    firePointer('pointerdown', from, 1);
+    await wait(200);
+    for (let i = 1; i <= steps; i += 1) {
+      await wait(frameMs);
+      const point = {
+        x: from.x + ((to.x - from.x) * i) / steps,
+        y: from.y + ((to.y - from.y) * i) / steps,
+      };
+      firePointer('pointermove', point, 1);
+    }
+    firePointer('pointerup', to, 0);
+  }, { fromId, from, to, steps, frameMs });
+  await page.waitForTimeout(80);
+}
+
+export async function formatEditSheetDragDivider(page, { y = 180, steps = 12, frameMs = 24 } = {}) {
+  await page.evaluate(async ({ y, steps, frameMs }) => {
+    const divider = document.querySelector('.format-edit-divider');
+    const grid = document.getElementById('format-edit-grid');
+    if (!divider || !grid) throw new Error('divider missing');
+    const box = divider.getBoundingClientRect();
+    const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const to = { x: from.x, y: from.y + y };
+    const pointerId = 95;
+    const fire = (type, point, buttons) => {
+      const target = type === 'pointerdown' ? divider : grid;
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: point.x,
+        clientY: point.y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    fire('pointerdown', from, 1);
+    await wait(32);
+    for (let i = 1; i <= steps; i += 1) {
+      await wait(frameMs);
+      const point = { x: from.x, y: from.y + ((to.y - from.y) * i) / steps };
+      fire('pointermove', point, 1);
+    }
+    fire('pointerup', to, 0);
+    await wait(50);
+  }, { y, steps, frameMs });
 }
 
 export async function formatBarTouchDrag(page, fromId, toId, { steps = 10, frameMs = 16 } = {}) {

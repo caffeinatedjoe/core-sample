@@ -347,38 +347,204 @@ html.is-keyboard .format-bar {
   -webkit-touch-callout: none;
 }
 
-.format-bar.is-format-reorder {
-  outline: 1px solid rgba(214, 191, 152, 0.45);
-  outline-offset: 1px;
+.format-edit-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
-.format-scroll.is-format-reorder {
+.format-edit-sheet:not([hidden]) {
+  pointer-events: auto;
+}
+
+.format-edit-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(20, 16, 12, 0.28);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.format-edit-sheet.is-open .format-edit-scrim {
+  opacity: 1;
+}
+
+.format-edit-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  max-height: min(72vh, calc(100% - var(--safe-top) - 16px));
+  border-radius: 16px 16px 0 0;
+  background: var(--surface);
+  color: var(--ink);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
+  transform: translateY(100%);
+  transition: transform 240ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.format-edit-sheet.is-open .format-edit-card {
+  transform: translateY(0);
+}
+
+.format-edit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: calc(var(--safe-top) + 8px) 16px 8px;
+}
+
+.format-edit-head h2 {
+  margin: 0;
+  flex: 1;
+  text-align: center;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.format-edit-reset {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 16px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px;
+}
+
+.format-edit-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px 10px;
+  padding: 4px 16px calc(var(--safe-bottom) + 16px);
+  -webkit-overflow-scrolling: touch;
+}
+
+.format-edit-tile {
+  flex: 1 1 calc((100% - 40px) / 5);
+  max-width: calc((100% - 40px) / 4);
+  min-width: 64px;
+  min-height: 64px;
+  border: 0;
+  border-radius: 12px;
+  padding: 6px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--chip);
+  color: inherit;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+.format-edit-tile.is-dragging {
+  z-index: 2;
+  position: relative;
+  opacity: 0.95;
   touch-action: none;
 }
 
-.format-scroll.is-format-reorder .format-btn {
-  animation: format-bar-wiggle 0.42s ease-in-out infinite;
-  -webkit-touch-callout: none;
-  user-select: none;
+.format-edit-tile.is-bounce {
+  animation: format-edit-bounce 180ms ease;
 }
 
-.format-scroll.is-format-reorder .format-btn.is-dragging {
-  z-index: 2;
-  position: relative;
-  animation: none;
-}
-
-@keyframes format-bar-wiggle {
-  0%,
+@keyframes format-edit-bounce {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(0.95);
+  }
   100% {
-    transform: rotate(0deg);
+    transform: scale(1);
   }
-  25% {
-    transform: rotate(-2deg);
-  }
-  75% {
-    transform: rotate(2deg);
-  }
+}
+
+.format-edit-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+
+.format-edit-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+
+.format-edit-label {
+  font-size: 11px;
+  line-height: 1.1;
+  text-align: center;
+  opacity: 0.82;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.format-edit-divider {
+  flex: 0 0 100%;
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+}
+
+.format-edit-divider.is-dragging {
+  touch-action: none;
+  opacity: 0.92;
+}
+
+.format-edit-divider-label {
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.format-edit-divider-grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.format-edit-empty {
+  flex: 0 0 100%;
+  margin: 0;
+  padding: 8px 0 0;
+  font-size: 14px;
+  opacity: 0.65;
+  text-align: center;
 }
 
 .format-scroll::-webkit-scrollbar {

@@ -1,7 +1,9 @@
-// Format toolbar button ids, saved order merge, and drag index math. No DOM.
+// Format toolbar layout merge, persistence, and drag index math. No DOM.
 
 export const FORMAT_BAR_ORDER_KEY = 'core-sample-format-bar-order-v1';
+export const FORMAT_BAR_LAYOUT_KEY = 'core-sample-format-bar-layout-v2';
 
+/** ids in the scroll row; dismiss lives outside and is not editable */
 export const DEFAULT_FORMAT_BAR_ORDER = [
   'task',
   'bullet',
@@ -26,6 +28,11 @@ export const DEFAULT_FORMAT_BAR_ORDER = [
   'redo',
 ];
 
+export const DEFAULT_FORMAT_BAR_LAYOUT = {
+  order: DEFAULT_FORMAT_BAR_ORDER,
+  hiddenFrom: DEFAULT_FORMAT_BAR_ORDER.length,
+};
+
 export function formatBarId(node) {
   const id = node?.dataset?.format;
   return id || null;
@@ -44,6 +51,50 @@ export function mergeFormatBarOrder(saved, defaults = DEFAULT_FORMAT_BAR_ORDER) 
   return out;
 }
 
+/** Merge persisted layout; new ids insert in the shown region (before hiddenFrom). */
+export function mergeFormatBarLayout(saved, defaults = DEFAULT_FORMAT_BAR_ORDER) {
+  const known = new Set(defaults);
+  const base = { order: [], hiddenFrom: defaults.length };
+  let hiddenFrom = defaults.length;
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    if (Array.isArray(saved.order)) {
+      for (const id of saved.order) {
+        if (typeof id !== 'string' || !known.has(id) || base.order.includes(id)) continue;
+        base.order.push(id);
+      }
+    }
+    if (typeof saved.hiddenFrom === 'number' && Number.isFinite(saved.hiddenFrom)) {
+      hiddenFrom = Math.trunc(saved.hiddenFrom);
+    }
+  } else if (Array.isArray(saved)) {
+    base.order = mergeFormatBarOrder(saved, defaults);
+    hiddenFrom = base.order.length;
+  }
+  for (const id of defaults) {
+    if (!base.order.includes(id)) {
+      const at = Math.max(0, Math.min(hiddenFrom, base.order.length));
+      base.order.splice(at, 0, id);
+      hiddenFrom += 1;
+    }
+  }
+  base.hiddenFrom = clampHiddenFrom(hiddenFrom, base.order.length);
+  return base;
+}
+
+export function clampHiddenFrom(hiddenFrom, length) {
+  return Math.max(0, Math.min(length, Math.trunc(hiddenFrom)));
+}
+
+export function visibleBarOrder(layout) {
+  const { order, hiddenFrom } = layout;
+  return order.slice(0, clampHiddenFrom(hiddenFrom, order.length));
+}
+
+export function hiddenBarOrder(layout) {
+  const { order, hiddenFrom } = layout;
+  return order.slice(clampHiddenFrom(hiddenFrom, order.length));
+}
+
 export function readFormatBarOrder(storage) {
   try {
     const raw = storage?.getItem?.(FORMAT_BAR_ORDER_KEY);
@@ -59,11 +110,52 @@ export function writeFormatBarOrder(order, storage) {
   storage?.setItem?.(FORMAT_BAR_ORDER_KEY, JSON.stringify(order));
 }
 
+export function readFormatBarLayout(storage) {
+  try {
+    const raw = storage?.getItem?.(FORMAT_BAR_LAYOUT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.order)) return parsed;
+    }
+    const migrated = migrateFormatBarLayoutFromV1(storage);
+    if (migrated) return migrated;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeFormatBarLayout(layout, storage) {
+  storage?.setItem?.(FORMAT_BAR_LAYOUT_KEY, JSON.stringify(layout));
+}
+
+/** Read v1 once, write v2, remove v1. */
+export function migrateFormatBarLayoutFromV1(storage) {
+  const v1 = readFormatBarOrder(storage);
+  if (!v1) return null;
+  const order = mergeFormatBarOrder(v1);
+  const layout = { order, hiddenFrom: order.length };
+  writeFormatBarLayout(layout, storage);
+  try {
+    storage?.removeItem?.(FORMAT_BAR_ORDER_KEY);
+  } catch {
+    /* ok */
+  }
+  return layout;
+}
+
+export function resetFormatBarLayout() {
+  return {
+    order: DEFAULT_FORMAT_BAR_ORDER.slice(),
+    hiddenFrom: DEFAULT_FORMAT_BAR_ORDER.length,
+  };
+}
+
 export function orderFromScrollChildren(ids) {
   return ids.filter((id) => DEFAULT_FORMAT_BAR_ORDER.includes(id));
 }
 
-/** Horizontal centers in the same coordinate system (e.g. scroll content). */
+/** Horizontal centers in scroll content coordinates. */
 export function targetDropIndex(fromIndex, centers, pointerX) {
   const n = centers.length;
   if (!n || fromIndex < 0 || fromIndex >= n) return fromIndex;
@@ -93,8 +185,76 @@ export function neighborTransforms(length, from, to, stride) {
 
 export function moveItem(order, from, to) {
   const next = order.slice();
-  if (from < 0 || from >= next.length || to < 0 || to >= next.length) return next;
+  if (from < 0 || from >= next.length || to < 0 || to > next.length) return next;
+  if (from === to) return next;
   const [item] = next.splice(from, 1);
-  next.splice(to, 0, item);
+  const insertAt = to > from ? to - 1 : to;
+  next.splice(insertAt, 0, item);
   return next;
+}
+
+/** Reorder a tile and keep hiddenFrom aligned with the shown/hidden split. */
+export function applyTileMove(layout, from, to, { intoHidden = false } = {}) {
+  const order = layout.order.slice();
+  const hf0 = clampHiddenFrom(layout.hiddenFrom, order.length);
+  if (from < 0 || from >= order.length) return { order, hiddenFrom: hf0 };
+  let hf = hf0;
+  const wasShown = from < hf;
+  const [item] = order.splice(from, 1);
+  if (from < hf) hf -= 1;
+  let insertAt = to;
+  if (to > from) insertAt = to - 1;
+  insertAt = Math.max(0, Math.min(insertAt, order.length));
+  order.splice(insertAt, 0, item);
+  const nowShown = insertAt < hf;
+  if (intoHidden && hf0 === layout.order.length && wasShown) {
+    hf = Math.min(insertAt, order.length);
+  } else if (!wasShown && nowShown) hf += 1;
+  return { order, hiddenFrom: clampHiddenFrom(hf, order.length) };
+}
+
+/** Each cell: { left, top, width, height, index }. Returns flat order index or divider index. */
+export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { dividerRow = null } = {}) {
+  if (!cells.length) return 0;
+  const hit = cells.find((cell) => (
+    pointerX >= cell.left
+    && pointerX < cell.left + cell.width
+    && pointerY >= cell.top
+    && pointerY < cell.top + cell.height
+  ));
+  if (hit) {
+    const midX = hit.left + hit.width / 2;
+    return pointerX < midX ? hit.index : hit.index + 1;
+  }
+  if (dividerRow) {
+    const row = dividerRow;
+    if (pointerY >= row.top && pointerY < row.top + row.height) {
+      return row.index;
+    }
+  }
+  let best = fromIndex;
+  let bestDist = Infinity;
+  for (const cell of cells) {
+    const cx = cell.left + cell.width / 2;
+    const cy = cell.top + cell.height / 2;
+    const d = (pointerX - cx) ** 2 + (pointerY - cy) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = cell.index + (pointerX >= cx ? 1 : 0);
+    }
+  }
+  return Math.max(0, Math.min(cells.length, best));
+}
+
+/** Pick hiddenFrom (0..orderLength) from pointer Y and tile rows. */
+export function targetHiddenFrom(orderLength, cells, pointerY) {
+  if (!cells.length) return clampHiddenFrom(0, orderLength);
+  if (pointerY <= cells[0].top) return 0;
+  const last = cells[cells.length - 1];
+  if (pointerY >= last.top + last.height) return clampHiddenFrom(orderLength, orderLength);
+  let hiddenFrom = 0;
+  for (const cell of cells) {
+    if (pointerY >= cell.top + cell.height / 2) hiddenFrom = cell.index + 1;
+  }
+  return clampHiddenFrom(hiddenFrom, orderLength);
 }
