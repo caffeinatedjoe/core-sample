@@ -118,9 +118,6 @@ export function mountFormatBarLongPress(bar, scroll, {
   };
 
   const onPointerUp = () => {
-    if (longPress) {
-      suppressClickUntil = Date.now() + 400;
-    }
     cancelLongPress();
   };
 

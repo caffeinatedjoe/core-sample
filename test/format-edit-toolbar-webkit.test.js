@@ -4,11 +4,14 @@ import { DEFAULT_FORMAT_BAR_ORDER, FORMAT_BAR_LAYOUT_KEY } from '../app/js/forma
 import {
   APP_BUILD,
   fakeKeyboard,
+  editorFocused,
   formatBarLongPress,
   formatEditSheetDragDivider,
   formatEditSheetDragToPoint,
+  installFormatBarTouchSpy,
   note,
   openApp,
+  readFormatBarTouchSpy,
   withPhone,
 } from './helpers/webkit-app.js';
 
@@ -113,48 +116,28 @@ test('webkit Done closes sheet, refocuses editor, and layout survives reload', {
   });
 });
 
-test('webkit normal bold tap is not defaultPrevented and still formats', { timeout: 90000 }, async (t) => {
+test('webkit normal bold tap keeps editor focus, is not touch-prevented, and formats', { timeout: 90000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);
     await caretAt(page, 2);
     await fakeKeyboard(page, 336);
-    const flags = await page.evaluate(async () => {
-      const target = document.querySelector('[data-format="bold"]');
-      let startPrevented = false;
-      let endPrevented = false;
-      const onStart = (event) => {
-        if (event.defaultPrevented) startPrevented = true;
-      };
-      const onEnd = (event) => {
-        if (event.defaultPrevented) endPrevented = true;
-      };
-      target.addEventListener('touchstart', onStart);
-      target.addEventListener('touchend', onEnd);
-      const box = target.getBoundingClientRect();
-      const x = box.x + box.width / 2;
-      const y = box.y + box.height / 2;
-      const pt = document.createTouch(window, target, 71, x, y, x, y);
-      target.dispatchEvent(new TouchEvent('touchstart', {
-        touches: document.createTouchList(pt),
-        changedTouches: document.createTouchList(pt),
-        bubbles: true,
-        cancelable: true,
-      }));
-      target.dispatchEvent(new TouchEvent('touchend', {
-        changedTouches: document.createTouchList(pt),
-        bubbles: true,
-        cancelable: true,
-      }));
-      target.removeEventListener('touchstart', onStart);
-      target.removeEventListener('touchend', onEnd);
-      target.click();
+    await installFormatBarTouchSpy(page);
+    assert.equal(await editorFocused(page), true);
+    const before = await page.evaluate(async () => {
       const { EditorView } = await import('./vendor/codemirror.js');
-      const doc = EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
-      return { startPrevented, endPrevented, doc };
+      return EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
     });
-    assert.equal(flags.startPrevented, false);
-    assert.equal(flags.endPrevented, false);
-    assert.match(flags.doc, /\*\*/);
+    await page.evaluate(() => document.querySelector('[data-format="bold"]').click());
+    const touch = await readFormatBarTouchSpy(page);
+    assert.equal(touch.starts.some(Boolean), false, 'touchstart was defaultPrevented');
+    assert.equal(touch.ends.some(Boolean), false, 'touchend was defaultPrevented');
+    assert.equal(await editorFocused(page), true, 'bold tap keeps focus in .cm-content');
+    const after = await page.evaluate(async () => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      return EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.doc.toString();
+    });
+    assert.notEqual(after, before);
+    assert.match(after, /\*\*/);
     assert.deepEqual(errors, []);
   });
 });

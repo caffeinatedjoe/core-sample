@@ -441,6 +441,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         paintFormatBar();
       },
     });
+    formatBar.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('button')) event.preventDefault();
+    });
     formatBar.addEventListener('click', (event) => {
       if (formatBarLongPress?.suppressClick?.()) {
         event.preventDefault();
