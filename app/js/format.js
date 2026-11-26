@@ -14,6 +14,8 @@ export const FORMAT_ACTIONS = [
   'heading',
   'indent',
   'outdent',
+  'lineUp',
+  'lineDown',
   'quote',
   'code',
   'strike',
@@ -207,7 +209,7 @@ function ruleChange(text, from, to) {
 }
 
 export function formatChange(text, from, to, action) {
-  if (action === 'undo' || action === 'redo' || action === 'dismiss') return null;
+  if (action === 'undo' || action === 'redo' || action === 'dismiss' || action === 'lineUp' || action === 'lineDown') return null;
   if (action === 'bold') return wrapInline(text, from, to, '**');
   if (action === 'italic') return wrapInline(text, from, to, '*');
   if (action === 'strike') return wrapInline(text, from, to, '~~');

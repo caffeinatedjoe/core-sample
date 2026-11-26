@@ -12,7 +12,7 @@ function run(text, from, to, action) {
 test('FORMAT_ACTIONS lists every toolbar edit in order', () => {
   assert.deepEqual(FORMAT_ACTIONS, [
     'task', 'bullet', 'numbered', 'bold', 'italic', 'link', 'heading',
-    'indent', 'outdent', 'quote', 'code', 'strike', 'fence', 'highlight',
+    'indent', 'outdent', 'lineUp', 'lineDown', 'quote', 'code', 'strike', 'fence', 'highlight',
     'rule', 'undo', 'redo',
   ]);
 });
@@ -104,7 +104,7 @@ test('bytes outside the edited span stay identical', () => {
 
 test('every action either edits, is a history command, or is a no-op outdent', () => {
   for (const action of FORMAT_ACTIONS) {
-    if (action === 'undo' || action === 'redo') {
+    if (action === 'undo' || action === 'redo' || action === 'lineUp' || action === 'lineDown') {
       assert.equal(formatChange('text', 0, 4, action), null);
       continue;
     }

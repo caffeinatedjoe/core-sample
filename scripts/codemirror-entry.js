@@ -26,6 +26,8 @@ export {
   defaultKeymap,
   history,
   historyKeymap,
+  moveLineDown,
+  moveLineUp,
   redo,
   undo,
 } from '@codemirror/commands';
