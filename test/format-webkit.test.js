@@ -97,6 +97,33 @@ test('webkit format toolbar sits above the keyboard and scrolls sideways', { tim
   });
 });
 
+test('webkit move-line buttons move text and keep the editor focused', { timeout: 90000 }, async (t) => {
+  const DOC = 'alpha\nbeta\ngamma';
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, DOC)], NOTE);
+    await writeNote(page, DOC);
+    await caretAt(page, DOC.indexOf('beta'));
+    await fakeKeyboard(page, 336);
+    await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
+
+    const buttons = await page.evaluate(() => [...document.querySelectorAll('#format-bar .format-scroll [data-format]')]
+      .map((node) => ({
+        action: node.getAttribute('data-format'),
+        label: node.getAttribute('aria-label'),
+      })));
+    assert.ok(buttons.some((b) => b.action === 'lineUp' && b.label === 'Move line up'));
+    assert.ok(buttons.some((b) => b.action === 'lineDown' && b.label === 'Move line down'));
+
+    const before = await noteText(page);
+    await page.locator('[data-format="lineUp"]').click();
+    const after = await noteText(page);
+    assert.equal(after, 'beta\nalpha\ngamma');
+    assert.notEqual(after, before);
+    assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest?.('.cm-content'))), true);
+    assert.deepEqual(errors, []);
+  });
+});
+
 test('webkit the sync flag is a 44pt dot and the toolbar sits flush in dark mode', { timeout: 90000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);

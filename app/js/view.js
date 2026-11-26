@@ -270,6 +270,18 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       commentBtn.disabled = !allowed;
       commentBtn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
     }
+    const lineUpBtn = bar.querySelector('[data-format="lineUp"]');
+    if (lineUpBtn) {
+      const allowed = source.canMoveLineUp?.() ?? true;
+      lineUpBtn.disabled = !allowed;
+      lineUpBtn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+    }
+    const lineDownBtn = bar.querySelector('[data-format="lineDown"]');
+    if (lineDownBtn) {
+      const allowed = source.canMoveLineDown?.() ?? true;
+      lineDownBtn.disabled = !allowed;
+      lineDownBtn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+    }
   }
 
   const source = createEditor(host, {
@@ -411,6 +423,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
       const action = button.getAttribute('data-format');
       if (action === 'dismiss') {
         source.blur();
+        paintFormatBar();
+        return;
+      }
+      if (action === 'lineUp' || action === 'lineDown') {
+        if (button.disabled) return;
+        source.format?.(action);
         paintFormatBar();
         return;
       }

@@ -14,6 +14,8 @@ import {
   history,
   historyKeymap,
   keymap,
+  moveLineDown,
+  moveLineUp,
   placeholder,
   redo,
   syntaxTree,
@@ -650,6 +652,34 @@ class LiveWidget extends WidgetType {
   }
 }
 
+function selectedLineBlocks(state) {
+  const blocks = [];
+  let upto = -1;
+  for (const range of state.selection.ranges) {
+    let startLine = state.doc.lineAt(range.from);
+    let endLine = state.doc.lineAt(range.to);
+    if (!range.empty && range.to === endLine.from) {
+      endLine = state.doc.lineAt(Math.max(0, range.to - 1));
+    }
+    if (upto >= startLine.number) {
+      const prev = blocks[blocks.length - 1];
+      prev.to = endLine.to;
+      prev.ranges.push(range);
+    } else {
+      blocks.push({ from: startLine.from, to: endLine.to, ranges: [range] });
+    }
+    upto = endLine.number + 1;
+  }
+  return blocks;
+}
+
+function canMoveLine(state, forward) {
+  for (const block of selectedLineBlocks(state)) {
+    if (forward ? block.to !== state.doc.length : block.from !== 0) return true;
+  }
+  return false;
+}
+
 function runChange(view, spec, userEvent = 'input') {
   if (view.state.readOnly) return false;
   if (!spec) return false;
@@ -1196,8 +1226,24 @@ export function createLiveEditor(host, hooks = {}) {
     format(action) {
       if (action === 'undo') return undo(view);
       if (action === 'redo') return redo(view);
+      if (action === 'lineUp') {
+        const ok = moveLineUp(view);
+        if (ok) view.focus();
+        return ok;
+      }
+      if (action === 'lineDown') {
+        const ok = moveLineDown(view);
+        if (ok) view.focus();
+        return ok;
+      }
       const { from, to } = view.state.selection.main;
       return runChange(view, formatChange(view.state.doc.toString(), from, to, action), 'input.format');
+    },
+    canMoveLineUp() {
+      return canMoveLine(view.state, false);
+    },
+    canMoveLineDown() {
+      return canMoveLine(view.state, true);
     },
     insert(text) {
       if (view.state.readOnly) return false;
