@@ -437,7 +437,6 @@ html.is-keyboard .format-bar {
   align-content: flex-start;
   gap: 8px 10px;
   padding: 4px 16px calc(var(--safe-bottom) + 16px);
-  -webkit-overflow-scrolling: touch;
 }
 
 .format-edit-tile {
