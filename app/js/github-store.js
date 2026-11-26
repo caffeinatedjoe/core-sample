@@ -1,4 +1,4 @@
-import { commitFiles, deleteOps, getMeta, listFiles, listOps, setMeta, updateMeta } from './db.js';
+import { commitFiles, deleteOps, getMeta, getMetaMany, listFiles, listOps, setMeta, updateMeta } from './db.js';
 import { redact } from './github-redact.js';
 
 export const TOKEN_KEY = 'githubToken';
@@ -63,15 +63,22 @@ async function clear(db, key) {
 }
 
 export async function loadGithubSettings(db) {
-  const [clientId, relay, token, repo, branch, root, login] = await Promise.all([
-    getMeta(db, CLIENT_ID_KEY),
-    getMeta(db, RELAY_KEY),
-    getMeta(db, TOKEN_KEY),
-    getMeta(db, REPO_KEY),
-    getMeta(db, BRANCH_KEY),
-    getMeta(db, ROOT_KEY),
-    getMeta(db, LOGIN_KEY),
+  const values = await getMetaMany(db, [
+    CLIENT_ID_KEY,
+    RELAY_KEY,
+    TOKEN_KEY,
+    REPO_KEY,
+    BRANCH_KEY,
+    ROOT_KEY,
+    LOGIN_KEY,
   ]);
+  const clientId = values[CLIENT_ID_KEY];
+  const relay = values[RELAY_KEY];
+  const token = values[TOKEN_KEY];
+  const repo = values[REPO_KEY];
+  const branch = values[BRANCH_KEY];
+  const root = values[ROOT_KEY];
+  const login = values[LOGIN_KEY];
   return {
     clientId: typeof clientId === 'string' ? clientId : '',
     relay: typeof relay === 'string' ? relay : '',
