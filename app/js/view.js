@@ -264,9 +264,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function paintFormatBar() {
     const bar = doc.getElementById('format-bar');
     if (!bar) return;
-    bar.hidden = Boolean(source.readOnly)
-      || (!source.hasFocus() && !formatBarReorder?.active?.())
-      || Boolean(commentsUi?.showing?.());
+    bar.hidden = Boolean(source.readOnly) || !source.hasFocus() || Boolean(commentsUi?.showing?.());
     const commentBtn = bar.querySelector('[data-format="comment"]');
     if (commentBtn) {
       const range = source.selectionRange?.() || { from: 0, to: 0 };
@@ -419,7 +417,10 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   const formatBar = doc.getElementById('format-bar');
   if (formatBar) {
     applySavedFormatBarOrder(formatBar);
-    formatBarReorder = mountFormatBarReorder(doc, formatBar, { onMoveModeChange: paintFormatBar });
+    formatBarReorder = mountFormatBarReorder(doc, formatBar);
+    for (const node of formatBar.querySelectorAll('button, label.format-btn')) {
+      node.setAttribute('tabindex', '-1');
+    }
     formatBar.addEventListener('pointerdown', (event) => {
       if (event.target.closest('button')) event.preventDefault();
     });
