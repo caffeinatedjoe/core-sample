@@ -119,6 +119,7 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   let commentName = 'me';
   let commentLastSeen = {};
   let commentsUi;
+  let formatBarReorder = null;
 
   let sync = null;
   let syncConflicts = false;
@@ -263,7 +264,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   function paintFormatBar() {
     const bar = doc.getElementById('format-bar');
     if (!bar) return;
-    bar.hidden = Boolean(source.readOnly) || !source.hasFocus() || Boolean(commentsUi?.showing?.());
+    bar.hidden = Boolean(source.readOnly)
+      || (!source.hasFocus() && !formatBarReorder?.active?.())
+      || Boolean(commentsUi?.showing?.());
     const commentBtn = bar.querySelector('[data-format="comment"]');
     if (commentBtn) {
       const range = source.selectionRange?.() || { from: 0, to: 0 };
@@ -414,10 +417,9 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
   source.readOnly = true;
   paintFormatBar();
   const formatBar = doc.getElementById('format-bar');
-  let formatBarReorder = null;
   if (formatBar) {
     applySavedFormatBarOrder(formatBar);
-    formatBarReorder = mountFormatBarReorder(doc, formatBar);
+    formatBarReorder = mountFormatBarReorder(doc, formatBar, { onMoveModeChange: paintFormatBar });
     formatBar.addEventListener('pointerdown', (event) => {
       if (event.target.closest('button')) event.preventDefault();
     });

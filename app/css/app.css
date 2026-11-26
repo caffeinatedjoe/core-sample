@@ -352,8 +352,14 @@ html.is-keyboard .format-bar {
   outline-offset: 1px;
 }
 
+.format-scroll.is-format-reorder {
+  touch-action: none;
+}
+
 .format-scroll.is-format-reorder .format-btn {
-  animation: format-bar-wiggle 0.42s ease-in-out;
+  animation: format-bar-wiggle 0.42s ease-in-out infinite;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 .format-scroll.is-format-reorder .format-btn.is-dragging {

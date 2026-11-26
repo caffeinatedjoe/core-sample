@@ -9,6 +9,7 @@ import { APP_BUILD } from '../../app/js/version.js';
 const appDir = fileURLToPath(new URL('../../app', import.meta.url));
 export const SHOTS = process.env.CONFLICT_SHOTS || '/tmp/core-sample-shots';
 export const BUILD = APP_BUILD;
+export { APP_BUILD };
 
 const TYPES = {
   '.html': 'text/html',
@@ -175,6 +176,130 @@ export async function fakeKeyboard(page, inset = 336) {
 
 // Synthetic touches. Playwright WebKit has no touch-drag API and refuses
 // `new Touch()`, but the legacy document.createTouch path still works.
+// Long-press a format button with touch + pointer events (WebKit createTouch).
+// Simulates iOS blurring the editor when the touch ends.
+export async function formatBarLongPress(page, formatId, { holdMs = 520, blurEditor = true } = {}) {
+  const box = await page.locator(`[data-format="${formatId}"]`).boundingBox();
+  if (!box) throw new Error(`missing format button ${formatId}`);
+  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.evaluate(async ({ formatId, point, holdMs, blurEditor }) => {
+    const target = document.querySelector(`[data-format="${formatId}"]`);
+    const scroll = document.querySelector('#format-bar .format-scroll');
+    if (!target || !scroll) throw new Error('format bar missing');
+    const pointerId = 88;
+    const touchAt = (x, y) => document.createTouch(window, target, pointerId, x, y, x, y);
+    const fireTouch = (type, x, y, ended = false) => {
+      const pt = touchAt(x, y);
+      const active = ended ? document.createTouchList() : document.createTouchList(pt);
+      target.dispatchEvent(new TouchEvent(type, {
+        touches: active,
+        targetTouches: active,
+        changedTouches: document.createTouchList(pt),
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const firePointer = (type, buttons) => {
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: point.x,
+        clientY: point.y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    fireTouch('touchstart', point.x, point.y);
+    firePointer('pointerdown', 1);
+    await wait(holdMs);
+    firePointer('pointercancel', 0);
+    if (blurEditor) document.querySelector('#source .cm-content')?.blur();
+    fireTouch('touchend', point.x, point.y, true);
+    firePointer('pointerup', 0);
+  }, { formatId, point, holdMs, blurEditor });
+}
+
+export async function formatBarTouchDrag(page, fromId, toId, { steps = 10, frameMs = 16 } = {}) {
+  const fromBox = await page.locator(`[data-format="${fromId}"]`).boundingBox();
+  const toBox = await page.locator(`[data-format="${toId}"]`).boundingBox();
+  if (!fromBox || !toBox) throw new Error('missing format buttons for drag');
+  const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+  const to = { x: toBox.x + toBox.width / 2, y: toBox.y + toBox.height / 2 };
+  await page.evaluate(async ({ fromId, from, to, steps, frameMs }) => {
+    const scroll = document.querySelector('#format-bar .format-scroll');
+    const btn = document.querySelector(`[data-format="${fromId}"]`);
+    if (!scroll || !btn) throw new Error('format bar missing');
+    const pointerId = 90;
+    const touchAt = (x, y) => document.createTouch(window, btn, pointerId, x, y, x, y);
+    const fireTouch = (type, x, y, ended = false) => {
+      const pt = touchAt(x, y);
+      const active = ended ? document.createTouchList() : document.createTouchList(pt);
+      btn.dispatchEvent(new TouchEvent(type, {
+        touches: active,
+        targetTouches: active,
+        changedTouches: document.createTouchList(pt),
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const firePointer = (type, point, buttons) => {
+      btn.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: point.x,
+        clientY: point.y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    fireTouch('touchstart', from.x, from.y);
+    firePointer('pointerdown', from, 1);
+    for (let i = 1; i <= steps; i += 1) {
+      await wait(frameMs);
+      const point = {
+        x: from.x + ((to.x - from.x) * i) / steps,
+        y: from.y + ((to.y - from.y) * i) / steps,
+      };
+      fireTouch('touchmove', point.x, point.y);
+      firePointer('pointermove', point, 1);
+    }
+    firePointer('pointerup', to, 0);
+    fireTouch('touchend', to.x, to.y, true);
+    document.querySelector('#source .cm-content')?.blur();
+  }, { fromId, from, to, steps, frameMs });
+}
+
+export async function touchPointerDownOutside(page, selector, point) {
+  await page.evaluate(({ selector, point }) => {
+    const target = document.querySelector(selector) || document.body;
+    target.dispatchEvent(new TouchEvent('touchstart', {
+      bubbles: true,
+      cancelable: true,
+      changedTouches: document.createTouchList(
+        document.createTouch(window, target, 91, point.x, point.y, point.x, point.y),
+      ),
+    }));
+    document.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 91,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: point.x,
+      clientY: point.y,
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    }));
+  }, { selector, point });
+}
+
 export async function swipe(page, from, to, { steps = 8, frameMs = 16, holdMs = 0, selector = '#source', scrollDelta = 0 } = {}) {
   await page.evaluate(async ({ from, to, steps, frameMs, holdMs, selector, scrollDelta }) => {
     const target = document.querySelector(selector) || document.body;
