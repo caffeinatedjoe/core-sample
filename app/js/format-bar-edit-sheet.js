@@ -24,6 +24,7 @@ export function mountFormatBarEditSheet(doc, bar, {
   onOpen,
   onClose,
   focusEditor,
+  blurEditor,
 } = {}) {
   const root = doc.getElementById('format-edit-sheet');
   const grid = doc.getElementById('format-edit-grid');
@@ -192,6 +193,7 @@ export function mountFormatBarEditSheet(doc, bar, {
     applyLive();
     setSheetOpen(true);
     onOpen?.();
+    blurEditor?.();
   };
 
   const clearDragTransforms = () => {
