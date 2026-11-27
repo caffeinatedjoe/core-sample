@@ -1,14 +1,16 @@
 // Edit toolbar sheet: one grid, draggable divider, live bar updates.
 
 import {
-  applyTileMove,
+  FORMAT_BAR_DIVIDER,
+  buildFormatEditHitCells,
   clampHiddenFrom,
+  formatEditGridColumnCount,
+  layoutToItems,
   mergeFormatBarLayout,
+  previewLayoutFromItems,
   readFormatBarLayout,
   resetFormatBarLayout,
-  resolveIntoHidden,
   stabilizeGridDropIndex,
-  stabilizeHiddenFrom,
 } from './format-bar-order.js';
 import {
   applyFormatBarLayout,
@@ -50,20 +52,25 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   const layoutTiles = () => [...grid.querySelectorAll('.format-edit-tile')];
 
-  const measureCells = () => {
-    const cells = [];
-    for (const node of layoutTiles()) {
-      if (node.classList.contains('is-placeholder')) continue;
-      cells.push({
-        node,
-        index: Number(node.dataset.index),
-        left: node.offsetLeft,
-        top: node.offsetTop,
-        width: node.offsetWidth,
-        height: node.offsetHeight,
-      });
-    }
-    return cells;
+  const measureHitGeometry = (items) => {
+    const sample = layoutTiles().find((node) => !node.classList.contains('is-placeholder'));
+    const div = dividerEl();
+    const styles = view.getComputedStyle(grid);
+    const gapX = Number.parseFloat(styles.columnGap) || 10;
+    const gapY = Number.parseFloat(styles.rowGap) || 8;
+    const cellWidth = sample?.offsetWidth ?? 64;
+    const cellHeight = sample?.offsetHeight ?? 64;
+    const dividerHeight = div?.offsetHeight ?? 44;
+    const columnCount = formatEditGridColumnCount(grid.clientWidth, gapX);
+    return buildFormatEditHitCells({
+      columnCount,
+      cellWidth,
+      cellHeight,
+      gapX,
+      gapY,
+      dividerHeight,
+      items,
+    });
   };
 
   const dividerEl = () => grid.querySelector('.format-edit-divider');
@@ -87,8 +94,14 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   const layoutRects = () => {
     const map = new Map();
-    for (const row of measureCells()) {
-      map.set(row.node, row);
+    for (const node of layoutTiles()) {
+      if (node.classList.contains('is-placeholder')) continue;
+      map.set(node, {
+        left: node.offsetLeft,
+        top: node.offsetTop,
+        width: node.offsetWidth,
+        height: node.offsetHeight,
+      });
     }
     const div = dividerEl();
     if (div) {
@@ -359,14 +372,20 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   const startDrag = (kind, node, pointerId, clientX, clientY) => {
     const tileId = node.dataset.id;
+    const startItems = layoutToItems(layout);
+    const startIndex = kind === 'divider'
+      ? startItems.indexOf(FORMAT_BAR_DIVIDER)
+      : startItems.indexOf(tileId);
+    const hitCells = measureHitGeometry(startItems);
     drag = {
       kind,
       node,
       tileId,
       pointerId,
-      fromIndex: Number(node.dataset.index ?? -1),
-      previewTo: null,
-      intoHidden: null,
+      startItems,
+      startIndex,
+      hitCells,
+      previewTarget: null,
       ghost: null,
       placeholder: null,
       grabOffsetX: 0,
@@ -385,12 +404,6 @@ export function mountFormatBarEditSheet(doc, bar, {
     }
   };
 
-  const dividerMidLocalY = () => {
-    const div = dividerEl();
-    if (!div) return 0;
-    return div.offsetTop + div.offsetHeight / 2;
-  };
-
   const commitDomReorder = (beforeVisual) => {
     syncGridDom();
     const flipNodes = layoutTiles().filter((n) => n !== drag?.placeholder);
@@ -404,58 +417,28 @@ export function mountFormatBarEditSheet(doc, bar, {
     const { clientX, clientY } = pendingPointer;
     pendingPointer = null;
 
-    if (drag.kind === 'divider') {
-      moveDividerGhost(clientX, clientY);
-      const cells = measureCells();
-      const localY = clientY - grid.getBoundingClientRect().top + grid.scrollTop;
-      const nextHf = stabilizeHiddenFrom(
-        layout.order.length,
-        cells,
-        localY,
-        layout.hiddenFrom,
-      );
-      if (nextHf !== layout.hiddenFrom) {
-        const beforeVisual = visualRects();
-        layout = { ...layout, hiddenFrom: nextHf };
-        commitDomReorder(beforeVisual);
-        applyLive();
-      }
-      return;
-    }
-
-    moveGhost(clientX, clientY);
     const gridBox = grid.getBoundingClientRect();
     const localX = clientX - gridBox.left + grid.scrollLeft;
     const localY = clientY - gridBox.top + grid.scrollTop;
-    const cells = measureCells();
-    const hf = clampHiddenFrom(layout.hiddenFrom, layout.order.length);
-    const div = dividerEl();
-    const dividerRow = div ? {
-      index: hf,
-      top: div.offsetTop,
-      height: div.offsetHeight,
-    } : null;
-    const midY = dividerMidLocalY();
-    const intoHidden = resolveIntoHidden(localY, midY, drag.intoHidden);
+    if (drag.kind === 'divider') moveDividerGhost(clientX, clientY);
+    else moveGhost(clientX, clientY);
+
     const target = stabilizeGridDropIndex(
-      cells,
+      drag.hitCells,
       localX,
       localY,
-      drag.fromIndex,
-      drag.previewTo,
-      { dividerRow },
+      drag.startIndex,
+      drag.previewTarget,
     );
-    const clamped = Math.max(0, Math.min(target, layout.order.length));
-    if (clamped !== drag.previewTo || intoHidden !== drag.intoHidden) {
+    const clamped = Math.max(0, Math.min(target, drag.startItems.length));
+    if (clamped !== drag.previewTarget) {
       const beforeVisual = visualRects();
-      drag.previewTo = clamped;
-      drag.intoHidden = intoHidden;
-      layout = applyTileMove(layout, drag.fromIndex, clamped, { intoHidden });
-      drag.fromIndex = layout.order.indexOf(drag.tileId);
+      drag.previewTarget = clamped;
+      layout = previewLayoutFromItems(drag.startItems, drag.startIndex, clamped);
       commitDomReorder(beforeVisual);
       applyLive();
-      if (drag.placeholder) {
-        drag.placeholder.dataset.index = String(drag.fromIndex);
+      if (drag.placeholder && drag.tileId) {
+        drag.placeholder.dataset.index = String(layout.order.indexOf(drag.tileId));
       }
     }
   };

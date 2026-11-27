@@ -481,6 +481,144 @@ test('webkit edit-sheet drop commits layout to bar and storage', { timeout: 1200
   });
 });
 
+test('webkit first tile drag across shown slots keeps divider and hiddenFrom fixed', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'task', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const drift = await page.evaluate(async (layoutKey) => {
+      const tile = document.querySelector('#format-edit-grid [data-id="task"]');
+      const grid = document.getElementById('format-edit-grid');
+      const divider = document.querySelector('.format-edit-divider');
+      if (!tile || !grid || !divider) throw new Error('sheet missing');
+      const readHf = () => {
+        try {
+          const raw = localStorage.getItem(layoutKey);
+          return raw ? JSON.parse(raw).hiddenFrom : null;
+        } catch {
+          return null;
+        }
+      };
+      const fromBox = tile.getBoundingClientRect();
+      const baseTop = divider.offsetTop;
+      const baseHf = readHf();
+      const divRect = divider.getBoundingClientRect();
+      const topRowY = fromBox.top;
+      const stops = [];
+      for (const node of grid.querySelectorAll('.format-edit-tile')) {
+        if (node === tile || node.classList.contains('is-placeholder')) continue;
+        const box = node.getBoundingClientRect();
+        if (Math.abs(box.top - topRowY) > 6) continue;
+        if (box.bottom >= divRect.top - 12) continue;
+        stops.push({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+      }
+      if (!stops.length) return 'no shown targets';
+      const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+      const pointerId = 105;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const afterPaint = () => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+      const fire = (type, point, buttons) => {
+        const target = type === 'pointerdown' ? tile : grid;
+        target.dispatchEvent(new PointerEvent(type, {
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons,
+          bubbles: true,
+          cancelable: true,
+        }));
+      };
+      fire('pointerdown', from, 1);
+      await wait(220);
+      for (let i = 0; i < stops.length; i += 1) {
+        fire('pointermove', stops[i], 1);
+        await wait(20);
+        await afterPaint();
+        if (divider.offsetTop !== baseTop) return `divider top ${divider.offsetTop} vs ${baseTop} at ${i}`;
+        const hf = readHf();
+        if (hf !== baseHf) return `hiddenFrom ${hf} vs ${baseHf} at ${i}`;
+      }
+      fire('pointerup', stops[stops.length - 1], 0);
+      return null;
+    }, FORMAT_BAR_LAYOUT_KEY);
+    assert.equal(drift, null, drift || 'stable divider');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet tile widths stay constant during drag', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'task', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const widthIssue = await page.evaluate(async () => {
+      const tile = document.querySelector('#format-edit-grid [data-id="task"]');
+      const grid = document.getElementById('format-edit-grid');
+      const divider = document.querySelector('.format-edit-divider');
+      if (!tile || !grid || !divider) throw new Error('sheet missing');
+      const widths = new Map();
+      for (const node of grid.querySelectorAll('.format-edit-tile')) {
+        if (!node.classList.contains('is-placeholder')) {
+          widths.set(node.dataset.id, node.offsetWidth);
+        }
+      }
+      const fromBox = tile.getBoundingClientRect();
+      const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+      const to = { x: from.x, y: divider.getBoundingClientRect().bottom + 80 };
+      const pointerId = 106;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const fire = (type, point, buttons) => {
+        const target = type === 'pointerdown' ? tile : grid;
+        target.dispatchEvent(new PointerEvent(type, {
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons,
+          bubbles: true,
+          cancelable: true,
+        }));
+      };
+      fire('pointerdown', from, 1);
+      await wait(220);
+      for (let i = 1; i <= 36; i += 1) {
+        await wait(12);
+        const point = {
+          x: from.x + 20,
+          y: from.y + ((to.y - from.y) * i) / 36,
+        };
+        fire('pointermove', point, 1);
+        await wait(16);
+        for (const node of grid.querySelectorAll('.format-edit-tile')) {
+          if (node.classList.contains('is-placeholder')) continue;
+          const id = node.dataset.id;
+          const base = widths.get(id);
+          if (base != null && node.offsetWidth !== base) {
+            return `${id} width ${node.offsetWidth} vs ${base} at step ${i}`;
+          }
+        }
+      }
+      fire('pointerup', to, 0);
+      return null;
+    });
+    assert.equal(widthIssue, null, widthIssue || 'constant widths');
+    assert.deepEqual(errors, []);
+  });
+});
+
 test('webkit divider drag hides a group of controls', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);

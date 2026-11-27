@@ -3,13 +3,16 @@ import { test } from 'node:test';
 import {
   DEFAULT_FORMAT_BAR_LAYOUT,
   DEFAULT_FORMAT_BAR_ORDER,
+  FORMAT_BAR_DIVIDER,
   FORMAT_BAR_LAYOUT_KEY,
   FORMAT_BAR_ORDER_KEY,
-  applyTileMove,
+  itemsToLayout,
+  layoutToItems,
   mergeFormatBarLayout,
   migrateFormatBarLayoutFromV1,
   moveItem,
   neighborTransforms,
+  previewLayoutFromItems,
   readFormatBarLayout,
   resetFormatBarLayout,
   targetDropIndex,
@@ -67,31 +70,78 @@ test('resetFormatBarLayout shows every default control', () => {
   assert.equal(layout.hiddenFrom, DEFAULT_FORMAT_BAR_ORDER.length);
 });
 
-test('applyTileMove moves into hidden without breaking hiddenFrom', () => {
-  const layout = {
-    order: ['task', 'bold', 'italic', 'link'],
-    hiddenFrom: 2,
-  };
-  const next = applyTileMove(layout, 0, 3);
-  assert.equal(next.order[2], 'task');
-  assert.equal(next.hiddenFrom, 1);
+function orderMultiset(order) {
+  return [...order].sort().join('\0');
+}
+
+test('layoutToItems and itemsToLayout round-trip', () => {
+  const layout = { order: ['task', 'bold', 'italic', 'link'], hiddenFrom: 2 };
+  const items = layoutToItems(layout);
+  assert.deepEqual(items, ['task', 'bold', FORMAT_BAR_DIVIDER, 'italic', 'link']);
+  assert.deepEqual(itemsToLayout(items), layout);
 });
 
-test('applyTileMove can hide when all were shown and drop is below divider', () => {
-  const layout = {
-    order: DEFAULT_FORMAT_BAR_ORDER.slice(),
-    hiddenFrom: DEFAULT_FORMAT_BAR_ORDER.length,
-  };
-  const next = applyTileMove(layout, 3, layout.order.length, { intoHidden: true });
-  assert.equal(next.hiddenFrom, next.order.length - 1);
-  assert.equal(visibleBarOrder(next).includes('bold'), false);
-});
-
-test('applyTileMove pulls from hidden to shown', () => {
-  const layout = { order: ['task', 'bold', 'italic'], hiddenFrom: 1 };
-  const next = applyTileMove(layout, 2, 0);
-  assert.equal(next.order[0], 'italic');
+test('moving a shown tile within shown slots keeps hiddenFrom', () => {
+  const layout = { order: ['task', 'bold', 'italic', 'link'], hiddenFrom: 2 };
+  const items = layoutToItems(layout);
+  const next = previewLayoutFromItems(items, 0, 2);
   assert.equal(next.hiddenFrom, 2);
+  assert.deepEqual(next.order, ['bold', 'task', 'italic', 'link']);
+});
+
+test('shown to hidden decrements hiddenFrom by one', () => {
+  const layout = { order: ['task', 'bold', 'italic', 'link'], hiddenFrom: 2 };
+  const items = layoutToItems(layout);
+  const next = previewLayoutFromItems(items, 0, 4);
+  assert.equal(next.hiddenFrom, 1);
+  assert.equal(next.order.includes('task'), true);
+});
+
+test('hidden to shown increments hiddenFrom by one', () => {
+  const layout = { order: ['task', 'bold', 'italic'], hiddenFrom: 1 };
+  const items = layoutToItems(layout);
+  const italicIdx = items.indexOf('italic');
+  const next = previewLayoutFromItems(items, italicIdx, 0);
+  assert.equal(next.hiddenFrom, 2);
+  assert.equal(next.order[0], 'italic');
+});
+
+test('divider move sets hiddenFrom to sentinel index', () => {
+  const layout = { order: ['a', 'b', 'c', 'd'], hiddenFrom: 1 };
+  const items = layoutToItems(layout);
+  const dividerAt = items.indexOf(FORMAT_BAR_DIVIDER);
+  const next = previewLayoutFromItems(items, dividerAt, 3);
+  assert.equal(next.hiddenFrom, 2);
+});
+
+test('item-list move invariants for lengths 1–12 (property)', () => {
+  const letters = 'abcdefghijklmnopqrstuvwx'.split('');
+  for (let len = 1; len <= 12; len += 1) {
+    const order = letters.slice(0, len);
+    for (let hf = 0; hf <= len; hf += 1) {
+      const layout = { order: order.slice(), hiddenFrom: hf };
+      const startItems = layoutToItems(layout);
+      for (let from = 0; from < startItems.length; from += 1) {
+        for (let to = 0; to <= startItems.length; to += 1) {
+          const nextItems = moveItem(startItems, from, to);
+          const next = itemsToLayout(nextItems);
+          assert.equal(orderMultiset(next.order), orderMultiset(layout.order));
+          assert.equal(next.hiddenFrom, nextItems.indexOf(FORMAT_BAR_DIVIDER));
+          assert.ok(next.hiddenFrom >= 0 && next.hiddenFrom <= next.order.length);
+        }
+      }
+    }
+  }
+});
+
+test('previewLayoutFromItems from one snapshot is idempotent', () => {
+  const layout = { order: ['task', 'bold', 'italic', 'link', 'image'], hiddenFrom: 3 };
+  const startItems = layoutToItems(layout);
+  for (const [from, to] of [[0, 2], [4, 1], [3, 5], [1, 6]]) {
+    const once = previewLayoutFromItems(startItems, from, to);
+    const again = previewLayoutFromItems(startItems, from, to);
+    assert.deepEqual(once, again);
+  }
 });
 
 test('targetDropIndex picks the slot under the pointer', () => {
