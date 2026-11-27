@@ -6,8 +6,10 @@ import {
   FORMAT_BAR_DIVIDER,
   FORMAT_BAR_LAYOUT_KEY,
   FORMAT_BAR_ORDER_KEY,
+  buildFormatEditHitCells,
   itemsToLayout,
   layoutToItems,
+  targetGridDropIndex,
   mergeFormatBarLayout,
   migrateFormatBarLayoutFromV1,
   moveItem,
@@ -199,6 +201,48 @@ test('stabilizeHiddenFrom only moves split past row midline slop', () => {
   assert.equal(stabilizeHiddenFrom(3, cells, 40, 0), 0);
   assert.equal(stabilizeHiddenFrom(3, cells, 48, 0), 1);
   assert.equal(stabilizeHiddenFrom(3, cells, 48, 1), 1);
+});
+
+test('targetGridDropIndex below the divider row inserts after the sentinel', () => {
+  const layout = { order: ['task', 'bold', 'italic'], hiddenFrom: 3 };
+  const items = layoutToItems(layout);
+  const cells = buildFormatEditHitCells({
+    columnCount: 5,
+    cellWidth: 70,
+    cellHeight: 64,
+    gapX: 10,
+    gapY: 8,
+    dividerHeight: 44,
+    items,
+  });
+  const div = cells.find((c) => c.isDivider);
+  const belowY = div.top + div.height + 48;
+  const target = targetGridDropIndex(cells, div.left + div.width / 2, belowY, 1, {
+    itemsLength: items.length,
+  });
+  assert.ok(target > div.index, 'drop below divider must target hidden region');
+  const hidden = previewLayoutFromItems(items, items.indexOf('bold'), target);
+  assert.ok(!visibleBarOrder(hidden).includes('bold'));
+});
+
+test('targetGridDropIndex uses divider mid-Y when pointer is on the divider row', () => {
+  const items = ['task', 'bold', FORMAT_BAR_DIVIDER];
+  const cells = buildFormatEditHitCells({
+    columnCount: 5,
+    cellWidth: 70,
+    cellHeight: 64,
+    items,
+    dividerHeight: 44,
+  });
+  const div = cells.find((c) => c.isDivider);
+  const topHalf = targetGridDropIndex(cells, div.left + 10, div.top + 8, 0, {
+    itemsLength: items.length,
+  });
+  const bottomHalf = targetGridDropIndex(cells, div.left + 10, div.top + div.height - 8, 0, {
+    itemsLength: items.length,
+  });
+  assert.equal(topHalf, div.index);
+  assert.equal(bottomHalf, div.index + 1);
 });
 
 test('layout round-trip uses the v2 key', () => {

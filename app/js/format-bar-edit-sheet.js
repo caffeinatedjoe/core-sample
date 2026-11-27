@@ -411,27 +411,33 @@ export function mountFormatBarEditSheet(doc, bar, {
     runFlip(beforeVisual, flipNodes.filter(Boolean));
   };
 
-  const paintDrag = () => {
-    raf = 0;
-    if (!drag || !pendingPointer) return;
-    const { clientX, clientY } = pendingPointer;
-    pendingPointer = null;
-
+  const pointerLocal = (clientX, clientY) => {
     const gridBox = grid.getBoundingClientRect();
-    const localX = clientX - gridBox.left + grid.scrollLeft;
-    const localY = clientY - gridBox.top + grid.scrollTop;
-    if (drag.kind === 'divider') moveDividerGhost(clientX, clientY);
-    else moveGhost(clientX, clientY);
+    return {
+      localX: clientX - gridBox.left + grid.scrollLeft,
+      localY: clientY - gridBox.top + grid.scrollTop,
+    };
+  };
 
+  const dropTargetAt = (localX, localY, holdPreview) => {
     const target = stabilizeGridDropIndex(
       drag.hitCells,
       localX,
       localY,
       drag.startIndex,
-      drag.previewTarget,
+      holdPreview ? drag.previewTarget : null,
+      { itemsLength: drag.startItems.length },
     );
-    const clamped = Math.max(0, Math.min(target, drag.startItems.length));
-    if (clamped !== drag.previewTarget) {
+    return Math.max(0, Math.min(target, drag.startItems.length));
+  };
+
+  const applyDragPreview = (clientX, clientY, { hold = true } = {}) => {
+    if (!drag) return;
+    const { localX, localY } = pointerLocal(clientX, clientY);
+    if (drag.kind === 'divider') moveDividerGhost(clientX, clientY);
+    else moveGhost(clientX, clientY);
+    const clamped = dropTargetAt(localX, localY, hold);
+    if (!hold || clamped !== drag.previewTarget) {
       const beforeVisual = visualRects();
       drag.previewTarget = clamped;
       layout = previewLayoutFromItems(drag.startItems, drag.startIndex, clamped);
@@ -441,6 +447,14 @@ export function mountFormatBarEditSheet(doc, bar, {
         drag.placeholder.dataset.index = String(layout.order.indexOf(drag.tileId));
       }
     }
+  };
+
+  const paintDrag = () => {
+    raf = 0;
+    if (!drag || !pendingPointer) return;
+    const { clientX, clientY } = pendingPointer;
+    pendingPointer = null;
+    applyDragPreview(clientX, clientY, { hold: true });
   };
 
   const scheduleFrame = (clientX, clientY) => {
@@ -535,9 +549,12 @@ export function mountFormatBarEditSheet(doc, bar, {
     if (press && event.pointerId === press.pointerId) {
       clearHold();
       if (drag && event.pointerId === drag.pointerId) {
-        pendingPointer = { clientX: event.clientX, clientY: event.clientY };
-        if (raf) view.cancelAnimationFrame(raf);
-        paintDrag();
+        if (raf) {
+          view.cancelAnimationFrame(raf);
+          raf = 0;
+        }
+        pendingPointer = null;
+        applyDragPreview(event.clientX, event.clientY, { hold: false });
         finishDrag(true);
       } else if (!press.dragging) {
         bounceTile(press.node);

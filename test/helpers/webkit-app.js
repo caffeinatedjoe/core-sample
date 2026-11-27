@@ -311,9 +311,21 @@ export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14,
       };
       firePointer('pointermove', point, 1);
     }
+    await wait(frameMs);
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
     firePointer('pointerup', to, 0);
   }, { fromId, from, to, steps, frameMs, holdMs });
-  await page.waitForTimeout(80);
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+}
+
+export async function waitDoubleRaf(page) {
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
 }
 
 export async function formatEditSheetDrag(page, fromId, toId, { steps = 12, frameMs = 16 } = {}) {

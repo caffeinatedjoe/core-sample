@@ -279,6 +279,7 @@ export function buildFormatEditHitCells({
       top: y,
       width: gridWidth,
       height: dividerHeight,
+      isDivider: true,
     });
     y += dividerHeight + gapY;
     col = 0;
@@ -292,9 +293,22 @@ export function buildFormatEditHitCells({
 export const DRAG_CELL_SLOP_PX = 8;
 export const DRAG_DIVIDER_SLOP_PX = 12;
 
-/** Each cell: { left, top, width, height, index }. Returns flat order index or divider index. */
-export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { dividerRow = null } = {}) {
+/** Each cell: { left, top, width, height, index, isDivider? }. Returns list insertion index. */
+export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, opts = {}) {
+  const { dividerRow = null } = opts;
+  const itemsLength = opts.itemsLength ?? cells.length;
+  const dividerSlop = opts.dividerSlop ?? DRAG_DIVIDER_SLOP_PX;
+  const divCell = cells.find((c) => c.isDivider);
   if (!cells.length) return 0;
+
+  const last = cells[cells.length - 1];
+  if (last && pointerY >= last.top + last.height) {
+    return itemsLength;
+  }
+  if (divCell && pointerY >= divCell.top + divCell.height) {
+    return Math.max(divCell.index + 1, itemsLength);
+  }
+
   const hit = cells.find((cell) => (
     pointerX >= cell.left
     && pointerX < cell.left + cell.width
@@ -302,6 +316,12 @@ export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { divi
     && pointerY < cell.top + cell.height
   ));
   if (hit) {
+    if (hit.isDivider) {
+      const midY = hit.top + hit.height / 2;
+      if (pointerY >= midY + dividerSlop) return hit.index + 1;
+      if (pointerY <= midY - dividerSlop) return hit.index;
+      return pointerY >= midY ? hit.index + 1 : hit.index;
+    }
     const midX = hit.left + hit.width / 2;
     return pointerX < midX ? hit.index : hit.index + 1;
   }
@@ -310,6 +330,9 @@ export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { divi
     if (pointerY >= row.top && pointerY < row.top + row.height) {
       return row.index;
     }
+  }
+  if (divCell && pointerY >= divCell.top + divCell.height / 2 + dividerSlop) {
+    return Math.max(divCell.index + 1, itemsLength);
   }
   let best = fromIndex;
   let bestDist = Infinity;
@@ -322,7 +345,11 @@ export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { divi
       best = cell.index + (pointerX >= cx ? 1 : 0);
     }
   }
-  return Math.max(0, Math.min(cells.length, best));
+  let target = Math.max(0, Math.min(itemsLength, best));
+  if (divCell && pointerY >= divCell.top + divCell.height / 2 + dividerSlop) {
+    target = Math.max(target, divCell.index + 1);
+  }
+  return target;
 }
 
 /** Stabilize drop index: stick with currentTarget until pointer crosses into the next slot. */
@@ -330,6 +357,16 @@ export function stabilizeGridDropIndex(cells, pointerX, pointerY, fromIndex, cur
   const proposed = targetGridDropIndex(cells, pointerX, pointerY, fromIndex, opts);
   if (currentTarget == null) return proposed;
   if (proposed === currentTarget) return currentTarget;
+  const divCell = cells.find((c) => c.isDivider);
+  const dividerSlop = opts.dividerSlop ?? DRAG_DIVIDER_SLOP_PX;
+  if (
+    divCell
+    && pointerY >= divCell.top + divCell.height / 2 + dividerSlop
+    && proposed > divCell.index
+    && currentTarget <= divCell.index
+  ) {
+    return proposed;
+  }
   const slop = opts.slop ?? DRAG_CELL_SLOP_PX;
   const movingDown = proposed > currentTarget;
   const anchor = movingDown
