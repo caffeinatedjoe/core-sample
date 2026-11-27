@@ -34,6 +34,35 @@ function visibleBarIds(page) {
     .map((node) => node.getAttribute('data-format')));
 }
 
+test('webkit Edit toolbar open blurs editor and Done restores focus and selection', { timeout: 90000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    const startOffset = 4;
+    await caretAt(page, startOffset);
+    await fakeKeyboard(page, 336);
+    await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
+
+    await formatBarLongPress(page, 'bold');
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    assert.equal(await editorFocused(page), false);
+    assert.equal(
+      await page.evaluate(() => Boolean(document.activeElement?.closest?.('.cm-content'))),
+      false,
+    );
+
+    await page.locator('#format-edit-done').click();
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').hidden);
+    assert.equal(await editorFocused(page), true);
+    const selection = await page.evaluate(async () => {
+      const { EditorView } = await import('./vendor/codemirror.js');
+      const sel = EditorView.findFromDOM(document.querySelector('#source .cm-editor')).state.selection.main;
+      return { from: sel.from, to: sel.to };
+    });
+    assert.deepEqual(selection, { from: startOffset, to: startOffset });
+    assert.deepEqual(errors, []);
+  });
+});
+
 test('webkit long-press opens Edit toolbar without firing the control', { timeout: 90000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);

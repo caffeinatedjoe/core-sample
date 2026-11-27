@@ -432,6 +432,12 @@ export function mountApp(doc, db, { createEditor = createLiveEditor } = {}) {
         if (selection) source.restoreSelection?.(selection);
         else source.focus?.();
       },
+      blurEditor() {
+        source.blur?.();
+        if (doc.activeElement && doc.activeElement !== doc.body) {
+          doc.activeElement.blur();
+        }
+      },
     });
     formatBarLongPress = mountFormatBarLongPress(formatBar, scroll, {
       sheetOpen: () => formatBarEditSheet?.open?.(),
