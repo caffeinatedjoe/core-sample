@@ -12,6 +12,7 @@ import {
   note,
   openApp,
   readFormatBarTouchSpy,
+  waitDoubleRaf,
   withPhone,
 } from './helpers/webkit-app.js';
 
@@ -106,6 +107,7 @@ test('webkit dragging past divider hides a control and dragging back shows it', 
       return { x: box.x + box.width / 2, y: box.bottom + 48 };
     });
     await formatEditSheetDragToPoint(page, 'bold', drop);
+    await waitDoubleRaf(page);
     const hidden = await visibleBarIds(page);
     assert.ok(!hidden.includes('bold'));
 
@@ -470,12 +472,14 @@ test('webkit edit-sheet drop commits layout to bar and storage', { timeout: 1200
       return { x: box.x + box.width / 2, y: box.bottom + 70 };
     });
     await formatEditSheetDragToPoint(page, 'bold', drop);
+    await waitDoubleRaf(page);
     const afterBar = await visibleBarIds(page);
     assert.notDeepEqual(beforeBar, afterBar);
     const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), FORMAT_BAR_LAYOUT_KEY);
     assert.ok(stored && Array.isArray(stored.order));
     assert.equal(typeof stored.hiddenFrom, 'number');
     await page.locator('#format-edit-done').click();
+    await waitDoubleRaf(page);
     assert.ok(!(await visibleBarIds(page)).includes('bold'));
     assert.deepEqual(errors, []);
   });
