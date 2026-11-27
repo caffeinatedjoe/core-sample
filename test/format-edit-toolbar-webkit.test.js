@@ -232,6 +232,9 @@ test('webkit edit-sheet ghost tracks finger across divider in 2px steps', { time
       const steps = Math.max(1, Math.ceil(Math.abs(to.y - from.y) / 2));
       const pointerId = 101;
       const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const afterPaint = () => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
       const fire = (type, point, buttons) => {
         const target = type === 'pointerdown' ? tile : grid;
         target.dispatchEvent(new PointerEvent(type, {
@@ -249,7 +252,7 @@ test('webkit edit-sheet ghost tracks finger across divider in 2px steps', { time
       fire('pointerdown', from, 1);
       await wait(220);
       fire('pointermove', from, 1);
-      await wait(48);
+      await afterPaint();
       const ghost0 = root.querySelector('.format-edit-ghost');
       if (!ghost0) return 'ghost missing after drag start';
       const g0 = ghost0.getBoundingClientRect();
@@ -264,7 +267,7 @@ test('webkit edit-sheet ghost tracks finger across divider in 2px steps', { time
           y: from.y + ((to.y - from.y) * i) / steps,
         };
         fire('pointermove', point, 1);
-        await wait(48);
+        await afterPaint();
         const ghost = root.querySelector('.format-edit-ghost');
         if (!ghost) return 'ghost missing';
         const g = ghost.getBoundingClientRect();

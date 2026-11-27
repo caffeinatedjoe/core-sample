@@ -306,6 +306,8 @@ export function mountFormatBarEditSheet(doc, bar, {
     const r = source.getBoundingClientRect();
     drag.grabOffsetX = clientX - (r.left + r.width / 2);
     drag.grabOffsetY = clientY - (r.top + r.height / 2);
+    drag.ghostW = r.width;
+    drag.ghostH = r.height;
     const ghost = source.cloneNode(true);
     ghost.classList.add('format-edit-ghost');
     ghost.classList.remove('is-dragging', 'is-placeholder', 'is-bounce');
@@ -317,6 +319,7 @@ export function mountFormatBarEditSheet(doc, bar, {
     drag.placeholder = source;
     source.classList.add('is-placeholder');
     source.style.opacity = '0';
+    void ghost.offsetWidth;
     moveGhost(clientX, clientY);
   };
 
@@ -324,6 +327,8 @@ export function mountFormatBarEditSheet(doc, bar, {
     removeGhost();
     const r = source.getBoundingClientRect();
     drag.grabOffsetY = clientY - (r.top + r.height / 2);
+    drag.ghostW = r.width;
+    drag.ghostH = r.height;
     const ghost = doc.createElement('div');
     ghost.className = 'format-edit-divider-ghost';
     ghost.innerHTML = '<span class="format-edit-divider-grip" aria-hidden="true"></span>';
@@ -331,6 +336,7 @@ export function mountFormatBarEditSheet(doc, bar, {
     root.appendChild(ghost);
     drag.ghost = ghost;
     source.style.opacity = '0.35';
+    void ghost.offsetWidth;
     moveDividerGhost(clientX, clientY);
   };
 
@@ -338,13 +344,17 @@ export function mountFormatBarEditSheet(doc, bar, {
     if (!drag?.ghost) return;
     const cx = clientX - drag.grabOffsetX;
     const cy = clientY - drag.grabOffsetY;
-    drag.ghost.style.transform = `translate3d(${cx}px, ${cy}px, 0) translate(-50%, -50%)`;
+    const hw = (drag.ghostW || drag.ghost.offsetWidth) / 2;
+    const hh = (drag.ghostH || drag.ghost.offsetHeight) / 2;
+    drag.ghost.style.transform = `translate3d(${cx - hw}px, ${cy - hh}px, 0)`;
   };
 
   const moveDividerGhost = (clientX, clientY) => {
     if (!drag?.ghost) return;
     const cy = clientY - drag.grabOffsetY;
-    drag.ghost.style.transform = `translate3d(${clientX}px, ${cy}px, 0) translate(-50%, -50%)`;
+    const hw = (drag.ghostW || drag.ghost.offsetWidth) / 2;
+    const hh = (drag.ghostH || drag.ghost.offsetHeight || 44) / 2;
+    drag.ghost.style.transform = `translate3d(${clientX - hw}px, ${cy - hh}px, 0)`;
   };
 
   const startDrag = (kind, node, pointerId, clientX, clientY) => {
@@ -361,6 +371,8 @@ export function mountFormatBarEditSheet(doc, bar, {
       placeholder: null,
       grabOffsetX: 0,
       grabOffsetY: 0,
+      ghostW: 0,
+      ghostH: 0,
     };
     node.classList.add('is-dragging');
     node.style.touchAction = 'none';
@@ -530,6 +542,8 @@ export function mountFormatBarEditSheet(doc, bar, {
     }
     if (drag && event.pointerId === drag.pointerId) {
       event.preventDefault();
+      if (drag.kind === 'tile') moveGhost(event.clientX, event.clientY);
+      else moveDividerGhost(event.clientX, event.clientY);
       scheduleFrame(event.clientX, event.clientY);
     }
   };
