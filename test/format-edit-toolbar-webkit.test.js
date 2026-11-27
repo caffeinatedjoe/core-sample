@@ -211,6 +211,273 @@ test('webkit horizontal swipe scrolls the format bar', { timeout: 90000 }, async
   });
 });
 
+test('webkit edit-sheet ghost tracks finger across divider in 2px steps', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'bold', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const bad = await page.evaluate(async () => {
+      const tile = document.querySelector('#format-edit-grid [data-id="bold"]');
+      const grid = document.getElementById('format-edit-grid');
+      const root = document.getElementById('format-edit-sheet');
+      if (!tile || !grid || !root) throw new Error('sheet missing');
+      const divider = document.querySelector('.format-edit-divider');
+      const dropY = divider.getBoundingClientRect().bottom + 120;
+      const fromBox = tile.getBoundingClientRect();
+      const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+      const to = { x: from.x, y: dropY };
+      const steps = Math.max(1, Math.ceil(Math.abs(to.y - from.y) / 2));
+      const pointerId = 101;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const fire = (type, point, buttons) => {
+        const target = type === 'pointerdown' ? tile : grid;
+        target.dispatchEvent(new PointerEvent(type, {
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons,
+          bubbles: true,
+          cancelable: true,
+        }));
+      };
+      fire('pointerdown', from, 1);
+      await wait(220);
+      fire('pointermove', from, 1);
+      await wait(48);
+      const ghost0 = root.querySelector('.format-edit-ghost');
+      if (!ghost0) return 'ghost missing after drag start';
+      const g0 = ghost0.getBoundingClientRect();
+      const grab = {
+        x: g0.left + g0.width / 2 - from.x,
+        y: g0.top + g0.height / 2 - from.y,
+      };
+      for (let i = 1; i <= steps; i += 1) {
+        await wait(16);
+        const point = {
+          x: from.x + ((to.x - from.x) * i) / steps,
+          y: from.y + ((to.y - from.y) * i) / steps,
+        };
+        fire('pointermove', point, 1);
+        await wait(48);
+        const ghost = root.querySelector('.format-edit-ghost');
+        if (!ghost) return 'ghost missing';
+        const g = ghost.getBoundingClientRect();
+        const center = { x: g.left + g.width / 2, y: g.top + g.height / 2 };
+        if (Math.abs((center.x - point.x) - grab.x) > 1.01) return `ghost X drift step ${i}`;
+        if (Math.abs((center.y - point.y) - grab.y) > 1.01) return `ghost Y drift step ${i}`;
+      }
+      fire('pointerup', to, 0);
+      return null;
+    });
+    assert.equal(bad, null, bad || 'ghost tracking ok');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet placeholder indices stay monotonic on vertical drag', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'task', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const flip = await page.evaluate(async () => {
+      const tile = document.querySelector('#format-edit-grid [data-id="task"]');
+      const grid = document.getElementById('format-edit-grid');
+      if (!tile || !grid) throw new Error('sheet missing');
+      const divider = document.querySelector('.format-edit-divider');
+      const fromBox = tile.getBoundingClientRect();
+      const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+      const to = { x: from.x, y: divider.getBoundingClientRect().bottom + 80 };
+      const steps = 40;
+      const pointerId = 102;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const fire = (type, point, buttons) => {
+        const target = type === 'pointerdown' ? tile : grid;
+        target.dispatchEvent(new PointerEvent(type, {
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons,
+          bubbles: true,
+          cancelable: true,
+        }));
+      };
+      const readIndex = () => Number(document.querySelector('.format-edit-tile.is-placeholder')?.dataset.index ?? '-1');
+      const seq = [];
+      fire('pointerdown', from, 1);
+      await wait(220);
+      for (let i = 1; i <= steps; i += 1) {
+        await wait(12);
+        const point = {
+          x: from.x,
+          y: from.y + ((to.y - from.y) * i) / steps,
+        };
+        fire('pointermove', point, 1);
+        await wait(18);
+        const idx = readIndex();
+        if (seq.length && idx < seq[seq.length - 1]) return `A-B-A at ${i}: ${seq.join(',')} -> ${idx}`;
+        if (!seq.length || seq[seq.length - 1] !== idx) seq.push(idx);
+      }
+      fire('pointerup', to, 0);
+      return null;
+    });
+    assert.equal(flip, null, flip || 'monotonic');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet divider midline hover does not oscillate hiddenFrom', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'bold', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const oscillated = await page.evaluate(async () => {
+      const divider = document.querySelector('.format-edit-divider');
+      const grid = document.getElementById('format-edit-grid');
+      const task = document.querySelector('#format-edit-grid [data-id="task"]');
+      if (!divider || !grid || !task) throw new Error('sheet missing');
+      const rowMid = task.getBoundingClientRect().top + task.getBoundingClientRect().height / 2;
+      const divBox = divider.getBoundingClientRect();
+      const pointerId = 103;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const fire = (type, point, buttons) => {
+        const target = type === 'pointerdown' ? divider : grid;
+        target.dispatchEvent(new PointerEvent(type, {
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons,
+          bubbles: true,
+          cancelable: true,
+        }));
+      };
+      const countShown = () => {
+        let n = 0;
+        for (const node of grid.children) {
+          if (node.classList.contains('format-edit-divider')) break;
+          if (node.classList.contains('format-edit-tile')) n += 1;
+        }
+        return n;
+      };
+      const start = { x: divBox.x + divBox.width / 2, y: divBox.y + divBox.height / 2 };
+      fire('pointerdown', start, 1);
+      await wait(40);
+      const hfChanges = [];
+      let last = countShown();
+      for (let frame = 0; frame < 20; frame += 1) {
+        const y = rowMid + ((frame % 2) ? 4 : -4);
+        fire('pointermove', { x: start.x, y }, 1);
+        await wait(28);
+        const now = countShown();
+        if (now !== last) {
+          hfChanges.push(now);
+          last = now;
+        }
+      }
+      fire('pointerup', { x: start.x, y: rowMid }, 0);
+      return hfChanges.length > 1 ? `hiddenFrom flipped ${hfChanges.length} times` : null;
+    });
+    assert.equal(oscillated, null, oscillated || 'stable');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet grid height is constant during tile drag', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'italic', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const heightIssue = await page.evaluate(async () => {
+      const tile = document.querySelector('#format-edit-grid [data-id="italic"]');
+      const grid = document.getElementById('format-edit-grid');
+      const divider = document.querySelector('.format-edit-divider');
+      if (!tile || !grid || !divider) throw new Error('sheet missing');
+      const base = grid.offsetHeight;
+      const fromBox = tile.getBoundingClientRect();
+      const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+      const to = { x: from.x, y: divider.getBoundingClientRect().bottom + 60 };
+      const pointerId = 104;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const fire = (type, point, buttons) => {
+        const target = type === 'pointerdown' ? tile : grid;
+        target.dispatchEvent(new PointerEvent(type, {
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons,
+          bubbles: true,
+          cancelable: true,
+        }));
+      };
+      fire('pointerdown', from, 1);
+      await wait(220);
+      for (let i = 1; i <= 30; i += 1) {
+        await wait(12);
+        const point = {
+          x: from.x,
+          y: from.y + ((to.y - from.y) * i) / 30,
+        };
+        fire('pointermove', point, 1);
+        await wait(16);
+        if (grid.offsetHeight !== base) return `height ${grid.offsetHeight} vs ${base} at step ${i}`;
+      }
+      fire('pointerup', to, 0);
+      return null;
+    });
+    assert.equal(heightIssue, null, heightIssue || 'constant height');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet drop commits layout to bar and storage', { timeout: 120000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openApp(page, url, [note(NOTE, TEXT)], NOTE);
+    await caretAt(page, 2);
+    await fakeKeyboard(page, 336);
+    await formatBarLongPress(page, 'bold', { blurEditor: false });
+    await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(350);
+    const beforeBar = await visibleBarIds(page);
+    const drop = await page.evaluate(() => {
+      const divider = document.querySelector('.format-edit-divider');
+      const box = divider.getBoundingClientRect();
+      return { x: box.x + box.width / 2, y: box.bottom + 70 };
+    });
+    await formatEditSheetDragToPoint(page, 'bold', drop);
+    const afterBar = await visibleBarIds(page);
+    assert.notDeepEqual(beforeBar, afterBar);
+    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), FORMAT_BAR_LAYOUT_KEY);
+    assert.ok(stored && Array.isArray(stored.order));
+    assert.equal(typeof stored.hiddenFrom, 'number');
+    await page.locator('#format-edit-done').click();
+    assert.ok(!(await visibleBarIds(page)).includes('bold'));
+    assert.deepEqual(errors, []);
+  });
+});
+
 test('webkit divider drag hides a group of controls', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await openApp(page, url, [note(NOTE, TEXT)], NOTE);

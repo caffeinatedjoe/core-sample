@@ -213,6 +213,9 @@ export function applyTileMove(layout, from, to, { intoHidden = false } = {}) {
   return { order, hiddenFrom: clampHiddenFrom(hf, order.length) };
 }
 
+export const DRAG_CELL_SLOP_PX = 8;
+export const DRAG_DIVIDER_SLOP_PX = 12;
+
 /** Each cell: { left, top, width, height, index }. Returns flat order index or divider index. */
 export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { dividerRow = null } = {}) {
   if (!cells.length) return 0;
@@ -246,6 +249,34 @@ export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, { divi
   return Math.max(0, Math.min(cells.length, best));
 }
 
+/** Stabilize drop index: stick with currentTarget until pointer crosses into the next slot. */
+export function stabilizeGridDropIndex(cells, pointerX, pointerY, fromIndex, currentTarget, opts = {}) {
+  const proposed = targetGridDropIndex(cells, pointerX, pointerY, fromIndex, opts);
+  if (currentTarget == null) return proposed;
+  if (proposed === currentTarget) return currentTarget;
+  const slop = opts.slop ?? DRAG_CELL_SLOP_PX;
+  const movingDown = proposed > currentTarget;
+  const anchor = movingDown
+    ? cells.find((c) => c.index === currentTarget) || cells.find((c) => c.index === proposed - 1)
+    : cells.find((c) => c.index === proposed) || cells.find((c) => c.index === currentTarget - 1);
+  if (!anchor) return proposed;
+  const midX = anchor.left + anchor.width / 2;
+  const midY = anchor.top + anchor.height / 2;
+  if (movingDown) {
+    const crossed = pointerX >= midX + slop || pointerY >= midY + slop;
+    return crossed ? proposed : currentTarget;
+  }
+  const crossed = pointerX <= midX - slop && pointerY <= midY - slop;
+  return crossed ? proposed : currentTarget;
+}
+
+/** With hysteresis around divider midline (grid-local Y). */
+export function resolveIntoHidden(localY, dividerMidY, prevIntoHidden, slop = DRAG_DIVIDER_SLOP_PX) {
+  if (prevIntoHidden == null) return localY > dividerMidY;
+  if (prevIntoHidden) return localY > dividerMidY - slop;
+  return localY > dividerMidY + slop;
+}
+
 /** Pick hiddenFrom (0..orderLength) from pointer Y and tile rows. */
 export function targetHiddenFrom(orderLength, cells, pointerY) {
   if (!cells.length) return clampHiddenFrom(0, orderLength);
@@ -257,4 +288,20 @@ export function targetHiddenFrom(orderLength, cells, pointerY) {
     if (pointerY >= cell.top + cell.height / 2) hiddenFrom = cell.index + 1;
   }
   return clampHiddenFrom(hiddenFrom, orderLength);
+}
+
+/** Stabilize hiddenFrom when dragging the divider (12px past row midline). */
+export function stabilizeHiddenFrom(orderLength, cells, pointerY, currentHf, slop = DRAG_DIVIDER_SLOP_PX) {
+  const proposed = targetHiddenFrom(orderLength, cells, pointerY, slop);
+  if (proposed === currentHf) return currentHf;
+  const movingDown = proposed > currentHf;
+  const edgeCell = movingDown
+    ? cells.find((c) => c.index === currentHf)
+    : cells.filter((c) => c.index < currentHf).sort((a, b) => b.index - a.index)[0];
+  if (!edgeCell) return proposed;
+  const midY = edgeCell.top + edgeCell.height / 2;
+  if (movingDown) {
+    return pointerY >= midY + slop ? proposed : currentHf;
+  }
+  return pointerY <= midY - slop ? proposed : currentHf;
 }

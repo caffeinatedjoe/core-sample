@@ -14,6 +14,9 @@ import {
   resetFormatBarLayout,
   targetDropIndex,
   targetHiddenFrom,
+  stabilizeGridDropIndex,
+  stabilizeHiddenFrom,
+  resolveIntoHidden,
   visibleBarOrder,
   writeFormatBarLayout,
   writeFormatBarOrder,
@@ -115,6 +118,37 @@ test('targetHiddenFrom tracks pointer Y across tile rows', () => {
   assert.equal(targetHiddenFrom(3, cells, 20), 0);
   assert.equal(targetHiddenFrom(3, cells, 90), 2);
   assert.equal(targetHiddenFrom(3, cells, 200), 3);
+});
+
+test('stabilizeGridDropIndex holds until slop into the next cell', () => {
+  const cells = [
+    { index: 0, top: 0, height: 64, width: 70, left: 0 },
+    { index: 1, top: 0, height: 64, width: 70, left: 80 },
+    { index: 2, top: 72, height: 64, width: 70, left: 0 },
+  ];
+  const proposed = stabilizeGridDropIndex(cells, 42, 20, 0, 0, {});
+  assert.equal(proposed, 0);
+  const crossed = stabilizeGridDropIndex(cells, 48, 20, 0, 0, {});
+  assert.equal(crossed, 1);
+});
+
+test('resolveIntoHidden uses divider midline hysteresis', () => {
+  const mid = 100;
+  assert.equal(resolveIntoHidden(90, mid, false), false);
+  assert.equal(resolveIntoHidden(113, mid, false), true);
+  assert.equal(resolveIntoHidden(90, mid, true), true);
+  assert.equal(resolveIntoHidden(85, mid, true), false);
+});
+
+test('stabilizeHiddenFrom only moves split past row midline slop', () => {
+  const cells = [
+    { index: 0, top: 0, height: 64, width: 70, left: 0 },
+    { index: 1, top: 72, height: 64, width: 70, left: 0 },
+    { index: 2, top: 144, height: 64, width: 70, left: 0 },
+  ];
+  assert.equal(stabilizeHiddenFrom(3, cells, 40, 0), 0);
+  assert.equal(stabilizeHiddenFrom(3, cells, 48, 0), 1);
+  assert.equal(stabilizeHiddenFrom(3, cells, 48, 1), 1);
 });
 
 test('layout round-trip uses the v2 key', () => {

@@ -458,11 +458,56 @@ html.is-keyboard .format-bar {
   touch-action: manipulation;
 }
 
-.format-edit-tile.is-dragging {
-  z-index: 2;
-  position: relative;
-  opacity: 0.95;
+.format-edit-tile.is-dragging,
+.format-edit-tile.is-placeholder {
   touch-action: none;
+}
+
+.format-edit-tile.is-placeholder {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.format-edit-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 8;
+  margin: 0;
+  padding: 6px 4px 4px;
+  border: 0;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--chip);
+  color: inherit;
+  pointer-events: none;
+  opacity: 0.96;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 22%, transparent);
+  will-change: transform;
+}
+
+.format-edit-divider-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 8;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  opacity: 0.55;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.format-edit-divider-ghost .format-edit-divider-grip {
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
 }
 
 .format-edit-tile.is-bounce {
