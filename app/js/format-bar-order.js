@@ -193,24 +193,100 @@ export function moveItem(order, from, to) {
   return next;
 }
 
-/** Reorder a tile and keep hiddenFrom aligned with the shown/hidden split. */
-export function applyTileMove(layout, from, to, { intoHidden = false } = {}) {
-  const order = layout.order.slice();
-  const hf0 = clampHiddenFrom(layout.hiddenFrom, order.length);
-  if (from < 0 || from >= order.length) return { order, hiddenFrom: hf0 };
-  let hf = hf0;
-  const wasShown = from < hf;
-  const [item] = order.splice(from, 1);
-  if (from < hf) hf -= 1;
-  let insertAt = to;
-  if (to > from) insertAt = to - 1;
-  insertAt = Math.max(0, Math.min(insertAt, order.length));
-  order.splice(insertAt, 0, item);
-  const nowShown = insertAt < hf;
-  if (intoHidden && hf0 === layout.order.length && wasShown) {
-    hf = Math.min(insertAt, order.length);
-  } else if (!wasShown && nowShown) hf += 1;
-  return { order, hiddenFrom: clampHiddenFrom(hf, order.length) };
+/** Sentinel in the edit-sheet item list; hiddenFrom is its index. */
+export const FORMAT_BAR_DIVIDER = '__format_bar_divider__';
+
+export function layoutToItems(layout) {
+  const hf = clampHiddenFrom(layout.hiddenFrom, layout.order.length);
+  return [
+    ...layout.order.slice(0, hf),
+    FORMAT_BAR_DIVIDER,
+    ...layout.order.slice(hf),
+  ];
+}
+
+export function itemsToLayout(items) {
+  const divIdx = items.indexOf(FORMAT_BAR_DIVIDER);
+  if (divIdx < 0) {
+    return { order: items.slice(), hiddenFrom: items.length };
+  }
+  const order = [
+    ...items.slice(0, divIdx),
+    ...items.slice(divIdx + 1),
+  ];
+  return { order, hiddenFrom: divIdx };
+}
+
+/** One move in the item list (tiles + divider); hiddenFrom follows the sentinel. */
+export function previewLayoutFromItems(startItems, from, to) {
+  const nextItems = moveItem(startItems, from, to);
+  return itemsToLayout(nextItems);
+}
+
+/** Columns that fit under repeat(auto-fill, minmax(minCell, 1fr)). */
+export function formatEditGridColumnCount(gridWidth, gapX, minCell = 64) {
+  if (gridWidth <= 0) return 1;
+  return Math.max(1, Math.floor((gridWidth + gapX) / (minCell + gapX)));
+}
+
+/**
+ * Fixed slot geometry for edit-sheet hit tests (grid-local coords).
+ * Divider always starts a new row; hidden tiles begin on the row after it.
+ */
+export function buildFormatEditHitCells({
+  columnCount,
+  cellWidth,
+  cellHeight,
+  gapX = 10,
+  gapY = 8,
+  dividerHeight = 44,
+  items,
+}) {
+  const divIdx = items.indexOf(FORMAT_BAR_DIVIDER);
+  const shownCount = divIdx < 0 ? items.length : divIdx;
+  const hiddenCount = divIdx < 0 ? 0 : items.length - divIdx - 1;
+  const gridWidth = columnCount * cellWidth + (columnCount - 1) * gapX;
+  const cells = [];
+  let y = 0;
+  let col = 0;
+
+  const placeTile = (itemIndex) => {
+    cells.push({
+      index: itemIndex,
+      left: col * (cellWidth + gapX),
+      top: y,
+      width: cellWidth,
+      height: cellHeight,
+    });
+    col += 1;
+    if (col >= columnCount) {
+      col = 0;
+      y += cellHeight + gapY;
+    }
+  };
+
+  for (let i = 0; i < shownCount; i += 1) {
+    placeTile(i);
+  }
+  if (col > 0) {
+    col = 0;
+    y += cellHeight + gapY;
+  }
+  if (divIdx >= 0) {
+    cells.push({
+      index: divIdx,
+      left: 0,
+      top: y,
+      width: gridWidth,
+      height: dividerHeight,
+    });
+    y += dividerHeight + gapY;
+    col = 0;
+    for (let k = 0; k < hiddenCount; k += 1) {
+      placeTile(divIdx + 1 + k);
+    }
+  }
+  return cells;
 }
 
 export const DRAG_CELL_SLOP_PX = 8;
