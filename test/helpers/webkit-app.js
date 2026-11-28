@@ -277,13 +277,21 @@ export async function formatBarTap(page, formatId) {
   }, { formatId, point });
 }
 
-export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14, frameMs = 16, holdMs = 200 } = {}) {
-  const fromBox = await page.locator(`#format-edit-grid [data-id="${fromId}"]`).boundingBox();
+export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14, frameMs = 16, holdMs = 200, fromSection } = {}) {
+  let fromLocator = `#format-edit-shown [data-id="${fromId}"], #format-edit-hidden [data-id="${fromId}"]`;
+  if (fromSection === 'hidden') fromLocator = `#format-edit-hidden [data-id="${fromId}"]`;
+  else if (fromSection === 'shown') fromLocator = `#format-edit-shown [data-id="${fromId}"]`;
+  const fromBox = await page.locator(fromLocator).boundingBox();
   if (!fromBox) throw new Error(`missing edit sheet tile ${fromId}`);
   const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
-  await page.evaluate(async ({ fromId, from, to, steps, frameMs, holdMs }) => {
-    const tile = document.querySelector(`#format-edit-grid [data-id="${fromId}"]`);
-    const grid = document.getElementById('format-edit-grid');
+  const tileSelector = fromSection === 'hidden'
+    ? `#format-edit-hidden [data-id="${fromId}"]`
+    : fromSection === 'shown'
+      ? `#format-edit-shown [data-id="${fromId}"]`
+      : `#format-edit-shown [data-id="${fromId}"], #format-edit-hidden [data-id="${fromId}"]`;
+  await page.evaluate(async ({ fromId, from, to, steps, frameMs, holdMs, tileSelector }) => {
+    const tile = document.querySelector(tileSelector);
+    const grid = document.getElementById('format-edit-scroll');
     if (!tile || !grid) throw new Error('edit sheet missing');
     const pointerId = 96;
     const firePointer = (type, point, buttons) => {
@@ -316,7 +324,7 @@ export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14,
       requestAnimationFrame(() => requestAnimationFrame(resolve));
     });
     firePointer('pointerup', to, 0);
-  }, { fromId, from, to, steps, frameMs, holdMs });
+  }, { fromId, from, to, steps, frameMs, holdMs, tileSelector });
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   }));
@@ -329,14 +337,14 @@ export async function waitDoubleRaf(page) {
 }
 
 export async function formatEditSheetDrag(page, fromId, toId, { steps = 12, frameMs = 16 } = {}) {
-  const fromBox = await page.locator(`#format-edit-grid [data-id="${fromId}"]`).boundingBox();
-  const toBox = await page.locator(`#format-edit-grid [data-id="${toId}"]`).boundingBox();
+  const fromBox = await page.locator(`#format-edit-shown [data-id="${fromId}"], #format-edit-hidden [data-id="${fromId}"]`).boundingBox();
+  const toBox = await page.locator(`#format-edit-shown [data-id="${toId}"], #format-edit-hidden [data-id="${toId}"]`).boundingBox();
   if (!fromBox || !toBox) throw new Error('missing edit sheet tiles');
   const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
   const to = { x: toBox.x + toBox.width / 2, y: toBox.y + toBox.height / 2 };
   await page.evaluate(async ({ fromId, from, to, steps, frameMs }) => {
-    const tile = document.querySelector(`#format-edit-grid [data-id="${fromId}"]`);
-    const grid = document.getElementById('format-edit-grid');
+    const tile = document.querySelector(`#format-edit-shown [data-id="${fromId}"], #format-edit-hidden [data-id="${fromId}"]`);
+    const grid = document.getElementById('format-edit-scroll');
     if (!tile || !grid) throw new Error('edit sheet missing');
     const pointerId = 94;
     const firePointer = (type, point, buttons) => {
