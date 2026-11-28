@@ -508,9 +508,25 @@ html.is-keyboard .format-bar {
   transition: none;
 }
 
+.format-edit-section-divider {
+  flex: none;
+  margin: 1px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.format-edit-divider-line {
+  height: 0;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 22%, transparent);
+  margin: 0 2px;
+  flex: none;
+}
+
 .format-edit-hidden-head {
-  margin: 4px 0 2px;
-  padding: 6px 8px;
+  margin: 0;
+  padding: 2px 8px 4px;
   font-size: 13px;
   font-weight: 600;
   opacity: 0.75;
@@ -518,6 +534,15 @@ html.is-keyboard .format-bar {
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.format-edit-section-grid--hidden .format-edit-tile {
+  background: color-mix(in srgb, var(--chip) 88%, var(--surface));
+}
+
+html[data-theme='dark'] .format-edit-divider-line,
+:root:not([data-theme='light']) .format-edit-divider-line {
+  border-top-color: color-mix(in srgb, var(--ink) 45%, transparent);
 }
 
 .format-edit-tile {
