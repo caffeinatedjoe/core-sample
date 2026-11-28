@@ -223,198 +223,212 @@ export function previewLayoutFromItems(startItems, from, to) {
   return itemsToLayout(nextItems);
 }
 
+export const FORMAT_EDIT_MIN_CELL_PX = 44;
+export const FORMAT_EDIT_GAP_X_PX = 8;
+export const FORMAT_EDIT_GAP_Y_PX = 6;
+
 /** Columns that fit under repeat(auto-fill, minmax(minCell, 1fr)). */
-export function formatEditGridColumnCount(gridWidth, gapX, minCell = 64) {
+export function formatEditGridColumnCount(gridWidth, gapX, minCell = FORMAT_EDIT_MIN_CELL_PX) {
   if (gridWidth <= 0) return 1;
   return Math.max(1, Math.floor((gridWidth + gapX) / (minCell + gapX)));
 }
 
+export const FORMAT_EDIT_SECTION_SHOWN = 'shown';
+export const FORMAT_EDIT_SECTION_HIDDEN = 'hidden';
+export const FORMAT_EDIT_SECTION_HYSTERESIS_PX = 12;
+export const FORMAT_EDIT_SLOT_INNER_MARGIN = 0.15;
+
+export function layoutToSections(layout) {
+  const hf = clampHiddenFrom(layout.hiddenFrom, layout.order.length);
+  return {
+    shown: layout.order.slice(0, hf),
+    hidden: layout.order.slice(hf),
+  };
+}
+
+export function sectionsToLayout(shown, hidden) {
+  return { order: [...shown, ...hidden], hiddenFrom: shown.length };
+}
+
+/** Occupied rows for tiles plus one spare row for drag projection. */
+export function formatEditFrozenRows(tileCount, columnCount) {
+  const cols = Math.max(1, columnCount);
+  const occupied = Math.ceil(Math.max(0, tileCount) / cols) || 1;
+  return occupied + 1;
+}
+
+export function formatEditGridPixelHeight(rowCount, cellHeight, gapY) {
+  if (rowCount <= 0) return 0;
+  return rowCount * cellHeight + Math.max(0, rowCount - 1) * gapY;
+}
+
+export function formatEditSlotRect(slot, columnCount, cellWidth, cellHeight, gapX, gapY, originX = 0, originY = 0) {
+  const row = Math.floor(slot / columnCount);
+  const col = slot % columnCount;
+  return {
+    left: originX + col * (cellWidth + gapX),
+    top: originY + row * (cellHeight + gapY),
+    width: cellWidth,
+    height: cellHeight,
+  };
+}
+
+/** Scroll-local Y → section with header midline hysteresis. */
+export function pickFormatEditSection(localY, headerMidY, prevSection, hysteresis = FORMAT_EDIT_SECTION_HYSTERESIS_PX) {
+  if (prevSection === FORMAT_EDIT_SECTION_SHOWN) {
+    return localY <= headerMidY + hysteresis ? FORMAT_EDIT_SECTION_SHOWN : FORMAT_EDIT_SECTION_HIDDEN;
+  }
+  if (prevSection === FORMAT_EDIT_SECTION_HIDDEN) {
+    return localY >= headerMidY - hysteresis ? FORMAT_EDIT_SECTION_HIDDEN : FORMAT_EDIT_SECTION_SHOWN;
+  }
+  return localY < headerMidY ? FORMAT_EDIT_SECTION_SHOWN : FORMAT_EDIT_SECTION_HIDDEN;
+}
+
+export function formatEditProjectedSlotCount(shownCount, hiddenCount, section, dragFromSection) {
+  if (section === FORMAT_EDIT_SECTION_SHOWN) {
+    const base = dragFromSection === FORMAT_EDIT_SECTION_SHOWN ? shownCount - 1 : shownCount;
+    return Math.max(1, base + 1);
+  }
+  const base = dragFromSection === FORMAT_EDIT_SECTION_HIDDEN ? hiddenCount - 1 : hiddenCount;
+  return Math.max(1, base + 1);
+}
+
+/** Slot index under the finger (scroll-local coords, grid-local X/Y). */
+export function pointerToFormatEditSlot(localX, localY, originX, originY, columnCount, cellWidth, cellHeight, gapX, gapY, projectedSlotCount) {
+  const count = Math.max(1, projectedSlotCount);
+  const rows = Math.ceil(count / columnCount);
+  const gridBottom = originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
+  if (localY >= gridBottom) return Math.max(0, count - 1);
+  const relX = localX - originX;
+  const relY = localY - originY;
+  if (relY < 0 || relX < 0) return 0;
+  const col = Math.min(columnCount - 1, Math.floor(relX / (cellWidth + gapX)));
+  const row = Math.floor(relY / (cellHeight + gapY));
+  const slot = row * columnCount + col;
+  return Math.max(0, Math.min(count - 1, slot));
+}
+
+export function isPointerInSlotInner70(localX, localY, rect, margin = FORMAT_EDIT_SLOT_INNER_MARGIN) {
+  const mx = rect.width * margin;
+  const my = rect.height * margin;
+  return (
+    localX >= rect.left + mx
+    && localX < rect.left + rect.width - mx
+    && localY >= rect.top + my
+    && localY < rect.top + rect.height - my
+  );
+}
+
 /**
- * Fixed slot geometry for edit-sheet hit tests (grid-local coords).
- * Divider always starts a new row; hidden tiles begin on the row after it.
+ * Proposed drag target: { section, slot }. Keeps current target until the pointer is in the inner 70% of the proposed slot.
  */
-export function buildFormatEditHitCells({
+export function pickFormatEditDragTarget({
+  localX,
+  localY,
+  headerMidY,
+  prevSection,
+  currentTarget,
+  shownOriginY,
+  hiddenOriginY,
+  originX,
   columnCount,
   cellWidth,
   cellHeight,
-  gapX = 10,
-  gapY = 8,
-  dividerHeight = 44,
-  items,
+  gapX,
+  gapY,
+  shownCount,
+  hiddenCount,
+  dragFromSection,
 }) {
-  const divIdx = items.indexOf(FORMAT_BAR_DIVIDER);
-  const shownCount = divIdx < 0 ? items.length : divIdx;
-  const hiddenCount = divIdx < 0 ? 0 : items.length - divIdx - 1;
-  const gridWidth = columnCount * cellWidth + (columnCount - 1) * gapX;
-  const cells = [];
-  let y = 0;
-  let col = 0;
+  const section = pickFormatEditSection(localY, headerMidY, prevSection ?? currentTarget?.section);
+  const projected = formatEditProjectedSlotCount(shownCount, hiddenCount, section, dragFromSection);
+  const originY = section === FORMAT_EDIT_SECTION_SHOWN ? shownOriginY : hiddenOriginY;
+  const slot = pointerToFormatEditSlot(
+    localX,
+    localY,
+    originX,
+    originY,
+    columnCount,
+    cellWidth,
+    cellHeight,
+    gapX,
+    gapY,
+    projected,
+  );
+  const proposed = { section, slot };
+  if (!currentTarget) return proposed;
+  if (proposed.section === currentTarget.section && proposed.slot === currentTarget.slot) return currentTarget;
+  const rect = formatEditSlotRect(
+    proposed.slot,
+    columnCount,
+    cellWidth,
+    cellHeight,
+    gapX,
+    gapY,
+    originX,
+    originY,
+  );
+  return isPointerInSlotInner70(localX, localY, rect) ? proposed : currentTarget;
+}
 
-  const placeTile = (itemIndex) => {
-    cells.push({
-      index: itemIndex,
-      left: col * (cellWidth + gapX),
-      top: y,
-      width: cellWidth,
-      height: cellHeight,
-    });
-    col += 1;
-    if (col >= columnCount) {
-      col = 0;
-      y += cellHeight + gapY;
+/** Project lists with a gap at target; omit dragId from lists (placeholder at home). */
+export function projectFormatEditLists(shown, hidden, dragId, fromSection, target) {
+  let projShown = shown.filter((id) => id !== dragId);
+  let projHidden = hidden.filter((id) => id !== dragId);
+  if (target.section === FORMAT_EDIT_SECTION_SHOWN) {
+    const slot = Math.max(0, Math.min(target.slot, projShown.length));
+    projShown = [...projShown.slice(0, slot), null, ...projShown.slice(slot)];
+  } else {
+    const slot = Math.max(0, Math.min(target.slot, projHidden.length));
+    projHidden = [...projHidden.slice(0, slot), null, ...projHidden.slice(slot)];
+  }
+  return { projShown, projHidden };
+}
+
+export function homeSlotIndex(id, ids) {
+  const i = ids.indexOf(id);
+  return i < 0 ? null : i;
+}
+
+/** Map each visible id to projected slot in its section (null gap skipped for real ids). */
+export function formatEditProjectionSlots(shown, hidden, dragId, fromSection, target) {
+  const { projShown, projHidden } = projectFormatEditLists(shown, hidden, dragId, fromSection, target);
+  const map = new Map();
+  const fold = (list, section) => {
+    let slot = 0;
+    for (const id of list) {
+      if (id === null) {
+        slot += 1;
+        continue;
+      }
+      if (id === dragId) continue;
+      map.set(id, { section, slot });
+      slot += 1;
     }
   };
-
-  for (let i = 0; i < shownCount; i += 1) {
-    placeTile(i);
-  }
-  if (col > 0) {
-    col = 0;
-    y += cellHeight + gapY;
-  }
-  if (divIdx >= 0) {
-    cells.push({
-      index: divIdx,
-      left: 0,
-      top: y,
-      width: gridWidth,
-      height: dividerHeight,
-      isDivider: true,
-    });
-    y += dividerHeight + gapY;
-    col = 0;
-    for (let k = 0; k < hiddenCount; k += 1) {
-      placeTile(divIdx + 1 + k);
-    }
-  }
-  return cells;
+  fold(projShown, FORMAT_EDIT_SECTION_SHOWN);
+  fold(projHidden, FORMAT_EDIT_SECTION_HIDDEN);
+  return map;
 }
 
-export const DRAG_CELL_SLOP_PX = 8;
-export const DRAG_DIVIDER_SLOP_PX = 12;
-
-/** Each cell: { left, top, width, height, index, isDivider? }. Returns list insertion index. */
-export function targetGridDropIndex(cells, pointerX, pointerY, fromIndex, opts = {}) {
-  const { dividerRow = null } = opts;
-  const itemsLength = opts.itemsLength ?? cells.length;
-  const dividerSlop = opts.dividerSlop ?? DRAG_DIVIDER_SLOP_PX;
-  const divCell = cells.find((c) => c.isDivider);
-  if (!cells.length) return 0;
-
-  const last = cells[cells.length - 1];
-  if (last && pointerY >= last.top + last.height) {
-    return itemsLength;
-  }
-  if (divCell && pointerY >= divCell.top + divCell.height) {
-    return Math.max(divCell.index + 1, itemsLength);
-  }
-
-  const hit = cells.find((cell) => (
-    pointerX >= cell.left
-    && pointerX < cell.left + cell.width
-    && pointerY >= cell.top
-    && pointerY < cell.top + cell.height
-  ));
-  if (hit) {
-    if (hit.isDivider) {
-      const midY = hit.top + hit.height / 2;
-      if (pointerY >= midY + dividerSlop) return hit.index + 1;
-      if (pointerY <= midY - dividerSlop) return hit.index;
-      return pointerY >= midY ? hit.index + 1 : hit.index;
-    }
-    const midX = hit.left + hit.width / 2;
-    return pointerX < midX ? hit.index : hit.index + 1;
-  }
-  if (dividerRow) {
-    const row = dividerRow;
-    if (pointerY >= row.top && pointerY < row.top + row.height) {
-      return row.index;
-    }
-  }
-  if (divCell && pointerY >= divCell.top + divCell.height / 2 + dividerSlop) {
-    return Math.max(divCell.index + 1, itemsLength);
-  }
-  let best = fromIndex;
-  let bestDist = Infinity;
-  for (const cell of cells) {
-    const cx = cell.left + cell.width / 2;
-    const cy = cell.top + cell.height / 2;
-    const d = (pointerX - cx) ** 2 + (pointerY - cy) ** 2;
-    if (d < bestDist) {
-      bestDist = d;
-      best = cell.index + (pointerX >= cx ? 1 : 0);
-    }
-  }
-  let target = Math.max(0, Math.min(itemsLength, best));
-  if (divCell && pointerY >= divCell.top + divCell.height / 2 + dividerSlop) {
-    target = Math.max(target, divCell.index + 1);
-  }
-  return target;
+export function formatEditSlotTranslate(homeSlot, projSlot, columnCount, cellWidth, cellHeight, gapX, gapY) {
+  if (homeSlot == null || projSlot == null || homeSlot === projSlot) return { dx: 0, dy: 0 };
+  const a = formatEditSlotRect(homeSlot, columnCount, cellWidth, cellHeight, gapX, gapY);
+  const b = formatEditSlotRect(projSlot, columnCount, cellWidth, cellHeight, gapX, gapY);
+  return { dx: b.left - a.left, dy: b.top - a.top };
 }
 
-/** Stabilize drop index: stick with currentTarget until pointer crosses into the next slot. */
-export function stabilizeGridDropIndex(cells, pointerX, pointerY, fromIndex, currentTarget, opts = {}) {
-  const proposed = targetGridDropIndex(cells, pointerX, pointerY, fromIndex, opts);
-  if (currentTarget == null) return proposed;
-  if (proposed === currentTarget) return currentTarget;
-  const divCell = cells.find((c) => c.isDivider);
-  const dividerSlop = opts.dividerSlop ?? DRAG_DIVIDER_SLOP_PX;
-  if (
-    divCell
-    && pointerY >= divCell.top + divCell.height / 2 + dividerSlop
-    && proposed > divCell.index
-    && currentTarget <= divCell.index
-  ) {
-    return proposed;
-  }
-  const slop = opts.slop ?? DRAG_CELL_SLOP_PX;
-  const movingDown = proposed > currentTarget;
-  const anchor = movingDown
-    ? cells.find((c) => c.index === currentTarget) || cells.find((c) => c.index === proposed - 1)
-    : cells.find((c) => c.index === proposed) || cells.find((c) => c.index === currentTarget - 1);
-  if (!anchor) return proposed;
-  const midX = anchor.left + anchor.width / 2;
-  const midY = anchor.top + anchor.height / 2;
-  if (movingDown) {
-    const crossed = pointerX >= midX + slop || pointerY >= midY + slop;
-    return crossed ? proposed : currentTarget;
-  }
-  const crossed = pointerX <= midX - slop && pointerY <= midY - slop;
-  return crossed ? proposed : currentTarget;
-}
-
-/** With hysteresis around divider midline (grid-local Y). */
-export function resolveIntoHidden(localY, dividerMidY, prevIntoHidden, slop = DRAG_DIVIDER_SLOP_PX) {
-  if (prevIntoHidden == null) return localY > dividerMidY;
-  if (prevIntoHidden) return localY > dividerMidY - slop;
-  return localY > dividerMidY + slop;
-}
-
-/** Pick hiddenFrom (0..orderLength) from pointer Y and tile rows. */
-export function targetHiddenFrom(orderLength, cells, pointerY) {
-  if (!cells.length) return clampHiddenFrom(0, orderLength);
-  if (pointerY <= cells[0].top) return 0;
-  const last = cells[cells.length - 1];
-  if (pointerY >= last.top + last.height) return clampHiddenFrom(orderLength, orderLength);
-  let hiddenFrom = 0;
-  for (const cell of cells) {
-    if (pointerY >= cell.top + cell.height / 2) hiddenFrom = cell.index + 1;
-  }
-  return clampHiddenFrom(hiddenFrom, orderLength);
-}
-
-/** Stabilize hiddenFrom when dragging the divider (12px past row midline). */
-export function stabilizeHiddenFrom(orderLength, cells, pointerY, currentHf, slop = DRAG_DIVIDER_SLOP_PX) {
-  const proposed = targetHiddenFrom(orderLength, cells, pointerY, slop);
-  if (proposed === currentHf) return currentHf;
-  const movingDown = proposed > currentHf;
-  const edgeCell = movingDown
-    ? cells.find((c) => c.index === currentHf)
-    : cells.filter((c) => c.index < currentHf).sort((a, b) => b.index - a.index)[0];
-  if (!edgeCell) return proposed;
-  const midY = edgeCell.top + edgeCell.height / 2;
-  if (movingDown) {
-    return pointerY >= midY + slop ? proposed : currentHf;
-  }
-  return pointerY <= midY - slop ? proposed : currentHf;
+/** Commit a tile move between shown and hidden lists. */
+export function commitFormatEditMove(shown, hidden, dragId, fromSection, fromIndex, target) {
+  const nextShown = shown.slice();
+  const nextHidden = hidden.slice();
+  if (fromSection === FORMAT_EDIT_SECTION_SHOWN) nextShown.splice(fromIndex, 1);
+  else nextHidden.splice(fromIndex, 1);
+  const dest = target.section === FORMAT_EDIT_SECTION_SHOWN ? nextShown : nextHidden;
+  const at = Math.max(0, Math.min(target.slot, dest.length));
+  dest.splice(at, 0, dragId);
+  return sectionsToLayout(
+    target.section === FORMAT_EDIT_SECTION_SHOWN ? dest : nextShown,
+    target.section === FORMAT_EDIT_SECTION_HIDDEN ? dest : nextHidden,
+  );
 }
