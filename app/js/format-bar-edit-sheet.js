@@ -1,16 +1,22 @@
-// Edit toolbar sheet: one grid, draggable divider, live bar updates.
+// Edit toolbar sheet: shown/hidden grids, transform-only drag until drop.
 
 import {
-  FORMAT_BAR_DIVIDER,
-  buildFormatEditHitCells,
+  FORMAT_EDIT_SECTION_HIDDEN,
+  FORMAT_EDIT_SECTION_SHOWN,
   clampHiddenFrom,
+  commitFormatEditMove,
+  formatEditFrozenRows,
   formatEditGridColumnCount,
-  layoutToItems,
+  formatEditGridPixelHeight,
+  formatEditProjectionSlots,
+  formatEditSlotRect,
+  formatEditSlotTranslate,
+  layoutToSections,
   mergeFormatBarLayout,
-  previewLayoutFromItems,
+  pickFormatEditDragTarget,
   readFormatBarLayout,
   resetFormatBarLayout,
-  stabilizeGridDropIndex,
+  sectionsToLayout,
 } from './format-bar-order.js';
 import {
   applyFormatBarLayout,
@@ -20,6 +26,8 @@ import {
 
 const SLOP_PX = 8;
 const HOLD_MS = 150;
+const TILE_TRANSITION = 'transform 180ms ease';
+const GHOST_SETTLE_MS = 150;
 
 export function mountFormatBarEditSheet(doc, bar, {
   storage = globalThis.localStorage,
@@ -29,13 +37,16 @@ export function mountFormatBarEditSheet(doc, bar, {
   blurEditor,
 } = {}) {
   const root = doc.getElementById('format-edit-sheet');
-  const grid = doc.getElementById('format-edit-grid');
+  const scroll = doc.getElementById('format-edit-scroll');
+  const shownGrid = doc.getElementById('format-edit-shown');
+  const hiddenGrid = doc.getElementById('format-edit-hidden');
+  const hiddenHead = doc.getElementById('format-edit-hidden-head');
   const scrim = doc.getElementById('format-edit-scrim');
   const doneBtn = doc.getElementById('format-edit-done');
   const resetBtn = doc.getElementById('format-edit-reset');
-  const scroll = bar?.querySelector?.('.format-scroll');
+  const barScroll = bar?.querySelector?.('.format-scroll');
   const view = doc.defaultView;
-  if (!root || !grid || !scroll || !view) {
+  if (!root || !scroll || !shownGrid || !hiddenGrid || !hiddenHead || !barScroll || !view) {
     return { open: () => false, destroy() {} };
   }
 
@@ -45,120 +56,21 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   let drag = null;
   let raf = 0;
-  let pendingPointer = null;
+  let pendingFrame = null;
   let holdTimer = 0;
   let press = null;
-  let flipTimers = new Set();
 
-  const layoutTiles = () => [...grid.querySelectorAll('.format-edit-tile')];
-
-  const measureHitGeometry = (items) => {
-    const sample = layoutTiles().find((node) => !node.classList.contains('is-placeholder'));
-    const div = dividerEl();
-    const styles = view.getComputedStyle(grid);
-    const gapX = Number.parseFloat(styles.columnGap) || 10;
-    const gapY = Number.parseFloat(styles.rowGap) || 8;
-    const cellWidth = sample?.offsetWidth ?? 64;
-    const cellHeight = sample?.offsetHeight ?? 64;
-    const dividerHeight = div?.offsetHeight ?? 44;
-    const columnCount = formatEditGridColumnCount(grid.clientWidth, gapX);
-    return buildFormatEditHitCells({
-      columnCount,
-      cellWidth,
-      cellHeight,
-      gapX,
-      gapY,
-      dividerHeight,
-      items,
-    });
-  };
-
-  const dividerEl = () => grid.querySelector('.format-edit-divider');
-  const emptyEl = () => grid.querySelector('.format-edit-empty');
-
-  const visualRects = () => {
-    const gridBox = grid.getBoundingClientRect();
-    const map = new Map();
-    for (const node of grid.querySelectorAll('.format-edit-tile, .format-edit-divider')) {
-      if (node.classList.contains('is-placeholder')) continue;
-      const r = node.getBoundingClientRect();
-      map.set(node, {
-        left: r.left - gridBox.left + grid.scrollLeft,
-        top: r.top - gridBox.top + grid.scrollTop,
-        width: r.width,
-        height: r.height,
-      });
-    }
-    return map;
-  };
-
-  const layoutRects = () => {
-    const map = new Map();
-    for (const node of layoutTiles()) {
-      if (node.classList.contains('is-placeholder')) continue;
-      map.set(node, {
-        left: node.offsetLeft,
-        top: node.offsetTop,
-        width: node.offsetWidth,
-        height: node.offsetHeight,
-      });
-    }
-    const div = dividerEl();
-    if (div) {
-      map.set(div, {
-        left: div.offsetLeft,
-        top: div.offsetTop,
-        width: div.offsetWidth,
-        height: div.offsetHeight,
-      });
-    }
-    return map;
-  };
-
-  const runFlip = (beforeVisual, afterNodes = null) => {
-    const moving = afterNodes || [...grid.querySelectorAll('.format-edit-tile, .format-edit-divider')];
-    const after = layoutRects();
-    for (const node of moving) {
-      if (node.classList.contains('is-placeholder')) continue;
-      if (drag?.placeholder === node) continue;
-      const prev = beforeVisual.get(node);
-      const next = after.get(node);
-      if (!prev || !next) continue;
-      const dx = prev.left - next.left;
-      const dy = prev.top - next.top;
-      if (!dx && !dy) {
-        node.style.transition = '';
-        node.style.transform = '';
-        continue;
-      }
-      node.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
-      node.style.transition = 'none';
-    }
-    view.requestAnimationFrame(() => {
-      for (const node of moving) {
-        if (node.classList.contains('is-placeholder')) continue;
-        if (!after.has(node)) continue;
-        node.style.transition = 'transform 180ms ease';
-        node.style.transform = '';
-      }
-      const t = view.setTimeout(() => {
-        flipTimers.delete(t);
-        for (const node of moving) {
-          node.style.transition = '';
-        }
-      }, 200);
-      flipTimers.add(t);
-    });
-  };
+  const sections = () => layoutToSections(layout);
+  const layoutTiles = () => [...shownGrid.querySelectorAll('.format-edit-tile'), ...hiddenGrid.querySelectorAll('.format-edit-tile')];
 
   const labelFor = (id) => {
-    const src = scroll.querySelector(`[data-format="${id}"]`);
+    const src = barScroll.querySelector(`[data-format="${id}"]`);
     if (!src) return id;
     return src.getAttribute('aria-label') || src.getAttribute('title') || id;
   };
 
   const iconHtmlFor = (id) => {
-    const src = scroll.querySelector(`[data-format="${id}"]`);
+    const src = barScroll.querySelector(`[data-format="${id}"]`);
     if (!src) return '';
     const inner = src.querySelector('svg') || (src.classList.contains('format-comment') ? src : null);
     return inner ? inner.outerHTML : '';
@@ -181,74 +93,55 @@ export function mountFormatBarEditSheet(doc, bar, {
     return tile;
   };
 
-  const ensureDivider = () => {
-    let divider = dividerEl();
-    if (!divider) {
-      divider = doc.createElement('div');
-      divider.className = 'format-edit-divider';
-      divider.dataset.role = 'divider';
-      divider.innerHTML = '<span class="format-edit-divider-label">Hidden below</span><span class="format-edit-divider-grip" aria-hidden="true"></span>';
-      grid.appendChild(divider);
-    }
-    return divider;
-  };
-
   const ensureEmpty = () => {
-    let empty = emptyEl();
+    let empty = scroll.querySelector('.format-edit-empty');
     if (!empty) {
       empty = doc.createElement('p');
       empty.className = 'format-edit-empty';
       empty.textContent = 'No hidden controls.';
-      grid.appendChild(empty);
+      scroll.appendChild(empty);
     }
     return empty;
   };
 
   const updateEmptyVisibility = () => {
-    const empty = emptyEl();
-    if (!empty) return;
-    const hf = clampHiddenFrom(layout.hiddenFrom, layout.order.length);
-    const hasHidden = hf < layout.order.length;
-    empty.hidden = false;
-    empty.style.visibility = hasHidden ? 'hidden' : 'visible';
+    const empty = ensureEmpty();
+    const { hidden } = sections();
+    const hasHidden = hidden.length > 0;
+    empty.hidden = hasHidden;
     empty.setAttribute('aria-hidden', hasHidden ? 'true' : 'false');
   };
 
   const syncGridDom = () => {
-    const { order, hiddenFrom } = layout;
-    const hf = clampHiddenFrom(hiddenFrom, order.length);
-    const divider = ensureDivider();
-    const empty = ensureEmpty();
-    const orderSet = new Set(order);
+    hiddenHead.hidden = false;
+    const { shown, hidden } = sections();
+    const orderSet = new Set([...shown, ...hidden]);
     for (const node of layoutTiles()) {
       if (!orderSet.has(node.dataset.id)) node.remove();
     }
-    for (let i = 0; i < order.length; i += 1) {
-      let tile = grid.querySelector(`[data-id="${order[i]}"]`);
-      if (!tile) tile = makeTile(order[i], i);
+    for (let i = 0; i < shown.length; i += 1) {
+      let tile = shownGrid.querySelector(`[data-id="${shown[i]}"]`);
+      if (!tile) tile = makeTile(shown[i], i);
       tile.dataset.index = String(i);
+      shownGrid.appendChild(tile);
     }
-    const sequence = [
-      ...order.slice(0, hf).map((id) => grid.querySelector(`[data-id="${id}"]`)),
-      divider,
-      ...order.slice(hf).map((id) => grid.querySelector(`[data-id="${id}"]`)),
-      empty,
-    ];
-    for (const node of sequence) {
-      if (node) grid.appendChild(node);
+    while (shownGrid.children.length > shown.length) {
+      shownGrid.lastElementChild.remove();
+    }
+    for (let i = 0; i < hidden.length; i += 1) {
+      let tile = hiddenGrid.querySelector(`[data-id="${hidden[i]}"]`);
+      if (!tile) tile = makeTile(hidden[i], shown.length + i);
+      tile.dataset.index = String(shown.length + i);
+      hiddenGrid.appendChild(tile);
+    }
+    while (hiddenGrid.children.length > hidden.length) {
+      hiddenGrid.lastElementChild.remove();
     }
     updateEmptyVisibility();
-  };
-
-  const render = () => {
-    const { order } = layout;
-    grid.replaceChildren();
-    for (let i = 0; i < order.length; i += 1) {
-      grid.appendChild(makeTile(order[i], i));
+    if (!drag) {
+      const geom = measureDragGeometry();
+      applyFrozenGridHeights(geom);
     }
-    ensureDivider();
-    ensureEmpty();
-    syncGridDom();
   };
 
   const applyLive = () => {
@@ -257,7 +150,7 @@ export function mountFormatBarEditSheet(doc, bar, {
   };
 
   const bounceTile = (node) => {
-    if (!node || node.dataset.role === 'divider') return;
+    if (!node) return;
     node.classList.remove('is-bounce');
     void node.offsetWidth;
     node.classList.add('is-bounce');
@@ -292,8 +185,7 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   const openSheet = (selection) => {
     layout = mergeFormatBarLayout(readFormatBarLayout(storage) || readLayoutFromBar(bar));
-    savedSelection = selection ?? null;
-    render();
+    syncGridDom();
     applyLive();
     setSheetOpen(true);
     onOpen?.();
@@ -301,17 +193,63 @@ export function mountFormatBarEditSheet(doc, bar, {
   };
 
   const removeGhost = () => {
-    root.querySelectorAll('.format-edit-ghost, .format-edit-divider-ghost').forEach((n) => n.remove());
+    root.querySelectorAll('.format-edit-ghost').forEach((n) => n.remove());
   };
 
   const clearDragTransforms = () => {
-    for (const node of grid.querySelectorAll('.format-edit-tile, .format-edit-divider')) {
+    for (const node of layoutTiles()) {
+      node.style.transition = '';
       node.style.transform = '';
       node.style.opacity = '';
       node.classList.remove('is-dragging', 'is-placeholder');
-      node.style.touchAction = '';
     }
+    scroll.style.overflow = '';
+    scroll.style.overscrollBehavior = '';
     removeGhost();
+  };
+
+  const measureDragGeometry = () => {
+    const scrollBox = scroll.getBoundingClientRect();
+    const scrollTop = scroll.scrollTop;
+    const sample = shownGrid.querySelector('.format-edit-tile') || hiddenGrid.querySelector('.format-edit-tile');
+    const styles = view.getComputedStyle(shownGrid);
+    const gapX = Number.parseFloat(styles.columnGap) || 10;
+    const gapY = Number.parseFloat(styles.rowGap) || 8;
+    const cellWidth = sample?.offsetWidth ?? 64;
+    const cellHeight = sample?.offsetHeight ?? 64;
+    const columnCount = formatEditGridColumnCount(shownGrid.clientWidth, gapX);
+    const headBox = hiddenHead.getBoundingClientRect();
+    const shownBox = shownGrid.getBoundingClientRect();
+    const hiddenBox = hiddenGrid.getBoundingClientRect();
+    const originX = shownBox.left - scrollBox.left + scroll.scrollLeft;
+    const shownOriginY = shownBox.top - scrollBox.top + scrollTop;
+    const hiddenOriginY = hiddenBox.top - scrollBox.top + scrollTop;
+    const headerMidY = (headBox.top + headBox.bottom) / 2 - scrollBox.top + scrollTop;
+    return {
+      scrollBox,
+      scrollTop,
+      gapX,
+      gapY,
+      cellWidth,
+      cellHeight,
+      columnCount,
+      originX,
+      shownOriginY,
+      hiddenOriginY,
+      headerMidY,
+    };
+  };
+
+  const applyFrozenGridHeights = (geom) => {
+    const { shown, hidden } = sections();
+    const { cellHeight, gapY } = geom;
+    shownGrid.style.minHeight = `${formatEditGridPixelHeight(formatEditFrozenRows(shown.length), cellHeight, gapY)}px`;
+    hiddenGrid.style.minHeight = `${formatEditGridPixelHeight(formatEditFrozenRows(hidden.length), cellHeight, gapY)}px`;
+  };
+
+  const lockScrollForDrag = () => {
+    scroll.style.overflow = 'hidden';
+    scroll.style.overscrollBehavior = 'contain';
   };
 
   const placeTileGhost = (source, clientX, clientY) => {
@@ -332,60 +270,129 @@ export function mountFormatBarEditSheet(doc, bar, {
     drag.placeholder = source;
     source.classList.add('is-placeholder');
     source.style.opacity = '0';
-    void ghost.offsetWidth;
-    moveGhost(clientX, clientY);
+    writeGhostTransform(clientX, clientY);
   };
 
-  const placeDividerGhost = (source, clientX, clientY) => {
-    removeGhost();
-    const r = source.getBoundingClientRect();
-    drag.grabOffsetY = clientY - (r.top + r.height / 2);
-    drag.ghostW = r.width;
-    drag.ghostH = r.height;
-    const ghost = doc.createElement('div');
-    ghost.className = 'format-edit-divider-ghost';
-    ghost.innerHTML = '<span class="format-edit-divider-grip" aria-hidden="true"></span>';
-    ghost.style.width = `${r.width}px`;
-    root.appendChild(ghost);
-    drag.ghost = ghost;
-    source.style.opacity = '0.35';
-    void ghost.offsetWidth;
-    moveDividerGhost(clientX, clientY);
-  };
-
-  const moveGhost = (clientX, clientY) => {
+  const writeGhostTransform = (clientX, clientY) => {
     if (!drag?.ghost) return;
     const cx = clientX - drag.grabOffsetX;
     const cy = clientY - drag.grabOffsetY;
     const hw = (drag.ghostW || drag.ghost.offsetWidth) / 2;
     const hh = (drag.ghostH || drag.ghost.offsetHeight) / 2;
     drag.ghost.style.transform = `translate3d(${cx - hw}px, ${cy - hh}px, 0)`;
+    const probe = view.__formatEditDragProbe;
+    if (probe) probe.ghostWrites = (probe.ghostWrites || 0) + 1;
   };
 
-  const moveDividerGhost = (clientX, clientY) => {
-    if (!drag?.ghost) return;
-    const cy = clientY - drag.grabOffsetY;
-    const hw = (drag.ghostW || drag.ghost.offsetWidth) / 2;
-    const hh = (drag.ghostH || drag.ghost.offsetHeight || 44) / 2;
-    drag.ghost.style.transform = `translate3d(${clientX - hw}px, ${cy - hh}px, 0)`;
+  const applyTileTransforms = (target) => {
+    if (!drag) return;
+    const { shown, hidden } = drag.startSections;
+    const proj = formatEditProjectionSlots(shown, hidden, drag.tileId, drag.fromSection, target);
+    const { columnCount, cellWidth, cellHeight, gapX, gapY } = drag.geom;
+    for (const node of layoutTiles()) {
+      if (node === drag.placeholder) continue;
+      const id = node.dataset.id;
+      const homeSection = shown.includes(id) ? FORMAT_EDIT_SECTION_SHOWN : FORMAT_EDIT_SECTION_HIDDEN;
+      const homeList = homeSection === FORMAT_EDIT_SECTION_SHOWN ? shown : hidden;
+      const homeSlot = homeList.indexOf(id);
+      const projected = proj.get(id);
+      if (!projected || projected.section !== homeSection) {
+        node.style.transition = TILE_TRANSITION;
+        node.style.transform = '';
+        continue;
+      }
+      const { dx, dy } = formatEditSlotTranslate(
+        homeSlot,
+        projected.slot,
+        columnCount,
+        cellWidth,
+        cellHeight,
+        gapX,
+        gapY,
+      );
+      node.style.transition = TILE_TRANSITION;
+      node.style.transform = dx || dy ? `translate3d(${dx}px, ${dy}px, 0)` : '';
+    }
   };
 
-  const startDrag = (kind, node, pointerId, clientX, clientY) => {
+  const pointerScrollLocal = (clientX, clientY) => {
+    const box = drag.geom.scrollBox;
+    return {
+      localX: clientX - box.left + scroll.scrollLeft,
+      localY: clientY - box.top + scroll.scrollTop,
+    };
+  };
+
+  const targetAt = (clientX, clientY, hold) => {
+    const { localX, localY } = pointerScrollLocal(clientX, clientY);
+    const { shown, hidden } = drag.startSections;
+    return pickFormatEditDragTarget({
+      localX,
+      localY,
+      headerMidY: drag.geom.headerMidY,
+      prevSection: hold ? drag.target?.section : null,
+      currentTarget: hold ? drag.target : null,
+      shownOriginY: drag.geom.shownOriginY,
+      hiddenOriginY: drag.geom.hiddenOriginY,
+      originX: drag.geom.originX,
+      columnCount: drag.geom.columnCount,
+      cellWidth: drag.geom.cellWidth,
+      cellHeight: drag.geom.cellHeight,
+      gapX: drag.geom.gapX,
+      gapY: drag.geom.gapY,
+      shownCount: shown.length,
+      hiddenCount: hidden.length,
+      dragFromSection: drag.fromSection,
+    });
+  };
+
+  const paintDragFrame = () => {
+    raf = 0;
+    const probe = view.__formatEditDragProbe;
+    if (probe && pendingFrame) {
+      probe.rafFrames = (probe.rafFrames || 0) + 1;
+      const now = view.performance?.now?.() ?? Date.now();
+      if (probe.lastRafAt != null) probe.rafDeltas?.push(now - probe.lastRafAt);
+      probe.lastRafAt = now;
+    }
+    if (!drag || !pendingFrame) return;
+    const { clientX, clientY } = pendingFrame;
+    pendingFrame = null;
+    writeGhostTransform(clientX, clientY);
+    const next = targetAt(clientX, clientY, true);
+    const changed = !drag.target
+      || next.section !== drag.target.section
+      || next.slot !== drag.target.slot;
+    if (changed) {
+      drag.target = next;
+      applyTileTransforms(next);
+    }
+  };
+
+  const scheduleFrame = (clientX, clientY) => {
+    pendingFrame = { clientX, clientY };
+  };
+
+  const startDrag = (node, pointerId, clientX, clientY) => {
     const tileId = node.dataset.id;
-    const startItems = layoutToItems(layout);
-    const startIndex = kind === 'divider'
-      ? startItems.indexOf(FORMAT_BAR_DIVIDER)
-      : startItems.indexOf(tileId);
-    const hitCells = measureHitGeometry(startItems);
+    const { shown, hidden } = sections();
+    const fromSection = shown.includes(tileId) ? FORMAT_EDIT_SECTION_SHOWN : FORMAT_EDIT_SECTION_HIDDEN;
+    const fromIndex = fromSection === FORMAT_EDIT_SECTION_SHOWN
+      ? shown.indexOf(tileId)
+      : hidden.indexOf(tileId);
+    const geom = measureDragGeometry();
+    applyFrozenGridHeights(geom);
+    lockScrollForDrag();
     drag = {
-      kind,
-      node,
       tileId,
+      node,
       pointerId,
-      startItems,
-      startIndex,
-      hitCells,
-      previewTarget: null,
+      fromSection,
+      fromIndex,
+      startSections: { shown: shown.slice(), hidden: hidden.slice() },
+      startLayout: { ...layout, order: layout.order.slice() },
+      geom,
+      target: null,
       ghost: null,
       placeholder: null,
       grabOffsetX: 0,
@@ -394,90 +401,83 @@ export function mountFormatBarEditSheet(doc, bar, {
       ghostH: 0,
     };
     node.classList.add('is-dragging');
-    node.style.touchAction = 'none';
-    if (kind === 'tile') placeTileGhost(node, clientX, clientY);
-    else placeDividerGhost(node, clientX, clientY);
+    placeTileGhost(node, clientX, clientY);
     try {
-      grid.setPointerCapture(pointerId);
+      scroll.setPointerCapture(pointerId);
     } catch {
       /* ok */
     }
-  };
-
-  const commitDomReorder = (beforeVisual) => {
-    syncGridDom();
-    const flipNodes = layoutTiles().filter((n) => n !== drag?.placeholder);
-    flipNodes.push(dividerEl());
-    runFlip(beforeVisual, flipNodes.filter(Boolean));
-  };
-
-  const pointerLocal = (clientX, clientY) => {
-    const gridBox = grid.getBoundingClientRect();
-    return {
-      localX: clientX - gridBox.left + grid.scrollLeft,
-      localY: clientY - gridBox.top + grid.scrollTop,
-    };
-  };
-
-  const dropTargetAt = (localX, localY, holdPreview) => {
-    const target = stabilizeGridDropIndex(
-      drag.hitCells,
-      localX,
-      localY,
-      drag.startIndex,
-      holdPreview ? drag.previewTarget : null,
-      { itemsLength: drag.startItems.length },
-    );
-    return Math.max(0, Math.min(target, drag.startItems.length));
-  };
-
-  const applyDragPreview = (clientX, clientY, { hold = true } = {}) => {
-    if (!drag) return;
-    const { localX, localY } = pointerLocal(clientX, clientY);
-    if (drag.kind === 'divider') moveDividerGhost(clientX, clientY);
-    else moveGhost(clientX, clientY);
-    const clamped = dropTargetAt(localX, localY, hold);
-    if (!hold || clamped !== drag.previewTarget) {
-      const beforeVisual = visualRects();
-      drag.previewTarget = clamped;
-      layout = previewLayoutFromItems(drag.startItems, drag.startIndex, clamped);
-      commitDomReorder(beforeVisual);
-      applyLive();
-      if (drag.placeholder && drag.tileId) {
-        drag.placeholder.dataset.index = String(layout.order.indexOf(drag.tileId));
-      }
+    scheduleFrame(clientX, clientY);
+    if (!raf) {
+      const probe = view.__formatEditDragProbe;
+      if (probe) probe.rafScheduled = (probe.rafScheduled || 0) + 1;
+      raf = view.requestAnimationFrame(paintDragFrame);
     }
   };
 
-  const paintDrag = () => {
-    raf = 0;
-    if (!drag || !pendingPointer) return;
-    const { clientX, clientY } = pendingPointer;
-    pendingPointer = null;
-    applyDragPreview(clientX, clientY, { hold: true });
+  const ghostToDropSlot = (target) => {
+    return new Promise((resolve) => {
+      if (!drag?.ghost) {
+        resolve();
+        return;
+      }
+      const { columnCount, cellWidth, cellHeight, gapX, gapY, originX, scrollBox } = drag.geom;
+      const originY = target.section === FORMAT_EDIT_SECTION_SHOWN
+        ? drag.geom.shownOriginY
+        : drag.geom.hiddenOriginY;
+      const rect = formatEditSlotRect(
+        target.slot,
+        columnCount,
+        cellWidth,
+        cellHeight,
+        gapX,
+        gapY,
+        originX,
+        originY,
+      );
+      const cx = scrollBox.left - scroll.scrollLeft + rect.left + rect.width / 2;
+      const cy = scrollBox.top - scroll.scrollTop + rect.top + rect.height / 2;
+      const hw = drag.ghostW / 2;
+      const hh = drag.ghostH / 2;
+      drag.ghost.style.transition = `transform ${GHOST_SETTLE_MS}ms ease`;
+      drag.ghost.style.transform = `translate3d(${cx - hw}px, ${cy - hh}px, 0)`;
+      view.setTimeout(resolve, GHOST_SETTLE_MS);
+    });
   };
 
-  const scheduleFrame = (clientX, clientY) => {
-    pendingPointer = { clientX, clientY };
-    if (!raf) raf = view.requestAnimationFrame(paintDrag);
-  };
-
-  const finishDrag = (commit) => {
+  const finishDrag = async (commit) => {
     if (!drag) return;
     if (raf) {
       view.cancelAnimationFrame(raf);
       raf = 0;
     }
-    pendingPointer = null;
+    pendingFrame = null;
+    const snapshot = drag;
     try {
-      grid.releasePointerCapture(drag.pointerId);
+      scroll.releasePointerCapture(snapshot.pointerId);
     } catch {
       /* ok */
     }
-    for (const t of flipTimers) view.clearTimeout(t);
-    flipTimers.clear();
-    if (commit) applyLive();
-    syncGridDom();
+    if (commit) {
+      const target = snapshot.target || {
+        section: snapshot.fromSection,
+        slot: snapshot.fromIndex,
+      };
+      await ghostToDropSlot(target);
+      layout = commitFormatEditMove(
+        snapshot.startSections.shown,
+        snapshot.startSections.hidden,
+        snapshot.tileId,
+        snapshot.fromSection,
+        snapshot.fromIndex,
+        target,
+      );
+      syncGridDom();
+      applyLive();
+    } else if (!commit) {
+      layout = snapshot.startLayout;
+      syncGridDom();
+    }
     clearDragTransforms();
     drag = null;
   };
@@ -489,27 +489,12 @@ export function mountFormatBarEditSheet(doc, bar, {
     }
   };
 
-  const tryStartDrag = (node, pointerId, clientX, clientY) => {
-    if (node.dataset.role === 'divider') startDrag('divider', node, pointerId, clientX, clientY);
-    else startDrag('tile', node, pointerId, clientX, clientY);
-  };
-
-  const onGridPointerDown = (event) => {
+  const onTilePointerDown = (event) => {
     if (!open || (event.button && event.button !== 0)) return;
-    const tile = event.target.closest?.('.format-edit-tile, .format-edit-divider');
-    if (!tile || !grid.contains(tile)) return;
+    const tile = event.target.closest?.('.format-edit-tile');
+    if (!tile || (!shownGrid.contains(tile) && !hiddenGrid.contains(tile))) return;
+    event.preventDefault();
     clearHold();
-    if (tile.dataset.role === 'divider') {
-      press = {
-        node: tile,
-        x: event.clientX,
-        y: event.clientY,
-        pointerId: event.pointerId,
-        dragging: true,
-      };
-      tryStartDrag(tile, event.pointerId, event.clientX, event.clientY);
-      return;
-    }
     press = {
       node: tile,
       x: event.clientX,
@@ -520,41 +505,39 @@ export function mountFormatBarEditSheet(doc, bar, {
     holdTimer = view.setTimeout(() => {
       if (!press || press.dragging || drag) return;
       press.dragging = true;
-      tryStartDrag(press.node, press.pointerId, press.x, press.y);
+      startDrag(press.node, press.pointerId, press.x, press.y);
     }, HOLD_MS);
   };
 
-  const onGridPointerMove = (event) => {
-    if (!press || event.pointerId !== press.pointerId) return;
-    const dx = event.clientX - press.x;
-    const dy = event.clientY - press.y;
-    const dist = Math.hypot(dx, dy);
-    const isDivider = press.node?.dataset?.role === 'divider';
-    if (!press.dragging && !drag && dist > SLOP_PX) {
-      if (Math.abs(dx) >= Math.abs(dy) || isDivider) {
+  const onPointerMove = (event) => {
+    if (press && event.pointerId === press.pointerId) {
+      const dx = event.clientX - press.x;
+      const dy = event.clientY - press.y;
+      const dist = Math.hypot(dx, dy);
+      if (!press.dragging && !drag && dist > SLOP_PX) {
         press.dragging = true;
         clearHold();
-        tryStartDrag(press.node, press.pointerId, event.clientX, event.clientY);
+        startDrag(press.node, press.pointerId, event.clientX, event.clientY);
       }
     }
     if (drag && event.pointerId === drag.pointerId) {
       event.preventDefault();
-      if (drag.kind === 'tile') moveGhost(event.clientX, event.clientY);
-      else moveDividerGhost(event.clientX, event.clientY);
       scheduleFrame(event.clientX, event.clientY);
+      if (!raf) {
+        const probe = view.__formatEditDragProbe;
+        if (probe) probe.rafScheduled = (probe.rafScheduled || 0) + 1;
+        raf = view.requestAnimationFrame(paintDragFrame);
+      }
     }
   };
 
-  const onGridPointerUp = (event) => {
+  const onPointerUp = (event) => {
     if (press && event.pointerId === press.pointerId) {
       clearHold();
       if (drag && event.pointerId === drag.pointerId) {
-        if (raf) {
-          view.cancelAnimationFrame(raf);
-          raf = 0;
-        }
-        pendingPointer = null;
-        applyDragPreview(event.clientX, event.clientY, { hold: false });
+        pendingFrame = { clientX: event.clientX, clientY: event.clientY };
+        paintDragFrame();
+        drag.target = targetAt(event.clientX, event.clientY, false);
         finishDrag(true);
       } else if (!press.dragging) {
         bounceTile(press.node);
@@ -563,9 +546,17 @@ export function mountFormatBarEditSheet(doc, bar, {
     }
   };
 
+  const onPointerCancel = (event) => {
+    if (press && event.pointerId === press.pointerId) {
+      clearHold();
+      if (drag) finishDrag(false);
+      press = null;
+    }
+  };
+
   const onReset = () => {
     layout = resetFormatBarLayout();
-    render();
+    syncGridDom();
     applyLive();
   };
 
@@ -582,15 +573,16 @@ export function mountFormatBarEditSheet(doc, bar, {
     if (event.key === 'Escape' && open) closeSheet({ refocus: true });
   };
   doc.addEventListener('keydown', onKey);
-  const onGridTouchMove = (event) => {
-    if (drag) event.preventDefault();
+
+  const onTouchMove = (event) => {
+    if (drag || press?.dragging) event.preventDefault();
   };
 
-  grid.addEventListener('pointerdown', onGridPointerDown);
-  grid.addEventListener('pointermove', onGridPointerMove, { passive: false });
-  grid.addEventListener('pointerup', onGridPointerUp);
-  grid.addEventListener('pointercancel', onGridPointerUp);
-  grid.addEventListener('touchmove', onGridTouchMove, { passive: false });
+  scroll.addEventListener('pointerdown', onTilePointerDown);
+  scroll.addEventListener('pointermove', onPointerMove, { passive: false });
+  scroll.addEventListener('pointerup', onPointerUp);
+  scroll.addEventListener('pointercancel', onPointerCancel);
+  scroll.addEventListener('touchmove', onTouchMove, { passive: false });
 
   return {
     open: () => open,
@@ -607,11 +599,11 @@ export function mountFormatBarEditSheet(doc, bar, {
       resetBtn?.removeEventListener('click', onReset);
       scrim?.removeEventListener('click', () => closeSheet({ refocus: true }));
       doc.removeEventListener('keydown', onKey);
-      grid.removeEventListener('pointerdown', onGridPointerDown);
-      grid.removeEventListener('pointermove', onGridPointerMove);
-      grid.removeEventListener('pointerup', onGridPointerUp);
-      grid.removeEventListener('pointercancel', onGridPointerUp);
-      grid.removeEventListener('touchmove', onGridTouchMove);
+      scroll.removeEventListener('pointerdown', onTilePointerDown);
+      scroll.removeEventListener('pointermove', onPointerMove);
+      scroll.removeEventListener('pointerup', onPointerUp);
+      scroll.removeEventListener('pointercancel', onPointerCancel);
+      scroll.removeEventListener('touchmove', onTouchMove);
     },
   };
 }

@@ -115,7 +115,11 @@
           <h2>Edit toolbar</h2>
           <button type="button" id="format-edit-done" class="sheet-done">Done</button>
         </header>
-        <div id="format-edit-grid" class="format-edit-grid"></div>
+        <div id="format-edit-scroll" class="format-edit-scroll">
+          <div id="format-edit-shown" class="format-edit-section-grid" aria-label="Shown toolbar controls"></div>
+          <h3 id="format-edit-hidden-head" class="format-edit-hidden-head">Hidden</h3>
+          <div id="format-edit-hidden" class="format-edit-section-grid" aria-label="Hidden toolbar controls"></div>
+        </div>
       </div>
     </div>
     <pre id="layout-debug" class="layout-debug" hidden></pre>

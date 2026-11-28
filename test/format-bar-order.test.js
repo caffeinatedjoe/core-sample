@@ -6,22 +6,25 @@ import {
   FORMAT_BAR_DIVIDER,
   FORMAT_BAR_LAYOUT_KEY,
   FORMAT_BAR_ORDER_KEY,
-  buildFormatEditHitCells,
+  FORMAT_EDIT_SECTION_HIDDEN,
+  FORMAT_EDIT_SECTION_SHOWN,
+  commitFormatEditMove,
+  formatEditProjectionSlots,
+  formatEditSlotTranslate,
   itemsToLayout,
   layoutToItems,
-  targetGridDropIndex,
+  layoutToSections,
   mergeFormatBarLayout,
   migrateFormatBarLayoutFromV1,
   moveItem,
   neighborTransforms,
-  previewLayoutFromItems,
+  pickFormatEditDragTarget,
+  pickFormatEditSection,
+  pointerToFormatEditSlot,
   readFormatBarLayout,
   resetFormatBarLayout,
+  sectionsToLayout,
   targetDropIndex,
-  targetHiddenFrom,
-  stabilizeGridDropIndex,
-  stabilizeHiddenFrom,
-  resolveIntoHidden,
   visibleBarOrder,
   writeFormatBarLayout,
   writeFormatBarOrder,
@@ -83,37 +86,34 @@ test('layoutToItems and itemsToLayout round-trip', () => {
   assert.deepEqual(itemsToLayout(items), layout);
 });
 
-test('moving a shown tile within shown slots keeps hiddenFrom', () => {
+test('layoutToSections and sectionsToLayout round-trip', () => {
   const layout = { order: ['task', 'bold', 'italic', 'link'], hiddenFrom: 2 };
-  const items = layoutToItems(layout);
-  const next = previewLayoutFromItems(items, 0, 2);
-  assert.equal(next.hiddenFrom, 2);
-  assert.deepEqual(next.order, ['bold', 'task', 'italic', 'link']);
+  const { shown, hidden } = layoutToSections(layout);
+  assert.deepEqual(shown, ['task', 'bold']);
+  assert.deepEqual(hidden, ['italic', 'link']);
+  assert.deepEqual(sectionsToLayout(shown, hidden), layout);
 });
 
-test('shown to hidden decrements hiddenFrom by one', () => {
-  const layout = { order: ['task', 'bold', 'italic', 'link'], hiddenFrom: 2 };
-  const items = layoutToItems(layout);
-  const next = previewLayoutFromItems(items, 0, 4);
-  assert.equal(next.hiddenFrom, 1);
-  assert.equal(next.order.includes('task'), true);
+test('commitFormatEditMove hiding drops into hidden at slot', () => {
+  const shown = ['task', 'bold'];
+  const hidden = ['italic'];
+  const layout = commitFormatEditMove(shown, hidden, 'bold', FORMAT_EDIT_SECTION_SHOWN, 1, {
+    section: FORMAT_EDIT_SECTION_HIDDEN,
+    slot: 0,
+  });
+  assert.equal(layout.hiddenFrom, 1);
+  assert.deepEqual(visibleBarOrder(layout), ['task']);
+  assert.ok(layout.order.includes('bold'));
 });
 
-test('hidden to shown increments hiddenFrom by one', () => {
-  const layout = { order: ['task', 'bold', 'italic'], hiddenFrom: 1 };
-  const items = layoutToItems(layout);
-  const italicIdx = items.indexOf('italic');
-  const next = previewLayoutFromItems(items, italicIdx, 0);
-  assert.equal(next.hiddenFrom, 2);
-  assert.equal(next.order[0], 'italic');
-});
-
-test('divider move sets hiddenFrom to sentinel index', () => {
-  const layout = { order: ['a', 'b', 'c', 'd'], hiddenFrom: 1 };
-  const items = layoutToItems(layout);
-  const dividerAt = items.indexOf(FORMAT_BAR_DIVIDER);
-  const next = previewLayoutFromItems(items, dividerAt, 3);
-  assert.equal(next.hiddenFrom, 2);
+test('commitFormatEditMove shown reorder', () => {
+  const shown = ['task', 'bold', 'italic'];
+  const hidden = [];
+  const layout = commitFormatEditMove(shown, hidden, 'task', FORMAT_EDIT_SECTION_SHOWN, 0, {
+    section: FORMAT_EDIT_SECTION_SHOWN,
+    slot: 2,
+  });
+  assert.deepEqual(visibleBarOrder(layout), ['bold', 'italic', 'task']);
 });
 
 test('item-list move invariants for lengths 1–12 (property)', () => {
@@ -136,16 +136,6 @@ test('item-list move invariants for lengths 1–12 (property)', () => {
   }
 });
 
-test('previewLayoutFromItems from one snapshot is idempotent', () => {
-  const layout = { order: ['task', 'bold', 'italic', 'link', 'image'], hiddenFrom: 3 };
-  const startItems = layoutToItems(layout);
-  for (const [from, to] of [[0, 2], [4, 1], [3, 5], [1, 6]]) {
-    const once = previewLayoutFromItems(startItems, from, to);
-    const again = previewLayoutFromItems(startItems, from, to);
-    assert.deepEqual(once, again);
-  }
-});
-
 test('targetDropIndex picks the slot under the pointer', () => {
   const centers = [22, 66, 110, 154];
   assert.equal(targetDropIndex(0, centers, 10), 0);
@@ -161,88 +151,59 @@ test('moveItem reorders an array like a toolbar commit', () => {
   assert.deepEqual(moveItem(order, 1, 3), ['task', 'italic', 'bold', 'link']);
 });
 
-test('targetHiddenFrom tracks pointer Y across tile rows', () => {
-  const cells = [
-    { index: 0, top: 0, height: 64, width: 70, left: 0 },
-    { index: 1, top: 0, height: 64, width: 70, left: 80 },
-    { index: 2, top: 72, height: 64, width: 70, left: 0 },
-  ];
-  assert.equal(targetHiddenFrom(3, cells, 20), 0);
-  assert.equal(targetHiddenFrom(3, cells, 90), 2);
-  assert.equal(targetHiddenFrom(3, cells, 200), 3);
+test('pickFormatEditSection hysteresis at header midline', () => {
+  const mid = 200;
+  assert.equal(pickFormatEditSection(185, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_SHOWN);
+  assert.equal(pickFormatEditSection(214, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_HIDDEN);
+  assert.equal(pickFormatEditSection(214, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_HIDDEN);
+  assert.equal(pickFormatEditSection(185, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_SHOWN);
 });
 
-test('stabilizeGridDropIndex holds until slop into the next cell', () => {
-  const cells = [
-    { index: 0, top: 0, height: 64, width: 70, left: 0 },
-    { index: 1, top: 0, height: 64, width: 70, left: 80 },
-    { index: 2, top: 72, height: 64, width: 70, left: 0 },
-  ];
-  const proposed = stabilizeGridDropIndex(cells, 42, 20, 0, 0, {});
-  assert.equal(proposed, 0);
-  const crossed = stabilizeGridDropIndex(cells, 48, 20, 0, 0, {});
-  assert.equal(crossed, 1);
+test('pointerToFormatEditSlot clamps past last row', () => {
+  const slot = pointerToFormatEditSlot(40, 500, 0, 0, 5, 70, 64, 10, 8, 9);
+  assert.equal(slot, 8);
 });
 
-test('resolveIntoHidden uses divider midline hysteresis', () => {
-  const mid = 100;
-  assert.equal(resolveIntoHidden(90, mid, false), false);
-  assert.equal(resolveIntoHidden(113, mid, false), true);
-  assert.equal(resolveIntoHidden(90, mid, true), true);
-  assert.equal(resolveIntoHidden(85, mid, true), false);
-});
-
-test('stabilizeHiddenFrom only moves split past row midline slop', () => {
-  const cells = [
-    { index: 0, top: 0, height: 64, width: 70, left: 0 },
-    { index: 1, top: 72, height: 64, width: 70, left: 0 },
-    { index: 2, top: 144, height: 64, width: 70, left: 0 },
-  ];
-  assert.equal(stabilizeHiddenFrom(3, cells, 40, 0), 0);
-  assert.equal(stabilizeHiddenFrom(3, cells, 48, 0), 1);
-  assert.equal(stabilizeHiddenFrom(3, cells, 48, 1), 1);
-});
-
-test('targetGridDropIndex below the divider row inserts after the sentinel', () => {
-  const layout = { order: ['task', 'bold', 'italic'], hiddenFrom: 3 };
-  const items = layoutToItems(layout);
-  const cells = buildFormatEditHitCells({
+test('pickFormatEditDragTarget stays on edges until inner 70%', () => {
+  const geom = {
+    localX: 35,
+    localY: 32,
+    headerMidY: 400,
+    prevSection: null,
+    currentTarget: { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 },
+    shownOriginY: 0,
+    hiddenOriginY: 500,
+    originX: 0,
     columnCount: 5,
     cellWidth: 70,
     cellHeight: 64,
     gapX: 10,
     gapY: 8,
-    dividerHeight: 44,
-    items,
-  });
-  const div = cells.find((c) => c.isDivider);
-  const belowY = div.top + div.height + 48;
-  const target = targetGridDropIndex(cells, div.left + div.width / 2, belowY, 1, {
-    itemsLength: items.length,
-  });
-  assert.ok(target > div.index, 'drop below divider must target hidden region');
-  const hidden = previewLayoutFromItems(items, items.indexOf('bold'), target);
-  assert.ok(!visibleBarOrder(hidden).includes('bold'));
+    shownCount: 9,
+    hiddenCount: 3,
+    dragFromSection: FORMAT_EDIT_SECTION_SHOWN,
+  };
+  const onEdge = pickFormatEditDragTarget(geom);
+  assert.deepEqual(onEdge, { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 });
+  const inner = pickFormatEditDragTarget({ ...geom, localX: 95, localY: 35 });
+  assert.equal(inner.slot, 1);
 });
 
-test('targetGridDropIndex uses divider mid-Y when pointer is on the divider row', () => {
-  const items = ['task', 'bold', FORMAT_BAR_DIVIDER];
-  const cells = buildFormatEditHitCells({
-    columnCount: 5,
-    cellWidth: 70,
-    cellHeight: 64,
-    items,
-    dividerHeight: 44,
+test('formatEditProjectionSlots shifts neighbors for a gap', () => {
+  const shown = ['a', 'b', 'c'];
+  const hidden = [];
+  const proj = formatEditProjectionSlots(shown, hidden, 'a', FORMAT_EDIT_SECTION_SHOWN, {
+    section: FORMAT_EDIT_SECTION_SHOWN,
+    slot: 2,
   });
-  const div = cells.find((c) => c.isDivider);
-  const topHalf = targetGridDropIndex(cells, div.left + 10, div.top + 8, 0, {
-    itemsLength: items.length,
-  });
-  const bottomHalf = targetGridDropIndex(cells, div.left + 10, div.top + div.height - 8, 0, {
-    itemsLength: items.length,
-  });
-  assert.equal(topHalf, div.index);
-  assert.equal(bottomHalf, div.index + 1);
+  assert.deepEqual(proj.get('b'), { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 });
+  assert.deepEqual(proj.get('c'), { section: FORMAT_EDIT_SECTION_SHOWN, slot: 1 });
+});
+
+test('formatEditSlotTranslate is pure arithmetic', () => {
+  const t = formatEditSlotTranslate(0, 1, 5, 70, 64, 10, 8);
+  assert.equal(t.dx, 80);
+  assert.equal(t.dy, 0);
 });
 
 test('layout round-trip uses the v2 key', () => {
