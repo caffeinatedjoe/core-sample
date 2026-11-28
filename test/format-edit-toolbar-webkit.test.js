@@ -11,6 +11,7 @@ import {
   editorFocused,
   formatBarLongPress,
   formatEditSheetDragToPoint,
+  formatEditSheetRealDragToPoint,
   installFormatBarTouchSpy,
   note,
   openApp,
@@ -25,6 +26,34 @@ const TEXT = 'Reorder me.\n';
 const NINE_SHOWN_LAYOUT = {
   order: [...DEFAULT_FORMAT_BAR_ORDER],
   hiddenFrom: 9,
+};
+
+/** Joe may not have Redo last; rotate and hide a few so last shown is `quote`. */
+const CUSTOM_SHOWN_LAYOUT = {
+  order: [
+    'bold',
+    'italic',
+    'task',
+    'bullet',
+    'numbered',
+    'link',
+    'image',
+    'heading',
+    'indent',
+    'outdent',
+    'lineUp',
+    'lineDown',
+    'quote',
+    'code',
+    'strike',
+    'fence',
+    'highlight',
+    'comment',
+    'rule',
+    'undo',
+    'redo',
+  ],
+  hiddenFrom: 13,
 };
 
 async function caretAt(page, offset) {
@@ -83,6 +112,140 @@ async function dragToPoint2px(page, fromId, to, opts = {}) {
 async function waitEditDropSettled(page) {
   await page.waitForFunction(() => window.__formatEditDropDone === true, null, { timeout: 5000 });
   await waitDoubleRaf(page);
+  await page.waitForTimeout(80);
+}
+
+async function seedLayout(page, layout) {
+  await page.evaluate(({ key, layout }) => {
+    localStorage.setItem(key, JSON.stringify(layout));
+  }, { key: FORMAT_BAR_LAYOUT_KEY, layout });
+}
+
+async function hiddenGridDropPoint(page, { slot = 0, atEnd = false } = {}) {
+  return page.evaluate(({ slot, atEnd }) => {
+    const hidden = document.getElementById('format-edit-hidden');
+    const head = document.getElementById('format-edit-hidden-head');
+    const tiles = [...hidden.querySelectorAll('.format-edit-tile')];
+    if (tiles.length) {
+      if (atEnd) {
+        const last = tiles[tiles.length - 1].getBoundingClientRect();
+        const grid = hidden.getBoundingClientRect();
+        return {
+          x: Math.min(grid.right - 8, last.right + last.width * 0.6),
+          y: last.top + last.height / 2,
+        };
+      }
+      const tile = tiles[slot] || tiles[0];
+      const box = tile.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    const hiddenBox = hidden.getBoundingClientRect();
+    const headBox = head.getBoundingClientRect();
+    const sample = document.querySelector('#format-edit-shown .format-edit-tile');
+    const cellW = sample?.offsetWidth ?? 44;
+    const cellH = sample?.offsetHeight ?? 44;
+    const styles = getComputedStyle(hidden);
+    const gapX = Number.parseFloat(styles.columnGap) || 8;
+    const col = atEnd ? 3 : slot;
+    return {
+      x: hiddenBox.left + col * (cellW + gapX) + cellW / 2,
+      y: Math.min(hiddenBox.bottom - 8, headBox.bottom + cellH * 0.45),
+    };
+  }, { slot, atEnd });
+}
+
+async function readEditSheetSnapshot(page) {
+  return page.evaluate(() => {
+    const parseTransform = (value) => {
+      const raw = value || '';
+      if (!raw || raw === 'none') return { x: 0, y: 0, raw };
+      const m3 = raw.match(/translate3d\(\s*([-\d.]+)px\s*,\s*([-\d.]+)px/);
+      if (m3) return { x: Number(m3[1]), y: Number(m3[2]), raw };
+      const m2 = raw.match(/translate\(\s*([-\d.]+)px\s*,\s*([-\d.]+)px/);
+      if (m2) return { x: Number(m2[1]), y: Number(m2[2]), raw };
+      return { x: 0, y: 0, raw };
+    };
+    const collect = (gridId) => [...document.getElementById(gridId).querySelectorAll('.format-edit-tile')].map((n, index) => {
+      const box = n.getBoundingClientRect();
+      const tf = parseTransform(n.style.transform);
+      return {
+        id: n.dataset.id,
+        index,
+        x: box.left,
+        y: box.top,
+        width: box.width,
+        height: box.height,
+        transform: n.style.transform || '',
+        translateX: tf.x,
+        translateY: tf.y,
+        placeholder: n.classList.contains('is-placeholder'),
+        dragging: n.classList.contains('is-dragging'),
+      };
+    });
+    const layout = JSON.parse(localStorage.getItem('core-sample-format-bar-layout-v2') || 'null');
+    const bar = [...document.querySelectorAll('#format-bar .format-scroll .format-btn')]
+      .filter((n) => !n.hidden)
+      .map((n) => n.getAttribute('data-format'));
+    const ids = (tiles) => tiles.map((t) => t.id);
+    const dupes = [...ids(collect('format-edit-shown')), ...ids(collect('format-edit-hidden'))]
+      .filter((id, i, all) => all.indexOf(id) !== i);
+    return {
+      shown: collect('format-edit-shown'),
+      hidden: collect('format-edit-hidden'),
+      layout,
+      bar,
+      dropTarget: window.__formatEditDropTarget || '',
+      commitCount: window.__formatEditCommitCount ?? null,
+      ghosts: document.querySelectorAll('.format-edit-ghost').length,
+      dropDone: window.__formatEditDropDone === true,
+      dupes,
+    };
+  });
+}
+
+function assertNoLeftoverMotion(snap, label) {
+  const tiles = [...snap.shown, ...snap.hidden];
+  const leftover = tiles.filter((t) => (
+    t.placeholder
+    || t.dragging
+    || (t.transform && t.transform !== 'none')
+    || Math.abs(t.translateX) > 0.51
+    || Math.abs(t.translateY) > 0.51
+  ));
+  assert.equal(snap.ghosts, 0, `${label}: ghost still present`);
+  assert.deepEqual(leftover, [], `${label}: leftover tile motion ${JSON.stringify(leftover)}`);
+  assert.deepEqual(snap.dupes, [], `${label}: duplicate tile ids ${snap.dupes}`);
+}
+
+function assertTilesMatchGrid(tiles, label) {
+  if (tiles.length < 2) return;
+  const strideX = tiles.length > 1 && Math.abs(tiles[1].y - tiles[0].y) < 8
+    ? tiles[1].x - tiles[0].x
+    : tiles[0].width + 8;
+  const origin = tiles[0];
+  for (let i = 0; i < tiles.length; i += 1) {
+    const rowBreak = i > 0 && tiles[i].x + 1 < tiles[i - 1].x;
+    if (i > 0 && !rowBreak) {
+      assert.ok(
+        tiles[i].x + 1 >= tiles[i - 1].x,
+        `${label}: tile ${tiles[i].id} x ${tiles[i].x} is left of ${tiles[i - 1].id} ${tiles[i - 1].x}`,
+      );
+    }
+    assert.ok(
+      Math.abs(tiles[i].translateX) <= 0.51 && Math.abs(tiles[i].translateY) <= 0.51,
+      `${label}: ${tiles[i].id} still translated`,
+    );
+  }
+  assert.ok(strideX > 10 || tiles.length === 1, `${label}: could not measure stride`);
+  void origin;
+}
+
+function expectedAfterHide(layout, dragId, hiddenSlot) {
+  const shown = layout.order.slice(0, layout.hiddenFrom).filter((id) => id !== dragId);
+  const hidden = layout.order.slice(layout.hiddenFrom).filter((id) => id !== dragId);
+  const slot = Math.max(0, Math.min(hiddenSlot, hidden.length));
+  hidden.splice(slot, 0, dragId);
+  return { shown, hidden, hiddenFrom: shown.length, order: [...shown, ...hidden] };
 }
 
 async function editSheetSlotCenter(page, { slot = 0, section = 'hidden' } = {}) {
@@ -460,6 +623,7 @@ test('webkit edit-sheet hide redo keeps undo in place during drag and after drop
 
     const expectedShown = DEFAULT_FORMAT_BAR_ORDER.filter((id) => id !== 'redo');
     assert.match(dropTarget, /^hidden:/);
+    assert.deepEqual(after.shown, expectedShown, `sheet DOM shown ${after.shown}`);
     const fromLayout = layoutToSections(after.layout);
     assert.deepEqual(fromLayout.shown, expectedShown);
     assert.deepEqual(fromLayout.hidden, ['redo']);
@@ -557,7 +721,7 @@ test('webkit edit-sheet R1b: hidden drag into shown keeps section tops fixed', {
   });
 });
 
-test('webkit edit-sheet R2: inner 70% slot samples match placeholder index', { timeout: 180000 }, async (t) => {
+test('webkit edit-sheet R2: closest-center slot samples match neighbor transforms', { timeout: 180000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await prepFormatBar(page, url);
     await openEditSheet(page, 'italic', { nineShown: true });
@@ -757,7 +921,7 @@ test('webkit edit-sheet R4: header midline jitter changes target at most once in
       const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
       const pointerId = 204;
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-      const readKey = () => document.querySelector('.format-edit-tile.is-placeholder')?.dataset.index ?? 'x';
+      const readKey = () => window.__formatEditLastTargetKey || 'none';
       const fire = (type, point, buttons) => {
         const target = type === 'pointerdown' ? tile : scroll;
         target.dispatchEvent(new PointerEvent(type, {
@@ -777,7 +941,7 @@ test('webkit edit-sheet R4: header midline jitter changes target at most once in
       let changes = 0;
       let prev = readKey();
       for (let frame = 0; frame < 30; frame += 1) {
-        const y = midY + ((frame % 2) ? 10 : -10);
+        const y = midY + ((frame % 2) ? 2 : -2);
         const x = from.x + ((frame % 4) < 2 ? -3 : 3);
         fire('pointermove', { x, y }, 1);
         await wait(28);
@@ -1323,6 +1487,310 @@ test('webkit edit-sheet R13: dragging the hidden header changes nothing', { time
       return null;
     });
     assert.equal(bad, null, bad || 'R13 ok');
+    assert.deepEqual(errors, []);
+  });
+});
+
+async function dismissFakeKeyboard(page) {
+  await page.evaluate(() => {
+    const root = document.documentElement;
+    root.classList.remove('is-keyboard');
+    root.style.removeProperty('--keyboard-inset');
+    root.style.removeProperty('--shell-h');
+  });
+  await page.waitForTimeout(80);
+}
+
+async function openSheetWithLayout(page, url, layout, longPressId = 'bold') {
+  await prepFormatBar(page, url);
+  await seedLayout(page, layout);
+  await openEditSheet(page, longPressId);
+  await dismissFakeKeyboard(page);
+}
+
+async function hideTileWithRealInput(page, dragId, { atEnd = false, slot = 0 } = {}) {
+  const before = await readEditSheetSnapshot(page);
+  const shownBefore = before.shown.map((t) => t.id);
+  const drop = await hiddenGridDropPoint(page, { slot, atEnd });
+  await page.evaluate(() => {
+    window.__formatEditCommitCount = 0;
+    window.__formatEditDropDone = false;
+  });
+  await formatEditSheetRealDragToPoint(page, dragId, drop, { fromSection: 'shown', stepPx: 4, holdMs: 220 });
+  await waitEditDropSettled(page);
+  const after = await readEditSheetSnapshot(page);
+  return { before, after, shownBefore, drop };
+}
+
+function assertHidePreservedNeighbors(before, after, dragId, hiddenSlot, label) {
+  const layoutBefore = before.layout;
+  const expected = expectedAfterHide(layoutBefore, dragId, hiddenSlot);
+  const shownBefore = before.shown.map((t) => t.id);
+  const secondLast = shownBefore.length >= 2 ? shownBefore[shownBefore.length - 2] : null;
+  const dump = JSON.stringify({
+    label,
+    dragId,
+    dropTarget: after.dropTarget,
+    commitCount: after.commitCount,
+    shownBefore,
+    shownAfter: after.shown.map((t) => t.id),
+    hiddenAfter: after.hidden.map((t) => t.id),
+    layoutShown: after.layout?.order?.slice(0, after.layout.hiddenFrom),
+    bar: after.bar,
+    transforms: [...after.shown, ...after.hidden]
+      .filter((t) => t.transform && t.transform !== 'none')
+      .map((t) => ({ id: t.id, transform: t.transform })),
+  });
+  assert.equal(after.dropDone, true, `${label}: drop did not settle ${dump}`);
+  assert.ok(
+    after.commitCount == null || after.commitCount === 1,
+    `${label}: expected one commit, got ${after.commitCount} ${dump}`,
+  );
+  assert.deepEqual(
+    after.shown.map((t) => t.id),
+    expected.shown,
+    `${label}: sheet DOM shown order ${dump}`,
+  );
+  assert.deepEqual(
+    after.hidden.map((t) => t.id),
+    expected.hidden,
+    `${label}: sheet DOM hidden order ${dump}`,
+  );
+  assert.deepEqual(
+    after.layout?.order?.slice(0, after.layout.hiddenFrom),
+    expected.shown,
+    `${label}: stored shown ${dump}`,
+  );
+  assert.deepEqual(
+    after.layout?.order?.slice(after.layout.hiddenFrom),
+    expected.hidden,
+    `${label}: stored hidden ${dump}`,
+  );
+  assert.deepEqual(after.bar, expected.shown, `${label}: live bar ${dump}`);
+  if (secondLast && secondLast !== dragId) {
+    const idx = expected.shown.indexOf(secondLast);
+    assert.ok(idx >= 0, `${label}: second-to-last ${secondLast} missing ${dump}`);
+    assert.equal(after.shown[idx]?.id, secondLast, `${label}: second-to-last ${secondLast} jumped ${dump}`);
+    if (idx === expected.shown.length - 1 && after.shown[0]) {
+      assert.notEqual(after.shown[0].id, secondLast, `${label}: second-to-last ${secondLast} is at slot 0 ${dump}`);
+    }
+  }
+  assertNoLeftoverMotion(after, label);
+  assertTilesMatchGrid(after.shown, `${label} shown rects`);
+  assertTilesMatchGrid(after.hidden, `${label} hidden rects`);
+}
+
+test('webkit real-input hide last shown tile keeps neighbor order (default layout)', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    const layout = { order: [...DEFAULT_FORMAT_BAR_ORDER], hiddenFrom: DEFAULT_FORMAT_BAR_ORDER.length };
+    await openSheetWithLayout(page, url, layout, 'redo');
+    const { before, after } = await hideTileWithRealInput(page, 'redo', { slot: 0 });
+    assertHidePreservedNeighbors(before, after, 'redo', 0, 'default last→hidden0');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit real-input hide last shown tile keeps neighbor order (custom layout)', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openSheetWithLayout(page, url, CUSTOM_SHOWN_LAYOUT, 'bold');
+    const lastId = CUSTOM_SHOWN_LAYOUT.order[CUSTOM_SHOWN_LAYOUT.hiddenFrom - 1];
+    assert.equal(lastId, 'quote');
+    const { before, after } = await hideTileWithRealInput(page, lastId, { slot: 0 });
+    assertHidePreservedNeighbors(before, after, lastId, 0, 'custom last→hidden0');
+    assert.deepEqual(errors, []);
+  });
+});
+
+async function resetSheetToLayout(page, layout) {
+  await page.locator('#format-edit-done').click();
+  await page.waitForFunction(() => document.getElementById('format-edit-sheet').hidden);
+  await seedLayout(page, layout);
+  await fakeKeyboard(page, 336);
+  await page.waitForFunction(() => !document.getElementById('format-bar').hidden);
+  const pressId = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('#format-bar .format-scroll .format-btn')]
+      .find((n) => !n.hidden);
+    return btn?.getAttribute('data-format') || 'task';
+  });
+  await formatBarLongPress(page, pressId, { blurEditor: false });
+  await page.waitForFunction(() => document.getElementById('format-edit-sheet').classList.contains('is-open'));
+  await dismissFakeKeyboard(page);
+  await page.waitForTimeout(200);
+}
+
+test('webkit real-input hide every shown tile into hidden 0 and end (default)', { timeout: 360000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    const layout = { order: [...DEFAULT_FORMAT_BAR_ORDER], hiddenFrom: DEFAULT_FORMAT_BAR_ORDER.length };
+    await openSheetWithLayout(page, url, layout, 'bold');
+    const shownIds = [...DEFAULT_FORMAT_BAR_ORDER];
+    for (const dragId of shownIds) {
+      for (const dest of [{ slot: 0, atEnd: false, label: 'slot0' }, { atEnd: true, slot: 0, label: 'end' }]) {
+        const { before, after } = await hideTileWithRealInput(page, dragId, dest);
+        const hiddenSlot = dest.atEnd ? before.hidden.length : dest.slot;
+        assertHidePreservedNeighbors(before, after, dragId, hiddenSlot, `default ${dragId}→${dest.label}`);
+        await page.locator('#format-edit-reset').click();
+        await waitDoubleRaf(page);
+      }
+    }
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit real-input hide every shown tile into hidden 0 and end (custom)', { timeout: 360000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await openSheetWithLayout(page, url, CUSTOM_SHOWN_LAYOUT, 'bold');
+    const shownIds = CUSTOM_SHOWN_LAYOUT.order.slice(0, CUSTOM_SHOWN_LAYOUT.hiddenFrom);
+    for (const dragId of shownIds) {
+      for (const dest of [{ slot: 0, atEnd: false, label: 'slot0' }, { atEnd: true, slot: 0, label: 'end' }]) {
+        const { before, after } = await hideTileWithRealInput(page, dragId, dest);
+        const hiddenSlot = dest.atEnd ? before.hidden.length : dest.slot;
+        assertHidePreservedNeighbors(before, after, dragId, hiddenSlot, `custom ${dragId}→${dest.label}`);
+        await resetSheetToLayout(page, CUSTOM_SHOWN_LAYOUT);
+      }
+    }
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit real-input gap targeting updates within two moves in hidden and shown', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await prepFormatBar(page, url);
+    await openEditSheet(page, 'bold', { nineShown: true });
+    const geom = await page.evaluate(() => {
+      const shown = [...document.getElementById('format-edit-shown').querySelectorAll('.format-edit-tile')];
+      const hidden = [...document.getElementById('format-edit-hidden').querySelectorAll('.format-edit-tile')];
+      const rect = (el) => {
+        const b = el.getBoundingClientRect();
+        return { id: el.dataset.id, x: b.left + b.width / 2, y: b.top + b.height / 2, left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+      };
+      const s0 = rect(shown[1]);
+      const s1 = rect(shown[2]);
+      const h0 = rect(hidden[1]);
+      const h1 = rect(hidden[2]);
+      const lift = rect(shown[0]);
+      return {
+        lift: { x: lift.x, y: lift.y, id: lift.id },
+        belowHidden: { x: h0.x, y: h0.bottom + 18 },
+        hiddenGap: {
+          x: (h0.x + h1.x) / 2,
+          y: h0.y,
+          top: h0.top,
+          bottom: h0.bottom,
+          left: Math.min(h0.x, h1.x),
+          right: Math.max(h0.x, h1.x),
+        },
+        shownGap: {
+          x: (s0.x + s1.x) / 2,
+          y: s0.y,
+          top: s0.top,
+          bottom: s0.bottom,
+          left: Math.min(s0.x, s1.x),
+          right: Math.max(s0.x, s1.x),
+        },
+      };
+    });
+    await page.mouse.move(geom.lift.x, geom.lift.y);
+    await page.mouse.down();
+    await page.waitForTimeout(220);
+    await page.waitForFunction(() => Boolean(document.querySelector('.format-edit-ghost')));
+    const readKey = () => page.evaluate(() => window.__formatEditLastTargetKey || '');
+    const inBand = (pt, gap) => (
+      pt.x >= gap.left - 1
+      && pt.x <= gap.right + 1
+      && pt.y >= gap.top - 1
+      && pt.y <= gap.bottom + 1
+    );
+    const stepToward = async (from, to, stepPx = 5) => {
+      const dist = Math.hypot(to.x - from.x, to.y - from.y);
+      const steps = Math.max(1, Math.ceil(dist / stepPx));
+      let pos = from;
+      for (let i = 1; i <= steps; i += 1) {
+        pos = {
+          x: from.x + ((to.x - from.x) * i) / steps,
+          y: from.y + ((to.y - from.y) * i) / steps,
+        };
+        await page.mouse.move(pos.x, pos.y);
+        await page.waitForTimeout(16);
+      }
+      return pos;
+    };
+    const countMovesAfterEntering = async (from, gap, want) => {
+      const dist = Math.hypot(gap.x - from.x, gap.y - from.y);
+      const steps = Math.max(1, Math.ceil(dist / 5));
+      let entered = false;
+      let moves = 0;
+      let key = await readKey();
+      let pos = from;
+      for (let i = 1; i <= steps + 2; i += 1) {
+        pos = {
+          x: from.x + ((gap.x - from.x) * Math.min(i, steps)) / steps,
+          y: from.y + ((gap.y - from.y) * Math.min(i, steps)) / steps,
+        };
+        await page.mouse.move(pos.x, pos.y);
+        await page.waitForTimeout(16);
+        if (!entered && inBand(pos, gap)) entered = true;
+        if (entered) {
+          moves += 1;
+          key = await readKey();
+          if (want.test(key)) return { moves, key, pos, entered: true };
+        }
+      }
+      return { moves, key, pos, entered };
+    };
+
+    let pos = await stepToward(geom.lift, geom.belowHidden);
+    pos = await stepToward(pos, { x: geom.hiddenGap.x, y: geom.belowHidden.y });
+    const hiddenHit = await countMovesAfterEntering(pos, geom.hiddenGap, /^hidden:[12]$/);
+    assert.equal(hiddenHit.entered, true, `never entered hidden gap, last ${hiddenHit.key}`);
+    assert.ok(hiddenHit.moves <= 2, `hidden gap took ${hiddenHit.moves} moves, last ${hiddenHit.key}`);
+    assert.match(hiddenHit.key, /^hidden:[12]$/, `hidden gap target ${hiddenHit.key}`);
+
+    const shownHit = await countMovesAfterEntering(hiddenHit.pos, geom.shownGap, /^shown:[12]$/);
+    assert.equal(shownHit.entered, true, `never entered shown gap, last ${shownHit.key}`);
+    assert.ok(shownHit.moves <= 2, `shown gap took ${shownHit.moves} moves, last ${shownHit.key}`);
+    assert.match(shownHit.key, /^shown:[12]$/, `shown gap target ${shownHit.key}`);
+    await page.mouse.up();
+    await waitEditDropSettled(page);
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit real-input slot boundary ±2px flickers at most once', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await prepFormatBar(page, url);
+    await openEditSheet(page, 'bold', { nineShown: true });
+    const pts = await page.evaluate(() => {
+      const tiles = [...document.getElementById('format-edit-shown').querySelectorAll('.format-edit-tile')];
+      const a = tiles[1].getBoundingClientRect();
+      const b = tiles[2].getBoundingClientRect();
+      const midX = (a.left + a.width / 2 + b.left + b.width / 2) / 2;
+      const y = a.top + a.height / 2;
+      const lift = tiles[0].getBoundingClientRect();
+      return {
+        lift: { x: lift.left + lift.width / 2, y: lift.top + lift.height / 2 },
+        mid: { x: midX, y },
+      };
+    });
+    await page.mouse.move(pts.lift.x, pts.lift.y);
+    await page.mouse.down();
+    await page.waitForTimeout(220);
+    await page.waitForFunction(() => Boolean(document.querySelector('.format-edit-ghost')));
+    await page.mouse.move(pts.mid.x, pts.mid.y);
+    await page.waitForTimeout(32);
+    let prev = await page.evaluate(() => window.__formatEditLastTargetKey || '');
+    let changes = 0;
+    for (let frame = 0; frame < 30; frame += 1) {
+      const x = pts.mid.x + ((frame % 2) ? 2 : -2);
+      await page.mouse.move(x, pts.mid.y);
+      await page.waitForTimeout(16);
+      const now = await page.evaluate(() => window.__formatEditLastTargetKey || '');
+      if (now !== prev) {
+        changes += 1;
+        prev = now;
+      }
+    }
+    await page.mouse.up();
+    assert.ok(changes <= 1, `target changed ${changes} times`);
     assert.deepEqual(errors, []);
   });
 });

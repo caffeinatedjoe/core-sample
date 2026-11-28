@@ -335,6 +335,10 @@ html.is-keyboard .format-bar {
   display: none !important;
 }
 
+.format-bar.is-edit-sheet-open {
+  pointer-events: none;
+}
+
 .format-scroll {
   flex: 1;
   min-width: 0;
@@ -353,7 +357,7 @@ html.is-keyboard .format-bar {
 .format-edit-sheet {
   position: absolute;
   inset: 0;
-  z-index: 7;
+  z-index: 8;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -363,7 +367,8 @@ html.is-keyboard .format-bar {
   -webkit-touch-callout: none;
 }
 
-.format-edit-sheet:not([hidden]) {
+.format-edit-sheet:not([hidden]),
+.format-edit-sheet.is-open {
   pointer-events: auto;
 }
 
