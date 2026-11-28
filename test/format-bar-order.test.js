@@ -11,6 +11,7 @@ import {
   commitFormatEditMove,
   formatEditProjectionSlots,
   formatEditFrozenRows,
+  formatEditShownContentBottomY,
   formatEditSlotTranslate,
   itemsToLayout,
   layoutToItems,
@@ -95,6 +96,55 @@ test('layoutToSections and sectionsToLayout round-trip', () => {
   assert.deepEqual(sectionsToLayout(shown, hidden), layout);
 });
 
+test('commitFormatEditMove ignores stale fromIndex when dragId mismatches', () => {
+  const shown = ['task', 'bold', 'undo', 'redo'];
+  const hidden = [];
+  const layout = commitFormatEditMove(shown, hidden, 'redo', FORMAT_EDIT_SECTION_SHOWN, 2, {
+    section: FORMAT_EDIT_SECTION_HIDDEN,
+    slot: 0,
+  });
+  const next = layoutToSections(layout);
+  assert.deepEqual(next.shown, ['task', 'bold', 'undo']);
+  assert.deepEqual(next.hidden, ['redo']);
+});
+
+test('commitFormatEditMove hiding redo keeps undo before hiddenFrom', () => {
+  const order = [
+    'task',
+    'bullet',
+    'numbered',
+    'bold',
+    'italic',
+    'link',
+    'image',
+    'heading',
+    'indent',
+    'outdent',
+    'lineUp',
+    'lineDown',
+    'quote',
+    'code',
+    'strike',
+    'fence',
+    'highlight',
+    'comment',
+    'rule',
+    'undo',
+    'redo',
+  ];
+  const hiddenFrom = order.length;
+  const { shown, hidden } = layoutToSections({ order, hiddenFrom });
+  const fromIndex = shown.indexOf('redo');
+  const layout = commitFormatEditMove(shown, hidden, 'redo', FORMAT_EDIT_SECTION_SHOWN, fromIndex, {
+    section: FORMAT_EDIT_SECTION_HIDDEN,
+    slot: 0,
+  });
+  const next = layoutToSections(layout);
+  assert.deepEqual(next.shown, shown.filter((id) => id !== 'redo'));
+  assert.equal(next.shown[next.shown.length - 1], 'undo');
+  assert.deepEqual(next.hidden, ['redo']);
+});
+
 test('commitFormatEditMove hiding drops into hidden at slot', () => {
   const shown = ['task', 'bold'];
   const hidden = ['italic'];
@@ -160,6 +210,11 @@ test('pickFormatEditSection hysteresis at header midline', () => {
   assert.equal(pickFormatEditSection(185, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_SHOWN);
 });
 
+test('formatEditShownContentBottomY ignores spare row', () => {
+  const bottom = formatEditShownContentBottomY(21, FORMAT_EDIT_SECTION_SHOWN, 7, 44, 6, 0);
+  assert.equal(bottom, 44 * 3 + 6 * 2);
+});
+
 test('formatEditFrozenRows adds one spare row by column count', () => {
   assert.equal(formatEditFrozenRows(9, 7), 3);
   assert.equal(formatEditFrozenRows(12, 7), 3);
@@ -194,6 +249,26 @@ test('pickFormatEditDragTarget stays on edges until inner 70%', () => {
   assert.deepEqual(onEdge, { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 });
   const inner = pickFormatEditDragTarget({ ...geom, localX: 95, localY: 35 });
   assert.equal(inner.slot, 1);
+});
+
+test('hiding any default shown item preserves neighbor order in the model', () => {
+  const order = [
+    'task', 'bullet', 'numbered', 'bold', 'italic', 'link', 'image', 'heading', 'indent',
+    'outdent', 'lineUp', 'lineDown', 'quote', 'code', 'strike', 'fence', 'highlight',
+    'comment', 'rule', 'undo', 'redo',
+  ];
+  const { shown, hidden } = layoutToSections({ order, hiddenFrom: order.length });
+  for (const dragId of shown) {
+    for (const slot of [0, hidden.length]) {
+      const fromIndex = shown.indexOf(dragId);
+      const layout = commitFormatEditMove(shown, hidden, dragId, FORMAT_EDIT_SECTION_SHOWN, fromIndex, {
+        section: FORMAT_EDIT_SECTION_HIDDEN,
+        slot,
+      });
+      const next = layoutToSections(layout);
+      assert.deepEqual(next.shown, shown.filter((id) => id !== dragId));
+    }
+  }
 });
 
 test('formatEditProjectionSlots shifts neighbors for a gap', () => {

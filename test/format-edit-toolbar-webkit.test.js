@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_FORMAT_BAR_ORDER, FORMAT_BAR_LAYOUT_KEY } from '../app/js/format-bar-order.js';
+import {
+  DEFAULT_FORMAT_BAR_ORDER,
+  FORMAT_BAR_LAYOUT_KEY,
+  layoutToSections,
+} from '../app/js/format-bar-order.js';
 import {
   APP_BUILD,
   fakeKeyboard,
@@ -88,11 +92,27 @@ async function editSheetSlotCenter(page, { slot = 0, section = 'hidden' } = {}) 
       : document.getElementById('format-edit-shown');
     const tiles = [...grid.querySelectorAll('.format-edit-tile')];
     const tile = tiles[slot] || tiles[tiles.length - 1];
-    if (!tile) throw new Error(`no tile slot ${slot} in ${section}`);
-    const box = tile.getBoundingClientRect();
+    if (tile) {
+      const box = tile.getBoundingClientRect();
+      return {
+        x: box.left + box.width * 0.5,
+        y: box.top + box.height * (0.5),
+      };
+    }
+    const sample = document.querySelector('#format-edit-shown .format-edit-tile')
+      || document.querySelector('#format-edit-hidden .format-edit-tile');
+    const styles = getComputedStyle(grid);
+    const gapX = Number.parseFloat(styles.columnGap) || 8;
+    const gapY = Number.parseFloat(styles.rowGap) || 6;
+    const cellW = sample?.offsetWidth ?? 44;
+    const cellH = sample?.offsetHeight ?? 44;
+    const columns = Math.max(1, Math.floor((grid.clientWidth + gapX) / (cellW + gapX)));
+    const col = slot % columns;
+    const row = Math.floor(slot / columns);
+    const gridBox = grid.getBoundingClientRect();
     return {
-      x: box.left + box.width * 0.5,
-      y: box.top + box.height * (0.5),
+      x: gridBox.left + col * (cellW + gapX) + cellW / 2,
+      y: gridBox.top + row * (cellH + gapY) + cellH / 2,
     };
   }, { slot, section });
 }
@@ -365,6 +385,32 @@ async function assertEditSheetScrollerFits(page) {
   return fit;
 }
 
+test('webkit edit-sheet section divider is visible and spans the grid', { timeout: 60000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await prepFormatBar(page, url);
+    await openEditSheet(page, 'bold', { nineShown: true });
+    const line = await page.evaluate(() => {
+      const el = document.querySelector('.format-edit-divider-line');
+      const shown = document.getElementById('format-edit-shown');
+      if (!el || !shown) return null;
+      const box = el.getBoundingClientRect();
+      const gridBox = shown.getBoundingClientRect();
+      const styles = getComputedStyle(el);
+      return {
+        height: box.height,
+        width: box.width,
+        borderTopWidth: styles.borderTopWidth,
+        gridWidth: gridBox.width,
+        display: styles.display,
+      };
+    });
+    assert.ok(line);
+    assert.ok(Number.parseFloat(line.borderTopWidth) >= 0.5);
+    assert.ok(line.width >= line.gridWidth * 0.9);
+    assert.deepEqual(errors, []);
+  });
+});
+
 for (const viewport of [{ width: 390, height: 844 }, { width: 375, height: 667 }]) {
   test(`webkit edit-sheet fits iPhone viewport ${viewport.width}x${viewport.height}`, { timeout: 120000 }, async (t) => {
     await withPhone(t, async ({ page, url, errors }) => {
@@ -376,6 +422,54 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 375, height: 667 }
     }, { viewport });
   });
 }
+
+test('webkit edit-sheet hide redo keeps undo in place during drag and after drop', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await prepFormatBar(page, url);
+    await page.evaluate(({ key, order }) => {
+      localStorage.setItem(key, JSON.stringify({ order: [...order], hiddenFrom: order.length }));
+    }, { key: FORMAT_BAR_LAYOUT_KEY, order: DEFAULT_FORMAT_BAR_ORDER });
+    await openEditSheet(page, 'redo');
+    const drop = await page.evaluate(() => {
+      const head = document.getElementById('format-edit-hidden-head');
+      const hidden = document.getElementById('format-edit-hidden');
+      const headBox = head.getBoundingClientRect();
+      const hiddenBox = hidden.getBoundingClientRect();
+      return {
+        x: hiddenBox.left + hiddenBox.width / 2,
+        y: headBox.bottom + 36,
+      };
+    });
+
+    await dragToPoint2px(page, 'redo', drop);
+    await waitEditDropSettled(page);
+    const dropTarget = await page.evaluate(() => window.__formatEditDropTarget || '');
+    assert.match(dropTarget, /^hidden:/, `got drop ${dropTarget}`);
+
+    const after = await page.evaluate(() => {
+      const shown = [...document.getElementById('format-edit-shown').querySelectorAll('.format-edit-tile')].map((n) => n.dataset.id);
+      const layout = JSON.parse(localStorage.getItem('core-sample-format-bar-layout-v2'));
+      const bar = [...document.querySelectorAll('#format-bar .format-scroll .format-btn')]
+        .filter((n) => !n.hidden)
+        .map((n) => n.getAttribute('data-format'));
+      const undo = document.querySelector('#format-edit-shown [data-id="undo"]')
+        || document.querySelector('#format-edit-hidden [data-id="undo"]');
+      const box = undo?.getBoundingClientRect();
+      return { shown, layout, bar, undoX: box?.left, undoY: box?.top, undoSection: undo?.closest('#format-edit-shown') ? 'shown' : 'hidden' };
+    });
+
+    const expectedShown = DEFAULT_FORMAT_BAR_ORDER.filter((id) => id !== 'redo');
+    assert.match(dropTarget, /^hidden:/);
+    const fromLayout = layoutToSections(after.layout);
+    assert.deepEqual(fromLayout.shown, expectedShown);
+    assert.deepEqual(fromLayout.hidden, ['redo']);
+    assert.equal(after.layout.hiddenFrom, expectedShown.length);
+    assert.deepEqual(after.bar, expectedShown);
+    assert.ok(fromLayout.shown.includes('undo'));
+    assert.ok(!fromLayout.hidden.includes('undo'));
+    assert.deepEqual(errors, []);
+  });
+});
 
 test('webkit edit-sheet tap and hold do not scroll the sheet', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {

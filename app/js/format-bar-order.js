@@ -284,6 +284,28 @@ export function pickFormatEditSection(localY, headerMidY, prevSection, hysteresi
   return localY < headerMidY ? FORMAT_EDIT_SECTION_SHOWN : FORMAT_EDIT_SECTION_HIDDEN;
 }
 
+/** Bottom Y (scroll-local) of occupied shown rows, excluding the spare drag row. */
+export function formatEditShownContentBottomY(
+  shownCount,
+  dragFromSection,
+  columnCount,
+  cellHeight,
+  gapY,
+  originY,
+) {
+  const effective = dragFromSection === FORMAT_EDIT_SECTION_SHOWN
+    ? Math.max(0, shownCount - 1)
+    : shownCount;
+  const rows = Math.max(1, Math.ceil(effective / Math.max(1, columnCount)));
+  return originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
+}
+
+/** Scroll-local Y at the bottom of the frozen shown grid (includes spare row). */
+export function formatEditShownFrozenBottomY(shownCount, columnCount, cellHeight, gapY, originY) {
+  const rows = formatEditFrozenRows(shownCount, columnCount);
+  return originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
+}
+
 export function formatEditProjectedSlotCount(shownCount, hiddenCount, section, dragFromSection) {
   if (section === FORMAT_EDIT_SECTION_SHOWN) {
     const base = dragFromSection === FORMAT_EDIT_SECTION_SHOWN ? shownCount - 1 : shownCount;
@@ -340,7 +362,17 @@ export function pickFormatEditDragTarget({
   hiddenCount,
   dragFromSection,
 }) {
-  const section = pickFormatEditSection(localY, headerMidY, prevSection ?? currentTarget?.section);
+  let section = pickFormatEditSection(localY, headerMidY, prevSection ?? currentTarget?.section);
+  const frozenBottom = formatEditShownFrozenBottomY(
+    shownCount,
+    columnCount,
+    cellHeight,
+    gapY,
+    shownOriginY,
+  );
+  if (dragFromSection === FORMAT_EDIT_SECTION_SHOWN && localY >= frozenBottom - gapY * 0.5) {
+    section = FORMAT_EDIT_SECTION_HIDDEN;
+  }
   const projected = formatEditProjectedSlotCount(shownCount, hiddenCount, section, dragFromSection);
   const originY = section === FORMAT_EDIT_SECTION_SHOWN ? shownOriginY : hiddenOriginY;
   const slot = pointerToFormatEditSlot(
@@ -422,11 +454,14 @@ export function formatEditSlotTranslate(homeSlot, projSlot, columnCount, cellWid
 export function commitFormatEditMove(shown, hidden, dragId, fromSection, fromIndex, target) {
   const nextShown = shown.slice();
   const nextHidden = hidden.slice();
-  if (fromSection === FORMAT_EDIT_SECTION_SHOWN) nextShown.splice(fromIndex, 1);
-  else nextHidden.splice(fromIndex, 1);
+  const fromList = fromSection === FORMAT_EDIT_SECTION_SHOWN ? nextShown : nextHidden;
+  let removeAt = fromList.indexOf(dragId);
+  if (removeAt < 0) removeAt = fromIndex;
+  if (fromSection === FORMAT_EDIT_SECTION_SHOWN) nextShown.splice(removeAt, 1);
+  else nextHidden.splice(removeAt, 1);
   const dest = target.section === FORMAT_EDIT_SECTION_SHOWN ? nextShown : nextHidden;
-  const at = Math.max(0, Math.min(target.slot, dest.length));
-  dest.splice(at, 0, dragId);
+  const insertAt = Math.max(0, Math.min(target.slot, dest.length));
+  dest.splice(insertAt, 0, dragId);
   return sectionsToLayout(
     target.section === FORMAT_EDIT_SECTION_SHOWN ? dest : nextShown,
     target.section === FORMAT_EDIT_SECTION_HIDDEN ? dest : nextHidden,
