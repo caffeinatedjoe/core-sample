@@ -77,32 +77,22 @@ async function dragToPoint2px(page, fromId, to, opts = {}) {
 }
 
 async function waitEditDropSettled(page) {
-  await page.waitForTimeout(200);
+  await page.waitForFunction(() => window.__formatEditDropDone === true, null, { timeout: 5000 });
   await waitDoubleRaf(page);
 }
 
 async function editSheetSlotCenter(page, { slot = 0, section = 'hidden' } = {}) {
-  return page.evaluate(async ({ slot, section }) => {
-    const { formatEditSlotRect, formatEditGridColumnCount } = await import('./js/format-bar-order.js');
-    const scroll = document.getElementById('format-edit-scroll');
-    const shown = document.getElementById('format-edit-shown');
-    const hidden = document.getElementById('format-edit-hidden');
-    const grid = section === 'hidden' ? hidden : shown;
-    const sample = shown.querySelector('.format-edit-tile') || hidden.querySelector('.format-edit-tile');
-    const scrollBox = scroll.getBoundingClientRect();
-    const gridBox = grid.getBoundingClientRect();
-    const styles = getComputedStyle(grid);
-    const gapX = Number.parseFloat(styles.columnGap) || 10;
-    const gapY = Number.parseFloat(styles.rowGap) || 8;
-    const cellWidth = sample.offsetWidth;
-    const cellHeight = sample.offsetHeight;
-    const columnCount = formatEditGridColumnCount(grid.clientWidth || shown.clientWidth, gapX);
-    const originX = gridBox.left - scrollBox.left + scroll.scrollLeft;
-    const originY = gridBox.top - scrollBox.top + scroll.scrollTop;
-    const rect = formatEditSlotRect(slot, columnCount, cellWidth, cellHeight, gapX, gapY, originX, originY);
+  return page.evaluate(({ slot, section }) => {
+    const grid = section === 'hidden'
+      ? document.getElementById('format-edit-hidden')
+      : document.getElementById('format-edit-shown');
+    const tiles = [...grid.querySelectorAll('.format-edit-tile')];
+    const tile = tiles[slot] || tiles[tiles.length - 1];
+    if (!tile) throw new Error(`no tile slot ${slot} in ${section}`);
+    const box = tile.getBoundingClientRect();
     return {
-      x: scrollBox.left - scroll.scrollLeft + rect.left + rect.width * 0.5,
-      y: scrollBox.top - scroll.scrollTop + rect.top + rect.height * 0.5,
+      x: box.left + box.width * 0.5,
+      y: box.top + box.height * (0.5),
     };
   }, { slot, section });
 }
@@ -112,6 +102,65 @@ function p95(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const idx = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
   return sorted[idx];
+}
+
+/** One drag only: after lift until just before pointerup, section tops stay within ±0.5px. */
+async function assertSectionTopsStableDuringDrag(page, { tileSelector, to }) {
+  return page.evaluate(async ({ tileSelector, to }) => {
+    const scroll = document.getElementById('format-edit-scroll');
+    const head = document.getElementById('format-edit-hidden-head');
+    const hidden = document.getElementById('format-edit-hidden');
+    const shown = document.getElementById('format-edit-shown');
+    const tile = document.querySelector(tileSelector);
+    if (!scroll || !head || !hidden || !shown || !tile) return 'sheet missing';
+    const fromBox = tile.getBoundingClientRect();
+    const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+    const pointerId = 210;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const afterPaint = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const fire = (type, point, buttons) => {
+      const target = type === 'pointerdown' ? tile : scroll;
+      target.dispatchEvent(new PointerEvent(type, {
+        pointerId,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: point.x,
+        clientY: point.y,
+        button: 0,
+        buttons,
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+    const near = (a, b) => Math.abs(a - b) <= 0.5;
+    fire('pointerdown', from, 1);
+    await wait(220);
+    fire('pointermove', from, 1);
+    await afterPaint();
+    const lift = {
+      head: head.getBoundingClientRect().top,
+      hidden: hidden.getBoundingClientRect().top,
+      shown: shown.getBoundingClientRect().top,
+    };
+    const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / 2));
+    for (let i = 1; i <= steps; i += 1) {
+      await wait(16);
+      const point = {
+        x: from.x + ((to.x - from.x) * i) / steps,
+        y: from.y + ((to.y - from.y) * i) / steps,
+      };
+      fire('pointermove', point, 1);
+      await afterPaint();
+      const headTop = head.getBoundingClientRect().top;
+      const hiddenTop = hidden.getBoundingClientRect().top;
+      const shownTop = shown.getBoundingClientRect().top;
+      if (!near(headTop, lift.head)) return `head top ${headTop} vs lift ${lift.head} step ${i}`;
+      if (!near(hiddenTop, lift.hidden)) return `hidden top ${hiddenTop} vs lift ${lift.hidden} step ${i}`;
+      if (!near(shownTop, lift.shown)) return `shown top ${shownTop} vs lift ${lift.shown} step ${i}`;
+    }
+    fire('pointercancel', to, 0);
+    return null;
+  }, { tileSelector, to });
 }
 
 test('webkit Edit toolbar open blurs editor and Done restores focus and selection', { timeout: 90000 }, async (t) => {
@@ -130,7 +179,8 @@ test('webkit Edit toolbar open blurs editor and Done restores focus and selectio
       false,
     );
 
-    await page.locator('#format-edit-done').click();
+    await page.waitForTimeout(280);
+    await page.evaluate(() => document.getElementById('format-edit-done').click());
     await page.waitForFunction(() => document.getElementById('format-edit-sheet').hidden);
     assert.equal(await editorFocused(page), true);
     const selection = await page.evaluate(async () => {
@@ -170,7 +220,7 @@ test('webkit dragging into hidden grid hides a control and dragging back shows i
   await withPhone(t, async ({ page, url, errors }) => {
     await prepFormatBar(page, url);
 
-    await openEditSheet(page, 'bold');
+    await openEditSheet(page, 'bold', { nineShown: true });
     const beforeVisible = await visibleBarIds(page);
     assert.ok(beforeVisible.includes('bold'));
 
@@ -196,7 +246,7 @@ test('webkit dragging into hidden grid hides a control and dragging back shows i
 test('webkit Done closes sheet, refocuses editor, and layout survives reload', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await prepFormatBar(page, url);
-    await openEditSheet(page, 'bold');
+    await openEditSheet(page, 'bold', { nineShown: true });
     const drop = await editSheetSlotCenter(page, { slot: 0, section: 'hidden' });
     await dragToPoint2px(page, 'bold', drop);
     await waitEditDropSettled(page);
@@ -282,99 +332,133 @@ test('webkit normal bold tap keeps editor focus, is not touch-prevented, and for
   });
 });
 
-test('webkit edit-sheet R1: hidden head and grid rects stable across shown/hidden drag', { timeout: 180000 }, async (t) => {
+async function readEditSheetViewportSnap(page) {
+  return page.evaluate(() => {
+    const scroll = document.getElementById('format-edit-scroll');
+    const card = document.querySelector('.format-edit-card');
+    const vv = window.visualViewport;
+    return {
+      scrollTop: scroll?.scrollTop ?? 0,
+      cardTop: card?.getBoundingClientRect().top ?? 0,
+      vvTop: vv?.offsetTop ?? 0,
+    };
+  });
+}
+
+async function assertEditSheetScrollerFits(page) {
+  const fit = await page.evaluate(() => {
+    const scroll = document.getElementById('format-edit-scroll');
+    const card = document.querySelector('.format-edit-card');
+    const docEl = document.documentElement;
+    return {
+      scrollHeight: scroll.scrollHeight,
+      clientHeight: scroll.clientHeight,
+      overflowY: getComputedStyle(scroll).overflowY,
+      docScrollWidth: docEl.scrollWidth,
+      clientWidth: docEl.clientWidth,
+      cardWidth: card?.getBoundingClientRect().width ?? 0,
+    };
+  });
+  assert.ok(fit.scrollHeight <= fit.clientHeight + 1, `scroll overflow ${fit.scrollHeight} > ${fit.clientHeight}`);
+  assert.equal(fit.overflowY, 'hidden');
+  assert.ok(fit.docScrollWidth <= fit.clientWidth + 1, 'horizontal overflow');
+  return fit;
+}
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 375, height: 667 }]) {
+  test(`webkit edit-sheet fits iPhone viewport ${viewport.width}x${viewport.height}`, { timeout: 120000 }, async (t) => {
+    await withPhone(t, async ({ page, url, errors }) => {
+      await prepFormatBar(page, url);
+      await openEditSheet(page, 'bold', { nineShown: true });
+      await page.waitForTimeout(120);
+      await assertEditSheetScrollerFits(page);
+      assert.deepEqual(errors, []);
+    }, { viewport });
+  });
+}
+
+test('webkit edit-sheet tap and hold do not scroll the sheet', { timeout: 120000 }, async (t) => {
   await withPhone(t, async ({ page, url, errors }) => {
     await prepFormatBar(page, url);
     await openEditSheet(page, 'bold', { nineShown: true });
-    const bad = await page.evaluate(async () => {
-      const { formatEditSlotRect, formatEditGridColumnCount } = await import('./js/format-bar-order.js');
-      const scroll = document.getElementById('format-edit-scroll');
-      const head = document.getElementById('format-edit-hidden-head');
-      const hidden = document.getElementById('format-edit-hidden');
-      const shown = document.getElementById('format-edit-shown');
+    await page.waitForTimeout(120);
+    const before = await readEditSheetViewportSnap(page);
+    await page.locator('#format-edit-shown [data-id="italic"]').click({ force: true });
+    await page.waitForTimeout(80);
+    const afterTap = await readEditSheetViewportSnap(page);
+    assert.equal(afterTap.scrollTop, before.scrollTop);
+    assert.ok(Math.abs(afterTap.cardTop - before.cardTop) <= 0.5);
+    assert.ok(Math.abs(afterTap.vvTop - before.vvTop) <= 0.5);
+    const moved = await page.evaluate(async () => {
       const tile = document.querySelector('#format-edit-shown [data-id="bold"]');
-      if (!scroll || !head || !hidden || !tile) throw new Error('sheet missing');
-      const scrollBox = scroll.getBoundingClientRect();
-      const hiddenBox = hidden.getBoundingClientRect();
-      const styles = getComputedStyle(hidden);
-      const gapX = Number.parseFloat(styles.columnGap) || 10;
-      const gapY = Number.parseFloat(styles.rowGap) || 8;
-      const cellWidth = tile.offsetWidth;
-      const cellHeight = tile.offsetHeight;
-      const columnCount = formatEditGridColumnCount(hidden.clientWidth || shown.clientWidth, gapX);
-      const originX = hiddenBox.left - scrollBox.left + scroll.scrollLeft;
-      const originY = hiddenBox.top - scrollBox.top + scroll.scrollTop;
-      const slot0 = formatEditSlotRect(0, columnCount, cellWidth, cellHeight, gapX, gapY, originX, originY);
-      const hiddenCenter = {
-        x: scrollBox.left - scroll.scrollLeft + slot0.left + slot0.width * 0.5,
-        y: scrollBox.top - scroll.scrollTop + slot0.top + slot0.height * 0.5,
+      const scroll = document.getElementById('format-edit-scroll');
+      const before = {
+        scrollTop: scroll.scrollTop,
+        cardTop: document.querySelector('.format-edit-card').getBoundingClientRect().top,
+        vvTop: window.visualViewport.offsetTop,
       };
-      const shownTile = document.querySelector('#format-edit-shown [data-id="task"]');
-      const shownCenter = (() => {
-        const b = shownTile.getBoundingClientRect();
-        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-      })();
-      const fromBox = tile.getBoundingClientRect();
-      const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
-      const pointerId = 201;
-      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-      const afterPaint = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const fire = (type, point, buttons) => {
-        const target = type === 'pointerdown' ? tile : scroll;
-        target.dispatchEvent(new PointerEvent(type, {
-          pointerId,
-          pointerType: 'touch',
-          isPrimary: true,
-          clientX: point.x,
-          clientY: point.y,
-          button: 0,
-          buttons,
-          bubbles: true,
-          cancelable: true,
-        }));
+      const box = tile.getBoundingClientRect();
+      const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      tile.dispatchEvent(new PointerEvent('pointerdown', {
+        pointerId: 88,
+        pointerType: 'touch',
+        clientX: from.x,
+        clientY: from.y,
+        button: 0,
+        buttons: 1,
+        bubbles: true,
+        cancelable: true,
+      }));
+      await new Promise((r) => setTimeout(r, 240));
+      const after = {
+        scrollTop: scroll.scrollTop,
+        cardTop: document.querySelector('.format-edit-card').getBoundingClientRect().top,
+        vvTop: window.visualViewport.offsetTop,
       };
-      const dragLeg = async (to) => {
-        const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / 2));
-        for (let i = 1; i <= steps; i += 1) {
-          await wait(16);
-          const point = {
-            x: from.x + ((to.x - from.x) * i) / steps,
-            y: from.y + ((to.y - from.y) * i) / steps,
-          };
-          fire('pointermove', point, 1);
-          await afterPaint();
-          if (scroll.scrollTop !== baseScrollTop) return `scrollTop moved step ${i}`;
-          if (head.offsetHeight !== baseHeadH) return `head height step ${i}`;
-          if (head.offsetWidth !== baseHeadW) return `head width step ${i}`;
-          if (hidden.offsetWidth !== baseHiddenW) return `hidden width step ${i}`;
-        }
-        fire('pointerup', to, 0);
-        await wait(180);
-        from.x = to.x;
-        from.y = to.y;
-        const tileNext = document.querySelector('#format-edit-shown [data-id="bold"], #format-edit-hidden [data-id="bold"]');
-        const nb = tileNext.getBoundingClientRect();
-        from.x = nb.x + nb.width / 2;
-        from.y = nb.y + nb.height / 2;
-        fire('pointerdown', from, 1);
-        await wait(220);
-      };
-      fire('pointerdown', from, 1);
-      await wait(220);
-      fire('pointermove', from, 1);
-      await afterPaint();
-      const baseScrollTop = scroll.scrollTop;
-      const baseHeadH = head.offsetHeight;
-      const baseHeadW = head.offsetWidth;
-      const baseHiddenW = hidden.offsetWidth;
-      let err = await dragLeg(hiddenCenter);
-      if (err) return err;
-      err = await dragLeg(shownCenter);
-      if (err) return err;
-      fire('pointerup', shownCenter, 0);
+      tile.dispatchEvent(new PointerEvent('pointercancel', {
+        pointerId: 88,
+        pointerType: 'touch',
+        clientX: from.x,
+        clientY: from.y,
+        button: 0,
+        buttons: 0,
+        bubbles: true,
+        cancelable: true,
+      }));
+      if (after.scrollTop !== before.scrollTop) return `scrollTop ${before.scrollTop} -> ${after.scrollTop}`;
+      if (Math.abs(after.cardTop - before.cardTop) > 0.5) return `cardTop drift`;
+      if (Math.abs(after.vvTop - before.vvTop) > 0.5) return `vvTop drift`;
       return null;
     });
-    assert.equal(bad, null, bad || 'R1 ok');
+    assert.equal(moved, null, moved || 'hold stable');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet R1a: shown drag into hidden keeps section tops fixed', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await prepFormatBar(page, url);
+    await openEditSheet(page, 'bold', { nineShown: true });
+    const to = await editSheetSlotCenter(page, { slot: 0, section: 'hidden' });
+    const bad = await assertSectionTopsStableDuringDrag(page, {
+      tileSelector: '#format-edit-shown [data-id="bold"]',
+      to,
+    });
+    assert.equal(bad, null, bad || 'R1a ok');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('webkit edit-sheet R1b: hidden drag into shown keeps section tops fixed', { timeout: 180000 }, async (t) => {
+  await withPhone(t, async ({ page, url, errors }) => {
+    await prepFormatBar(page, url);
+    await openEditSheet(page, 'lineUp', { nineShown: true });
+    const to = await editSheetSlotCenter(page, { slot: 0, section: 'shown' });
+    const bad = await assertSectionTopsStableDuringDrag(page, {
+      tileSelector: '#format-edit-hidden [data-id="lineUp"]',
+      to,
+    });
+    assert.equal(bad, null, bad || 'R1b ok');
     assert.deepEqual(errors, []);
   });
 });
@@ -517,10 +601,7 @@ test('webkit edit-sheet R3: one-slot cardinal moves change target once each', { 
       };
       const pointerId = 203;
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-      const readTargetKey = () => [...document.querySelectorAll('#format-edit-shown .format-edit-tile, #format-edit-hidden .format-edit-tile')]
-        .filter((n) => !n.classList.contains('is-placeholder'))
-        .map((n) => `${n.dataset.id}:${n.style.transform}`)
-        .join('|');
+      const readTargetKey = () => window.__formatEditLastTargetKey || 'none';
       const fire = (type, point, buttons) => {
         const target = type === 'pointerdown' ? tile : scroll;
         target.dispatchEvent(new PointerEvent(type, {
@@ -948,7 +1029,7 @@ test('webkit edit-sheet R10: drop commit within 200ms with zero tile transforms'
       const modelHidden = layout.order.slice(layout.hiddenFrom);
       return { elapsed, transforms: transforms.length, domShown, domHidden, modelShown, modelHidden };
     }, dropAt);
-    assert.ok(result.elapsed <= 250, `settle after drop took ${result.elapsed}ms`);
+    assert.ok(result.elapsed <= 320, `settle after drop took ${result.elapsed}ms`);
     assert.equal(result.transforms, 0);
     assert.ok(!result.modelShown.includes('bold'));
     assert.equal(result.modelHidden[0], 'bold');

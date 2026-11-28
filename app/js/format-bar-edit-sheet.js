@@ -5,15 +5,19 @@ import {
   FORMAT_EDIT_SECTION_SHOWN,
   clampHiddenFrom,
   commitFormatEditMove,
+  FORMAT_EDIT_MIN_CELL_PX,
   formatEditFrozenRows,
   formatEditGridColumnCount,
   formatEditGridPixelHeight,
   formatEditProjectionSlots,
+  formatEditProjectedSlotCount,
   formatEditSlotRect,
   formatEditSlotTranslate,
+  pointerToFormatEditSlot,
   layoutToSections,
   mergeFormatBarLayout,
   pickFormatEditDragTarget,
+  pickFormatEditSection,
   readFormatBarLayout,
   resetFormatBarLayout,
   sectionsToLayout,
@@ -59,6 +63,7 @@ export function mountFormatBarEditSheet(doc, bar, {
   let pendingFrame = null;
   let holdTimer = 0;
   let press = null;
+  let sheetGeom = null;
 
   const sections = () => layoutToSections(layout);
   const layoutTiles = () => [...shownGrid.querySelectorAll('.format-edit-tile'), ...hiddenGrid.querySelectorAll('.format-edit-tile')];
@@ -139,8 +144,7 @@ export function mountFormatBarEditSheet(doc, bar, {
     }
     updateEmptyVisibility();
     if (!drag) {
-      const geom = measureDragGeometry();
-      applyFrozenGridHeights(geom);
+      applySheetLayout(measureDragGeometry());
     }
   };
 
@@ -176,6 +180,9 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   const closeSheet = ({ refocus = true } = {}) => {
     if (!open) return;
+    root.querySelector('.format-edit-card')?.classList.remove('is-tight');
+    view.visualViewport?.removeEventListener('resize', onViewportResize);
+    view.visualViewport?.removeEventListener('scroll', onViewportResize);
     finishDrag(false);
     setSheetOpen(false);
     onClose?.();
@@ -183,11 +190,24 @@ export function mountFormatBarEditSheet(doc, bar, {
     savedSelection = null;
   };
 
+  const onViewportResize = () => {
+    if (!open) return;
+    fitSheetCard();
+    syncSheetDensity();
+  };
+
   const openSheet = (selection) => {
     layout = mergeFormatBarLayout(readFormatBarLayout(storage) || readLayoutFromBar(bar));
+    scroll.scrollTop = 0;
     syncGridDom();
     applyLive();
     setSheetOpen(true);
+    view.requestAnimationFrame(() => {
+      fitSheetCard();
+      syncSheetDensity();
+    });
+    view.visualViewport?.addEventListener('resize', onViewportResize);
+    view.visualViewport?.addEventListener('scroll', onViewportResize);
     onOpen?.();
     blurEditor?.();
   };
@@ -203,8 +223,10 @@ export function mountFormatBarEditSheet(doc, bar, {
       node.style.opacity = '';
       node.classList.remove('is-dragging', 'is-placeholder');
     }
-    scroll.style.overflow = '';
+    scroll.classList.remove('is-drag-scroll-lock');
     scroll.style.overscrollBehavior = '';
+    shownGrid.style.height = '';
+    hiddenGrid.style.height = '';
     removeGhost();
   };
 
@@ -217,7 +239,7 @@ export function mountFormatBarEditSheet(doc, bar, {
     const gapY = Number.parseFloat(styles.rowGap) || 8;
     const cellWidth = sample?.offsetWidth ?? 64;
     const cellHeight = sample?.offsetHeight ?? 64;
-    const columnCount = formatEditGridColumnCount(shownGrid.clientWidth, gapX);
+    const columnCount = formatEditGridColumnCount(shownGrid.clientWidth, gapX, FORMAT_EDIT_MIN_CELL_PX);
     const headBox = hiddenHead.getBoundingClientRect();
     const shownBox = shownGrid.getBoundingClientRect();
     const hiddenBox = hiddenGrid.getBoundingClientRect();
@@ -240,15 +262,73 @@ export function mountFormatBarEditSheet(doc, bar, {
     };
   };
 
+  const fitSheetCard = () => {
+    const card = root.querySelector('.format-edit-card');
+    const vv = view.visualViewport;
+    if (!card || !vv) return;
+    const rootEl = view.document.documentElement;
+    const shellRaw = view.getComputedStyle(rootEl).getPropertyValue('--shell-h').trim();
+    const shellPx = shellRaw.endsWith('px') ? Number.parseFloat(shellRaw) : 0;
+    const useKeyboardShell = rootEl.classList.contains('is-keyboard') && shellPx > 0;
+    const topInset = Math.max(0, vv.offsetTop);
+    const viewH = useKeyboardShell ? shellPx : Math.floor(vv.height);
+    const maxH = Math.max(120, Math.floor(viewH - topInset - 6));
+    card.style.maxHeight = `${maxH}px`;
+  };
+
+  const clearFrozenGridHeights = () => {
+    sheetGeom = null;
+    shownGrid.style.height = '';
+    shownGrid.style.minHeight = '';
+    hiddenGrid.style.height = '';
+    hiddenGrid.style.minHeight = '';
+  };
+
+  const syncSheetDensity = () => {
+    const card = root.querySelector('.format-edit-card');
+    if (!card) return;
+    card.classList.remove('is-tight');
+    clearFrozenGridHeights();
+    applySheetLayout(measureDragGeometry());
+    if (scroll.scrollHeight > scroll.clientHeight + 1) {
+      card.classList.add('is-tight');
+      clearFrozenGridHeights();
+      applySheetLayout(measureDragGeometry());
+    }
+  };
+
+  const applySheetLayout = (geom) => {
+    const unchanged = sheetGeom
+      && sheetGeom.columnCount === geom.columnCount
+      && sheetGeom.cellWidth === geom.cellWidth
+      && sheetGeom.cellHeight === geom.cellHeight
+      && sheetGeom.gapX === geom.gapX
+      && sheetGeom.gapY === geom.gapY;
+    if (unchanged) return;
+    freezeGridColumns(geom);
+    applyFrozenGridHeights(geom);
+    sheetGeom = { ...geom };
+  };
+
   const applyFrozenGridHeights = (geom) => {
     const { shown, hidden } = sections();
-    const { cellHeight, gapY } = geom;
-    shownGrid.style.minHeight = `${formatEditGridPixelHeight(formatEditFrozenRows(shown.length), cellHeight, gapY)}px`;
-    hiddenGrid.style.minHeight = `${formatEditGridPixelHeight(formatEditFrozenRows(hidden.length), cellHeight, gapY)}px`;
+    const { cellHeight, gapY, columnCount } = geom;
+    const shownRows = formatEditGridPixelHeight(formatEditFrozenRows(shown.length, columnCount), cellHeight, gapY);
+    const hiddenRows = formatEditGridPixelHeight(formatEditFrozenRows(hidden.length, columnCount), cellHeight, gapY);
+    shownGrid.style.minHeight = `${shownRows}px`;
+    shownGrid.style.height = `${shownRows}px`;
+    hiddenGrid.style.minHeight = `${hiddenRows}px`;
+    hiddenGrid.style.height = `${hiddenRows}px`;
+  };
+
+  const freezeGridColumns = (geom) => {
+    const template = `repeat(${geom.columnCount}, minmax(${FORMAT_EDIT_MIN_CELL_PX}px, 1fr))`;
+    shownGrid.style.gridTemplateColumns = template;
+    hiddenGrid.style.gridTemplateColumns = template;
   };
 
   const lockScrollForDrag = () => {
-    scroll.style.overflow = 'hidden';
+    scroll.classList.add('is-drag-scroll-lock');
     scroll.style.overscrollBehavior = 'contain';
   };
 
@@ -323,13 +403,12 @@ export function mountFormatBarEditSheet(doc, bar, {
     };
   };
 
-  const targetAt = (clientX, clientY, hold) => {
-    const { localX, localY } = pointerScrollLocal(clientX, clientY);
+  const buildDragTargetArgs = (localX, localY, headerMidY, hold) => {
     const { shown, hidden } = drag.startSections;
-    return pickFormatEditDragTarget({
+    return {
       localX,
       localY,
-      headerMidY: drag.geom.headerMidY,
+      headerMidY,
       prevSection: hold ? drag.target?.section : null,
       currentTarget: hold ? drag.target : null,
       shownOriginY: drag.geom.shownOriginY,
@@ -343,7 +422,56 @@ export function mountFormatBarEditSheet(doc, bar, {
       shownCount: shown.length,
       hiddenCount: hidden.length,
       dragFromSection: drag.fromSection,
-    });
+    };
+  };
+
+  const targetAt = (clientX, clientY, hold) => {
+    const { localX, localY } = pointerScrollLocal(clientX, clientY);
+    return pickFormatEditDragTarget(
+      buildDragTargetArgs(localX, localY, drag.geom.headerMidY, hold),
+    );
+  };
+
+  /** One layout read at drop so commit uses the finger position on screen. */
+  const targetAtDrop = (clientX, clientY) => {
+    const scrollBox = scroll.getBoundingClientRect();
+    const headBox = hiddenHead.getBoundingClientRect();
+    const shownBox = shownGrid.getBoundingClientRect();
+    const hiddenBox = hiddenGrid.getBoundingClientRect();
+    const localX = clientX - scrollBox.left + scroll.scrollLeft;
+    const localY = clientY - scrollBox.top + scroll.scrollTop;
+    const headerMidY = (headBox.top + headBox.bottom) / 2 - scrollBox.top + scroll.scrollTop;
+    let section = drag.target?.section ?? null;
+    if (clientY >= headBox.bottom - 0.5) {
+      section = FORMAT_EDIT_SECTION_HIDDEN;
+    } else if (clientY <= headBox.top + 0.5) {
+      section = FORMAT_EDIT_SECTION_SHOWN;
+    } else {
+      section = pickFormatEditSection(localY, headerMidY, section);
+    }
+    const originY = section === FORMAT_EDIT_SECTION_SHOWN
+      ? shownBox.top - scrollBox.top + scroll.scrollTop
+      : hiddenBox.top - scrollBox.top + scroll.scrollTop;
+    const { shown, hidden } = drag.startSections;
+    const projected = formatEditProjectedSlotCount(
+      shown.length,
+      hidden.length,
+      section,
+      drag.fromSection,
+    );
+    const slot = pointerToFormatEditSlot(
+      localX,
+      localY,
+      drag.geom.originX,
+      originY,
+      drag.geom.columnCount,
+      drag.geom.cellWidth,
+      drag.geom.cellHeight,
+      drag.geom.gapX,
+      drag.geom.gapY,
+      projected,
+    );
+    return { section, slot };
   };
 
   const paintDragFrame = () => {
@@ -354,6 +482,9 @@ export function mountFormatBarEditSheet(doc, bar, {
       const now = view.performance?.now?.() ?? Date.now();
       if (probe.lastRafAt != null) probe.rafDeltas?.push(now - probe.lastRafAt);
       probe.lastRafAt = now;
+    }
+    if (drag?.scrollLockTop != null && scroll.scrollTop !== drag.scrollLockTop) {
+      scroll.scrollTop = drag.scrollLockTop;
     }
     if (!drag || !pendingFrame) return;
     const { clientX, clientY } = pendingFrame;
@@ -366,6 +497,9 @@ export function mountFormatBarEditSheet(doc, bar, {
     if (changed) {
       drag.target = next;
       applyTileTransforms(next);
+      if (view.__formatEditLastTargetKey != null) {
+        view.__formatEditLastTargetKey = `${next.section}:${next.slot}`;
+      }
     }
   };
 
@@ -381,8 +515,11 @@ export function mountFormatBarEditSheet(doc, bar, {
       ? shown.indexOf(tileId)
       : hidden.indexOf(tileId);
     const geom = measureDragGeometry();
-    applyFrozenGridHeights(geom);
+    applySheetLayout(geom);
     lockScrollForDrag();
+    const scrollLockTop = scroll.scrollTop;
+    view.__formatEditLastTargetKey = `${fromSection}:${fromIndex}`;
+    view.__formatEditDropDone = false;
     drag = {
       tileId,
       node,
@@ -399,6 +536,7 @@ export function mountFormatBarEditSheet(doc, bar, {
       grabOffsetY: 0,
       ghostW: 0,
       ghostH: 0,
+      scrollLockTop,
     };
     node.classList.add('is-dragging');
     placeTileGhost(node, clientX, clientY);
@@ -447,6 +585,7 @@ export function mountFormatBarEditSheet(doc, bar, {
 
   const finishDrag = async (commit) => {
     if (!drag) return;
+    view.__formatEditDropDone = false;
     if (raf) {
       view.cancelAnimationFrame(raf);
       raf = 0;
@@ -463,6 +602,7 @@ export function mountFormatBarEditSheet(doc, bar, {
         section: snapshot.fromSection,
         slot: snapshot.fromIndex,
       };
+      view.__formatEditDropTarget = `${target.section}:${target.slot}`;
       await ghostToDropSlot(target);
       layout = commitFormatEditMove(
         snapshot.startSections.shown,
@@ -480,6 +620,8 @@ export function mountFormatBarEditSheet(doc, bar, {
     }
     clearDragTransforms();
     drag = null;
+    view.__formatEditLastTargetKey = '';
+    view.__formatEditDropDone = true;
   };
 
   const clearHold = () => {
@@ -537,7 +679,10 @@ export function mountFormatBarEditSheet(doc, bar, {
       if (drag && event.pointerId === drag.pointerId) {
         pendingFrame = { clientX: event.clientX, clientY: event.clientY };
         paintDragFrame();
-        drag.target = targetAt(event.clientX, event.clientY, false);
+        drag.target = targetAtDrop(event.clientX, event.clientY) || targetAt(event.clientX, event.clientY, false);
+        if (drag.target) {
+          view.__formatEditLastTargetKey = `${drag.target.section}:${drag.target.slot}`;
+        }
         finishDrag(true);
       } else if (!press.dragging) {
         bounceTile(press.node);

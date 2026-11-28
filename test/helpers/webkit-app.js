@@ -50,7 +50,7 @@ export function serve() {
 // and pull the page out from under a test. Blocking also lets
 // context.route() see image loads, which WebKit otherwise sends past
 // Playwright's router. The worker has its own tests.
-export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers = 'block' } = {}) {
+export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers = 'block', viewport = null } = {}) {
   let playwright;
   try {
     playwright = await import('playwright');
@@ -61,7 +61,12 @@ export async function withPhone(t, run, { colorScheme = 'light', serviceWorkers 
   const { webkit, devices } = playwright;
   const server = await serve();
   const browser = await webkit.launch();
-  const context = await browser.newContext({ ...devices['iPhone 13'], colorScheme, serviceWorkers });
+  const base = { ...devices['iPhone 13'], colorScheme, serviceWorkers };
+  const context = await browser.newContext(
+    viewport
+      ? { ...base, viewport: { width: viewport.width, height: viewport.height } }
+      : base,
+  );
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
@@ -375,42 +380,6 @@ export async function formatEditSheetDrag(page, fromId, toId, { steps = 12, fram
     firePointer('pointerup', to, 0);
   }, { fromId, from, to, steps, frameMs });
   await page.waitForTimeout(80);
-}
-
-export async function formatEditSheetDragDivider(page, { y = 180, steps = 12, frameMs = 24 } = {}) {
-  await page.evaluate(async ({ y, steps, frameMs }) => {
-    const divider = document.querySelector('.format-edit-divider');
-    const grid = document.getElementById('format-edit-grid');
-    if (!divider || !grid) throw new Error('divider missing');
-    const box = divider.getBoundingClientRect();
-    const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-    const to = { x: from.x, y: from.y + y };
-    const pointerId = 95;
-    const fire = (type, point, buttons) => {
-      const target = type === 'pointerdown' ? divider : grid;
-      target.dispatchEvent(new PointerEvent(type, {
-        pointerId,
-        pointerType: 'touch',
-        isPrimary: true,
-        clientX: point.x,
-        clientY: point.y,
-        button: 0,
-        buttons,
-        bubbles: true,
-        cancelable: true,
-      }));
-    };
-    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    fire('pointerdown', from, 1);
-    await wait(32);
-    for (let i = 1; i <= steps; i += 1) {
-      await wait(frameMs);
-      const point = { x: from.x, y: from.y + ((to.y - from.y) * i) / steps };
-      fire('pointermove', point, 1);
-    }
-    fire('pointerup', to, 0);
-    await wait(50);
-  }, { y, steps, frameMs });
 }
 
 export async function formatBarTouchDrag(page, fromId, toId, { steps = 10, frameMs = 16 } = {}) {

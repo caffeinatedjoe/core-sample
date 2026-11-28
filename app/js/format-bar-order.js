@@ -223,8 +223,12 @@ export function previewLayoutFromItems(startItems, from, to) {
   return itemsToLayout(nextItems);
 }
 
+export const FORMAT_EDIT_MIN_CELL_PX = 44;
+export const FORMAT_EDIT_GAP_X_PX = 8;
+export const FORMAT_EDIT_GAP_Y_PX = 6;
+
 /** Columns that fit under repeat(auto-fill, minmax(minCell, 1fr)). */
-export function formatEditGridColumnCount(gridWidth, gapX, minCell = 64) {
+export function formatEditGridColumnCount(gridWidth, gapX, minCell = FORMAT_EDIT_MIN_CELL_PX) {
   if (gridWidth <= 0) return 1;
   return Math.max(1, Math.floor((gridWidth + gapX) / (minCell + gapX)));
 }
@@ -246,8 +250,11 @@ export function sectionsToLayout(shown, hidden) {
   return { order: [...shown, ...hidden], hiddenFrom: shown.length };
 }
 
-export function formatEditFrozenRows(tileCount) {
-  return Math.max(1, tileCount + 1);
+/** Occupied rows for tiles plus one spare row for drag projection. */
+export function formatEditFrozenRows(tileCount, columnCount) {
+  const cols = Math.max(1, columnCount);
+  const occupied = Math.ceil(Math.max(0, tileCount) / cols) || 1;
+  return occupied + 1;
 }
 
 export function formatEditGridPixelHeight(rowCount, cellHeight, gapY) {

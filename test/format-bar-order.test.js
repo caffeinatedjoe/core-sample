@@ -10,6 +10,7 @@ import {
   FORMAT_EDIT_SECTION_SHOWN,
   commitFormatEditMove,
   formatEditProjectionSlots,
+  formatEditFrozenRows,
   formatEditSlotTranslate,
   itemsToLayout,
   layoutToItems,
@@ -157,6 +158,12 @@ test('pickFormatEditSection hysteresis at header midline', () => {
   assert.equal(pickFormatEditSection(214, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_HIDDEN);
   assert.equal(pickFormatEditSection(214, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_HIDDEN);
   assert.equal(pickFormatEditSection(185, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_SHOWN);
+});
+
+test('formatEditFrozenRows adds one spare row by column count', () => {
+  assert.equal(formatEditFrozenRows(9, 7), 3);
+  assert.equal(formatEditFrozenRows(12, 7), 3);
+  assert.equal(formatEditFrozenRows(1, 5), 2);
 });
 
 test('pointerToFormatEditSlot clamps past last row', () => {
