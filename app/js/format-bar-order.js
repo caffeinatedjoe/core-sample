@@ -235,8 +235,10 @@ export function formatEditGridColumnCount(gridWidth, gapX, minCell = FORMAT_EDIT
 
 export const FORMAT_EDIT_SECTION_SHOWN = 'shown';
 export const FORMAT_EDIT_SECTION_HIDDEN = 'hidden';
-export const FORMAT_EDIT_SECTION_HYSTERESIS_PX = 12;
-export const FORMAT_EDIT_SLOT_INNER_MARGIN = 0.15;
+/** Symmetric band around the Hidden header midline. */
+export const FORMAT_EDIT_SECTION_HYSTERESIS_PX = 5;
+/** Symmetric band around the closest-center slot boundary. */
+export const FORMAT_EDIT_SLOT_HYSTERESIS_PX = 6;
 
 export function layoutToSections(layout) {
   const hf = clampHiddenFrom(layout.hiddenFrom, layout.order.length);
@@ -273,7 +275,7 @@ export function formatEditSlotRect(slot, columnCount, cellWidth, cellHeight, gap
   };
 }
 
-/** Scroll-local Y → section with header midline hysteresis. */
+/** Scroll-local Y → section. Same ±hysteresis in both directions; no downward special case. */
 export function pickFormatEditSection(localY, headerMidY, prevSection, hysteresis = FORMAT_EDIT_SECTION_HYSTERESIS_PX) {
   if (prevSection === FORMAT_EDIT_SECTION_SHOWN) {
     return localY <= headerMidY + hysteresis ? FORMAT_EDIT_SECTION_SHOWN : FORMAT_EDIT_SECTION_HIDDEN;
@@ -300,12 +302,6 @@ export function formatEditShownContentBottomY(
   return originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
 }
 
-/** Scroll-local Y at the bottom of the frozen shown grid (includes spare row). */
-export function formatEditShownFrozenBottomY(shownCount, columnCount, cellHeight, gapY, originY) {
-  const rows = formatEditFrozenRows(shownCount, columnCount);
-  return originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
-}
-
 export function formatEditProjectedSlotCount(shownCount, hiddenCount, section, dragFromSection) {
   if (section === FORMAT_EDIT_SECTION_SHOWN) {
     const base = dragFromSection === FORMAT_EDIT_SECTION_SHOWN ? shownCount - 1 : shownCount;
@@ -315,34 +311,65 @@ export function formatEditProjectedSlotCount(shownCount, hiddenCount, section, d
   return Math.max(1, base + 1);
 }
 
-/** Slot index under the finger (scroll-local coords, grid-local X/Y). */
+/**
+ * Insertion slot under the pointer: row from Y vs row centers, then column
+ * from X vs cell centers (dnd-kit closestCenter, axis-separated). Past the
+ * last tile is the end of the section.
+ */
 export function pointerToFormatEditSlot(localX, localY, originX, originY, columnCount, cellWidth, cellHeight, gapX, gapY, projectedSlotCount) {
   const count = Math.max(1, projectedSlotCount);
-  const rows = Math.ceil(count / columnCount);
-  const gridBottom = originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
-  if (localY >= gridBottom) return Math.max(0, count - 1);
+  const cols = Math.max(1, columnCount);
+  const rows = Math.ceil(count / cols);
   const relX = localX - originX;
   const relY = localY - originY;
-  if (relY < 0 || relX < 0) return 0;
-  const col = Math.min(columnCount - 1, Math.floor(relX / (cellWidth + gapX)));
-  const row = Math.floor(relY / (cellHeight + gapY));
-  const slot = row * columnCount + col;
-  return Math.max(0, Math.min(count - 1, slot));
+  const strideX = cellWidth + gapX;
+  const strideY = cellHeight + gapY;
+  const gridBottom = originY + formatEditGridPixelHeight(rows, cellHeight, gapY);
+  if (localY >= gridBottom) return count - 1;
+  let row = relY < 0 ? 0 : Math.round((relY - cellHeight / 2) / strideY);
+  row = Math.max(0, Math.min(rows - 1, row));
+  let col = Math.round((relX - cellWidth / 2) / strideX);
+  col = Math.max(0, Math.min(cols - 1, col));
+  return Math.max(0, Math.min(count - 1, row * cols + col));
 }
 
-export function isPointerInSlotInner70(localX, localY, rect, margin = FORMAT_EDIT_SLOT_INNER_MARGIN) {
-  const mx = rect.width * margin;
-  const my = rect.height * margin;
-  return (
-    localX >= rect.left + mx
-    && localX < rect.left + rect.width - mx
-    && localY >= rect.top + my
-    && localY < rect.top + rect.height - my
-  );
+function slotCenter(slot, columnCount, cellWidth, cellHeight, gapX, gapY, originX, originY) {
+  const rect = formatEditSlotRect(slot, columnCount, cellWidth, cellHeight, gapX, gapY, originX, originY);
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+/** True when the pointer is at least `hysteresis` past the closest-center boundary toward `proposedSlot`. */
+export function pastFormatEditSlotBoundary(
+  localX,
+  localY,
+  currentSlot,
+  proposedSlot,
+  columnCount,
+  cellWidth,
+  cellHeight,
+  gapX,
+  gapY,
+  originX,
+  originY,
+  hysteresis = FORMAT_EDIT_SLOT_HYSTERESIS_PX,
+) {
+  if (currentSlot === proposedSlot) return true;
+  const current = slotCenter(currentSlot, columnCount, cellWidth, cellHeight, gapX, gapY, originX, originY);
+  const proposed = slotCenter(proposedSlot, columnCount, cellWidth, cellHeight, gapX, gapY, originX, originY);
+  const dx = proposed.x - current.x;
+  const dy = proposed.y - current.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return true;
+  const midX = (current.x + proposed.x) / 2;
+  const midY = (current.y + proposed.y) / 2;
+  const past = ((localX - midX) * dx + (localY - midY) * dy) / len;
+  return past >= hysteresis;
 }
 
 /**
- * Proposed drag target: { section, slot }. Keeps current target until the pointer is in the inner 70% of the proposed slot.
+ * Drag target { section, slot }. Section uses a small symmetric header-midline
+ * band. Slot is closest-center, with the same small band around the current
+ * slot boundary so a gap registers on the next move without edge flicker.
  */
 export function pickFormatEditDragTarget({
   localX,
@@ -361,18 +388,15 @@ export function pickFormatEditDragTarget({
   shownCount,
   hiddenCount,
   dragFromSection,
+  sectionHysteresis = FORMAT_EDIT_SECTION_HYSTERESIS_PX,
+  slotHysteresis = FORMAT_EDIT_SLOT_HYSTERESIS_PX,
 }) {
-  let section = pickFormatEditSection(localY, headerMidY, prevSection ?? currentTarget?.section);
-  const frozenBottom = formatEditShownFrozenBottomY(
-    shownCount,
-    columnCount,
-    cellHeight,
-    gapY,
-    shownOriginY,
+  const section = pickFormatEditSection(
+    localY,
+    headerMidY,
+    prevSection ?? currentTarget?.section,
+    sectionHysteresis,
   );
-  if (dragFromSection === FORMAT_EDIT_SECTION_SHOWN && localY >= frozenBottom - gapY * 0.5) {
-    section = FORMAT_EDIT_SECTION_HIDDEN;
-  }
   const projected = formatEditProjectedSlotCount(shownCount, hiddenCount, section, dragFromSection);
   const originY = section === FORMAT_EDIT_SECTION_SHOWN ? shownOriginY : hiddenOriginY;
   const slot = pointerToFormatEditSlot(
@@ -390,7 +414,11 @@ export function pickFormatEditDragTarget({
   const proposed = { section, slot };
   if (!currentTarget) return proposed;
   if (proposed.section === currentTarget.section && proposed.slot === currentTarget.slot) return currentTarget;
-  const rect = formatEditSlotRect(
+  if (proposed.section !== currentTarget.section) return proposed;
+  return pastFormatEditSlotBoundary(
+    localX,
+    localY,
+    currentTarget.slot,
     proposed.slot,
     columnCount,
     cellWidth,
@@ -399,8 +427,8 @@ export function pickFormatEditDragTarget({
     gapY,
     originX,
     originY,
-  );
-  return isPointerInSlotInner70(localX, localY, rect) ? proposed : currentTarget;
+    slotHysteresis,
+  ) ? proposed : currentTarget;
 }
 
 /** Project lists with a gap at target; omit dragId from lists (placeholder at home). */

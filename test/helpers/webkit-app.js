@@ -335,6 +335,76 @@ export async function formatEditSheetDragToPoint(page, fromId, to, { steps = 14,
   }));
 }
 
+function editSheetTileLocator(fromId, fromSection) {
+  if (fromSection === 'hidden') return `#format-edit-hidden [data-id="${fromId}"]`;
+  if (fromSection === 'shown') return `#format-edit-shown [data-id="${fromId}"]`;
+  return `#format-edit-shown [data-id="${fromId}"], #format-edit-hidden [data-id="${fromId}"]`;
+}
+
+/**
+ * Drag an edit-sheet tile with Playwright's real input pipeline so the
+ * browser retargets pointerup/click onto whatever is under the finger.
+ * Playwright WebKit's touchscreen only exposes tap(), so this uses
+ * page.mouse (hasTouch/isMobile iPhone 13 context still delivers pointer
+ * events through hit-testing, unlike dispatchEvent on a fixed tile).
+ */
+export async function formatEditSheetRealDragToPoint(page, fromId, to, {
+  holdMs = 220,
+  stepPx = 4,
+  frameMs = 16,
+  fromSection,
+} = {}) {
+  const selector = editSheetTileLocator(fromId, fromSection);
+  await page.waitForFunction(() => document.getElementById('format-edit-sheet')?.classList.contains('is-open'));
+  const fromBox = await page.locator(selector).boundingBox();
+  if (!fromBox) throw new Error(`missing edit sheet tile ${fromId}`);
+  const from = { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 };
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  const steps = Math.max(1, Math.ceil(dist / Math.max(1, stepPx)));
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  const ghost = await page.evaluate(() => Boolean(document.querySelector('.format-edit-ghost')));
+  if (!ghost) {
+    await page.mouse.move(from.x + 2, from.y + 2);
+    await page.waitForTimeout(Math.max(frameMs, 180));
+  }
+  const appeared = await page.evaluate(() => Boolean(document.querySelector('.format-edit-ghost')));
+  if (!appeared) {
+    const hit = await page.evaluate(({ x, y, fromId }) => {
+      const el = document.elementFromPoint(x, y);
+      const chain = [];
+      let node = el;
+      while (node && chain.length < 8) {
+        chain.push(`${node.tagName || ''}#${node.id || ''}.${typeof node.className === 'string' ? node.className : ''}[data-id=${node.dataset?.id || ''}][data-format=${node.getAttribute?.('data-format') || ''}]`);
+        node = node.parentElement;
+      }
+      const sheet = document.getElementById('format-edit-sheet');
+      const tile = document.querySelector(`#format-edit-shown [data-id="${fromId}"]`);
+      const tileBox = tile?.getBoundingClientRect();
+      const pe = (n) => (n ? getComputedStyle(n).pointerEvents : '');
+      return {
+        chain,
+        tileBox: tileBox ? { x: tileBox.x, y: tileBox.y, w: tileBox.width, h: tileBox.height } : null,
+        sheetHidden: sheet?.hidden,
+        sheetClass: sheet?.className,
+        sheetPE: pe(sheet),
+        cardPE: pe(sheet?.querySelector('.format-edit-card')),
+        tilePE: pe(tile),
+      };
+    }, { x: from.x, y: from.y, fromId });
+    throw new Error(`edit-sheet drag did not start for ${fromId} at ${from.x.toFixed(1)},${from.y.toFixed(1)} hit=${JSON.stringify(hit)}`);
+  }
+  for (let i = 1; i <= steps; i += 1) {
+    await page.mouse.move(
+      from.x + ((to.x - from.x) * i) / steps,
+      from.y + ((to.y - from.y) * i) / steps,
+    );
+    if (frameMs) await page.waitForTimeout(frameMs);
+  }
+  await page.mouse.up();
+}
+
 export async function waitDoubleRaf(page) {
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));

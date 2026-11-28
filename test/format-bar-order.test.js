@@ -7,7 +7,9 @@ import {
   FORMAT_BAR_LAYOUT_KEY,
   FORMAT_BAR_ORDER_KEY,
   FORMAT_EDIT_SECTION_HIDDEN,
+  FORMAT_EDIT_SECTION_HYSTERESIS_PX,
   FORMAT_EDIT_SECTION_SHOWN,
+  FORMAT_EDIT_SLOT_HYSTERESIS_PX,
   commitFormatEditMove,
   formatEditProjectionSlots,
   formatEditFrozenRows,
@@ -20,6 +22,7 @@ import {
   migrateFormatBarLayoutFromV1,
   moveItem,
   neighborTransforms,
+  pastFormatEditSlotBoundary,
   pickFormatEditDragTarget,
   pickFormatEditSection,
   pointerToFormatEditSlot,
@@ -202,12 +205,16 @@ test('moveItem reorders an array like a toolbar commit', () => {
   assert.deepEqual(moveItem(order, 1, 3), ['task', 'italic', 'bold', 'link']);
 });
 
-test('pickFormatEditSection hysteresis at header midline', () => {
+test('pickFormatEditSection hysteresis at header midline is small and symmetric', () => {
   const mid = 200;
-  assert.equal(pickFormatEditSection(185, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_SHOWN);
-  assert.equal(pickFormatEditSection(214, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_HIDDEN);
-  assert.equal(pickFormatEditSection(214, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_HIDDEN);
-  assert.equal(pickFormatEditSection(185, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_SHOWN);
+  const h = FORMAT_EDIT_SECTION_HYSTERESIS_PX;
+  assert.ok(h >= 4 && h <= 6);
+  assert.equal(pickFormatEditSection(mid + h, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_SHOWN);
+  assert.equal(pickFormatEditSection(mid + h + 1, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_HIDDEN);
+  assert.equal(pickFormatEditSection(mid - h, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_HIDDEN);
+  assert.equal(pickFormatEditSection(mid - h - 1, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_SHOWN);
+  assert.equal(pickFormatEditSection(mid + 2, mid, FORMAT_EDIT_SECTION_SHOWN), FORMAT_EDIT_SECTION_SHOWN);
+  assert.equal(pickFormatEditSection(mid - 2, mid, FORMAT_EDIT_SECTION_HIDDEN), FORMAT_EDIT_SECTION_HIDDEN);
 });
 
 test('formatEditShownContentBottomY ignores spare row', () => {
@@ -226,7 +233,15 @@ test('pointerToFormatEditSlot clamps past last row', () => {
   assert.equal(slot, 8);
 });
 
-test('pickFormatEditDragTarget stays on edges until inner 70%', () => {
+test('pointerToFormatEditSlot uses closest centers, not cell leading edges', () => {
+  // cell 0 [0,70] center 35; gap 10; cell 1 [80,150] center 115; midpoint 75
+  assert.equal(pointerToFormatEditSlot(74, 32, 0, 0, 5, 70, 64, 10, 8, 9), 0);
+  assert.equal(pointerToFormatEditSlot(76, 32, 0, 0, 5, 70, 64, 10, 8, 9), 1);
+  assert.equal(pointerToFormatEditSlot(35, 32, 0, 0, 5, 70, 64, 10, 8, 9), 0);
+  assert.equal(pointerToFormatEditSlot(115, 32, 0, 0, 5, 70, 64, 10, 8, 9), 1);
+});
+
+test('pickFormatEditDragTarget switches at closest-center with 6px slot hysteresis', () => {
   const geom = {
     localX: 35,
     localY: 32,
@@ -245,10 +260,96 @@ test('pickFormatEditDragTarget stays on edges until inner 70%', () => {
     hiddenCount: 3,
     dragFromSection: FORMAT_EDIT_SECTION_SHOWN,
   };
-  const onEdge = pickFormatEditDragTarget(geom);
-  assert.deepEqual(onEdge, { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 });
-  const inner = pickFormatEditDragTarget({ ...geom, localX: 95, localY: 35 });
-  assert.equal(inner.slot, 1);
+  assert.deepEqual(pickFormatEditDragTarget(geom), { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 });
+  const mid = 75;
+  const sticky = pickFormatEditDragTarget({ ...geom, localX: mid + 2, localY: 32 });
+  assert.equal(sticky.slot, 0);
+  const crossed = pickFormatEditDragTarget({ ...geom, localX: mid + FORMAT_EDIT_SLOT_HYSTERESIS_PX, localY: 32 });
+  assert.equal(crossed.slot, 1);
+});
+
+test('pickFormatEditDragTarget does not force hidden in the shown spare row', () => {
+  const target = pickFormatEditDragTarget({
+    localX: 35,
+    localY: 160,
+    headerMidY: 400,
+    prevSection: FORMAT_EDIT_SECTION_SHOWN,
+    currentTarget: { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 },
+    shownOriginY: 0,
+    hiddenOriginY: 500,
+    originX: 0,
+    columnCount: 5,
+    cellWidth: 70,
+    cellHeight: 64,
+    gapX: 10,
+    gapY: 8,
+    shownCount: 9,
+    hiddenCount: 3,
+    dragFromSection: FORMAT_EDIT_SECTION_SHOWN,
+  });
+  assert.equal(target.section, FORMAT_EDIT_SECTION_SHOWN);
+});
+
+test('pickFormatEditDragTarget has no inner-70% dead zone in a cell gap', () => {
+  const geom = {
+    localX: 76,
+    localY: 32,
+    headerMidY: 400,
+    prevSection: FORMAT_EDIT_SECTION_SHOWN,
+    currentTarget: null,
+    shownOriginY: 0,
+    hiddenOriginY: 500,
+    originX: 0,
+    columnCount: 5,
+    cellWidth: 70,
+    cellHeight: 64,
+    gapX: 10,
+    gapY: 8,
+    shownCount: 9,
+    hiddenCount: 3,
+    dragFromSection: FORMAT_EDIT_SECTION_SHOWN,
+  };
+  assert.equal(pickFormatEditDragTarget(geom).slot, 1);
+});
+
+test('slot boundary ±2px flickers at most once over 30 samples', () => {
+  const mid = 75;
+  let current = { section: FORMAT_EDIT_SECTION_SHOWN, slot: 0 };
+  let changes = 0;
+  for (let i = 0; i < 30; i += 1) {
+    const localX = mid + ((i % 2) ? 2 : -2);
+    const next = pickFormatEditDragTarget({
+      localX,
+      localY: 32,
+      headerMidY: 400,
+      prevSection: FORMAT_EDIT_SECTION_SHOWN,
+      currentTarget: current,
+      shownOriginY: 0,
+      hiddenOriginY: 500,
+      originX: 0,
+      columnCount: 5,
+      cellWidth: 70,
+      cellHeight: 64,
+      gapX: 10,
+      gapY: 8,
+      shownCount: 9,
+      hiddenCount: 3,
+      dragFromSection: FORMAT_EDIT_SECTION_SHOWN,
+    });
+    if (next.section !== current.section || next.slot !== current.slot) {
+      changes += 1;
+      current = next;
+    }
+  }
+  assert.ok(changes <= 1, `target changed ${changes} times`);
+});
+
+test('pastFormatEditSlotBoundary is the same in every direction', () => {
+  const args = [5, 70, 64, 10, 8, 0, 0, FORMAT_EDIT_SLOT_HYSTERESIS_PX];
+  assert.equal(pastFormatEditSlotBoundary(75 + 2, 32, 0, 1, ...args), false);
+  assert.equal(pastFormatEditSlotBoundary(75 + 6, 32, 0, 1, ...args), true);
+  assert.equal(pastFormatEditSlotBoundary(75 - 2, 32, 1, 0, ...args), false);
+  assert.equal(pastFormatEditSlotBoundary(75 - 6, 32, 1, 0, ...args), true);
 });
 
 test('hiding any default shown item preserves neighbor order in the model', () => {
